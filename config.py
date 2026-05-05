@@ -7,6 +7,30 @@ import subprocess
 from dataclasses import dataclass
 
 
+def _load_dotenv(path: str = ".env") -> None:
+    """
+    Minimal .env loader (no external dependency).
+    - Ignores empty lines and comments
+    - Supports KEY=VALUE with optional single/double quotes
+    - Does not override already-defined environment variables
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'").strip('"')
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except FileNotFoundError:
+        return
+
+
+_load_dotenv()
+
 DEFAULT_REMOTE_BD_ADDR = os.environ.get("BUBBLE_BLUE_REMOTE_BD_ADDR", "00:00:00:00:00:00")
 
 
