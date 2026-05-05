@@ -13,8 +13,15 @@ def _ts() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f%z")
 
 
-def _log(node: str, msg: str) -> None:
+def _tlog_always(node: str, msg: str) -> None:
+    """Logs that should remain visible even in quiet experiments (failures)."""
     print(f"[{_ts()}] [{node}] {msg}", flush=True)
+
+
+def _tlog(node: str, msg: str, *, quiet: bool) -> None:
+    if quiet:
+        return
+    _tlog_always(node, msg)
 
 
 @dataclass(frozen=True)
@@ -40,11 +47,13 @@ class L2CAPTransport:
         on_receive: Callable[[str, bytes], None] | None = None,
         backlog: int = 10,
         interface: str = "hci0",
+        quiet: bool = False,
     ) -> None:
         self._cfg = load_config(interface=interface)
         self._node = self._cfg.node_name
         self._psm = int(self._cfg.psm)
         self._backlog = backlog
+        self._quiet = quiet
 
         self.on_receive: Callable[[str, bytes], None] = on_receive or (lambda _a, _d: None)
 
@@ -71,7 +80,11 @@ class L2CAPTransport:
             self._server_thread = threading.Thread(target=self._server_loop, name="bb-l2cap-server", daemon=True)
             self._server_thread.start()
 
-        _log(self._node, f"L2CAP listen src={self._cfg.local_bd_addr} psm=0x{self._psm:04X} backlog={self._backlog}")
+        _tlog(
+            self._node,
+            f"L2CAP listen src={self._cfg.local_bd_addr} psm=0x{self._psm:04X} backlog={self._backlog}",
+            quiet=self._quiet,
+        )
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -91,7 +104,7 @@ class L2CAPTransport:
                     pass
                 self._conns.pop(bd_addr, None)
 
-        _log(self._node, "L2CAP stopped")
+        _tlog(self._node, "L2CAP stopped", quiet=self._quiet)
 
     def connect(self, bd_addr: str) -> None:
         bd_addr = bd_addr.upper()
@@ -113,7 +126,11 @@ class L2CAPTransport:
             self._conns[bd_addr] = PeerConn(bd_addr=bd_addr, sock=sock, thread=t)
             t.start()
 
-        _log(self._node, f"L2CAP connect src={self._cfg.local_bd_addr} dst={bd_addr} psm=0x{self._psm:04X}")
+        _tlog(
+            self._node,
+            f"L2CAP connect src={self._cfg.local_bd_addr} dst={bd_addr} psm=0x{self._psm:04X}",
+            quiet=self._quiet,
+        )
 
     def send(self, bd_addr: str, data: bytes) -> None:
         if not isinstance(data, (bytes, bytearray, memoryview)):
@@ -135,7 +152,11 @@ class L2CAPTransport:
 
         payload = bytes(data)
         peer.sock.sendall(payload)
-        _log(self._node, f"L2CAP tx src={self._cfg.local_bd_addr} dst={bd_addr} bytes={len(payload)}")
+        _tlog(
+            self._node,
+            f"L2CAP tx src={self._cfg.local_bd_addr} dst={bd_addr} bytes={len(payload)}",
+            quiet=self._quiet,
+        )
 
     def connections(self) -> list[str]:
         with self._lock:
@@ -171,7 +192,11 @@ class L2CAPTransport:
                 self._conns[peer_bd_addr] = PeerConn(bd_addr=peer_bd_addr, sock=client_sock, thread=t)
                 t.start()
 
-            _log(self._node, f"L2CAP accept src={peer_bd_addr} dst={self._cfg.local_bd_addr} psm=0x{self._psm:04X}")
+            _tlog(
+                self._node,
+                f"L2CAP accept src={peer_bd_addr} dst={self._cfg.local_bd_addr} psm=0x{self._psm:04X}",
+                quiet=self._quiet,
+            )
 
     def _recv_loop(self, peer_bd_addr: str, sock: socket.socket) -> None:
         try:
@@ -180,13 +205,17 @@ class L2CAPTransport:
                 if not data:
                     break
 
-                _log(self._node, f"L2CAP rx src={peer_bd_addr} dst={self._cfg.local_bd_addr} bytes={len(data)}")
+                _tlog(
+                    self._node,
+                    f"L2CAP rx src={peer_bd_addr} dst={self._cfg.local_bd_addr} bytes={len(data)}",
+                    quiet=self._quiet,
+                )
                 try:
                     self.on_receive(peer_bd_addr, data)
                 except Exception as e:  # noqa: BLE001
-                    _log(self._node, f"on_receive error src={peer_bd_addr}: {e}")
+                    _tlog_always(self._node, f"on_receive error src={peer_bd_addr}: {e}")
         except OSError as e:
-            _log(self._node, f"L2CAP socket error peer={peer_bd_addr}: {e}")
+            _tlog_always(self._node, f"L2CAP socket error peer={peer_bd_addr}: {e}")
         finally:
             try:
                 sock.close()
@@ -196,5 +225,5 @@ class L2CAPTransport:
                 cur = self._conns.get(peer_bd_addr)
                 if cur and cur.sock is sock:
                     self._conns.pop(peer_bd_addr, None)
-            _log(self._node, f"L2CAP disconnect peer={peer_bd_addr}")
+            _tlog(self._node, f"L2CAP disconnect peer={peer_bd_addr}", quiet=self._quiet)
 

@@ -44,7 +44,8 @@ def main() -> int:
             text = repr(data)
         print(f"[APP] rx from={bd_addr} bytes={len(data)} text={text}", flush=True)
 
-    t = L2CAPTransport(on_receive=on_receive, interface=args.interface)
+    # Listen-only mode: suppress L2CAP transport logs so stdout only shows `[APP]` lines.
+    t = L2CAPTransport(on_receive=on_receive, interface=args.interface, quiet=(args.peer is None))
     t.start()
 
     if not args.peer:
