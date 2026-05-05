@@ -1,0 +1,190 @@
+# BUBBLE-BLUE (.gitignore)
+# Python + Embedded Linux (Rubik Pi 3) + Arduino (UNO Q) + C/C++ build artifacts
+
+############################
+# Secrets / local config
+############################
+# Keep local credentials out of git (prefer committing *.example / *.template files)
+.env
+.env.*
+!.env.example
+!.env.template
+
+**/secrets/**
+**/*secret*
+**/*credential*
+**/*credentials*
+**/*apikey*
+**/*api_key*
+**/*token*
+**/*passwd*
+**/*password*
+**/*private_key*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Local-only configs (commit *.example variants instead)
+**/config.local.*
+**/local.config.*
+**/*local*.yaml
+**/*local*.yml
+**/*local*.json
+**/*local*.toml
+**/*local*.ini
+**/*local*.cfg
+
+############################
+# Python
+############################
+__pycache__/
+*.py[cod]
+*$py.class
+
+.Python
+build/
+dist/
+develop-eggs/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+############################
+# Virtual environments
+############################
+.venv/
+venv/
+ENV/
+env/
+
+############################
+# Packaging / dependency managers
+############################
+pip-wheel-metadata/
+poetry.lock
+Pipfile.lock
+
+############################
+# Linux / OS
+############################
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Systemd / journald exports, core dumps
+core
+core.*
+*.crash
+*.journal
+
+############################
+# Logs / experimental runs
+############################
+logs/
+log/
+*.log
+*.trace
+*.pcap
+*.pcapng
+*.cap
+*.dump
+*.out
+*.err
+
+# Benchmarks / captures / ad-hoc notebooks
+**/runs/
+**/artifacts/
+**/captures/
+**/measurements/
+**/experiments/
+**/tmp/
+**/temp/
+
+############################
+# VSCode / Cursor / IDE
+############################
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+.cursor/
+**/*.code-workspace
+
+############################
+# Embedded / Arduino / PlatformIO
+############################
+.pio/
+.platformio/
+**/.clangd/
+
+# Arduino IDE / CLI
+**/build/
+**/build-*/
+**/out/
+**/Debug/
+**/Release/
+
+############################
+# C/C++ / toolchains
+############################
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.elf
+*.hex
+*.bin
+*.map
+*.d
+*.gcno
+*.gcda
+*.gcov
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Ninja / Meson
+.ninja_deps
+.ninja_log
+builddir/
+meson-private/
+meson-logs/
+meson-info/
+
+############################
+# Documentation builds
+############################
+site/
+docs/_build/
+
