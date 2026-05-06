@@ -6,11 +6,23 @@ import threading
 import time
 
 from config import load_config, print_config
+from src.transport.discovery import discover_devices
 from src.transport.l2cap import L2CAPTransport
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="BUBBLE-BLUE node (simple L2CAP ping/echo test)")
+    parser.add_argument(
+        "--scan",
+        type=float,
+        default=0.0,
+        help="Scan for nearby Bluetooth devices for N seconds, print results, then exit (unless --auto-peer is set).",
+    )
+    parser.add_argument(
+        "--auto-peer",
+        default=None,
+        help="If set, scans then selects a peer automatically (substring match against name or BD_ADDR).",
+    )
     parser.add_argument(
         "--peer",
         help="Remote peer BD_ADDR (e.g. 40:D9:5A:8B:69:3F). If omitted, only listens.",
@@ -34,7 +46,42 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    cfg = load_config(interface=args.interface, remote_bd_addr=args.peer)
+    # Optional pre-step: discovery
+    selected_peer = args.peer
+    if args.scan and args.scan > 0:
+        print(f"[APP] scanning for devices for {args.scan:.1f}s ...", flush=True)
+        try:
+            devices = discover_devices(timeout_s=args.scan)
+        except Exception as e:  # noqa: BLE001
+            print(f"[APP] scan failed: {e}", file=sys.stderr, flush=True)
+            return 2
+
+        if not devices:
+            print("[APP] scan done: no devices found.", flush=True)
+        else:
+            print("[APP] scan done:", flush=True)
+            for d in devices:
+                label = d.name or "<?>"
+                print(f"[APP] - {d.bd_addr} name={label}", flush=True)
+
+        if args.auto_peer:
+            key = str(args.auto_peer).strip().upper()
+            chosen = None
+            for d in devices:
+                hay = f"{d.bd_addr} {(d.name or '')}".upper()
+                if key in hay:
+                    chosen = d
+                    break
+            if not chosen:
+                print(f"[APP] --auto-peer={args.auto_peer!r}: no match in scan results", file=sys.stderr, flush=True)
+                return 2
+            selected_peer = chosen.bd_addr
+            print(f"[APP] auto-selected peer={selected_peer} name={chosen.name or '<?>'}", flush=True)
+        else:
+            # Scan-only mode
+            return 0
+
+    cfg = load_config(interface=args.interface, remote_bd_addr=selected_peer)
     print_config(cfg)
 
     def on_receive(bd_addr: str, data: bytes) -> None:
@@ -45,10 +92,10 @@ def main() -> int:
         print(f"[APP] rx from={bd_addr} bytes={len(data)} text={text}", flush=True)
 
     # Listen-only mode: suppress L2CAP transport logs so stdout only shows `[APP]` lines.
-    t = L2CAPTransport(on_receive=on_receive, interface=args.interface, quiet=(args.peer is None))
+    t = L2CAPTransport(on_receive=on_receive, interface=args.interface, quiet=(selected_peer is None))
     t.start()
 
-    if not args.peer:
+    if not selected_peer:
         print("[APP] listening only (no --peer). Ctrl+C to stop.", flush=True)
         try:
             while True:
@@ -57,7 +104,7 @@ def main() -> int:
             t.stop()
             return 0
 
-    peer = args.peer.upper()
+    peer = selected_peer.upper()
 
     if args.interval > 0:
         if not args.message:
