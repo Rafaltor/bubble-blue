@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import subprocess
 import time
@@ -14,6 +15,7 @@ class DiscoveredDevice:
     bd_addr: str
     name: str | None = None
     last_seen_ms: int | None = None
+    source: str | None = None  # "le" | "bredr" | "cache"
 
 
 def _parse_device_line(line: str) -> tuple[str, str | None] | None:
@@ -34,7 +36,17 @@ def _parse_device_line(line: str) -> tuple[str, str | None] | None:
     return bd, name
 
 
-def discover_devices(*, timeout_s: float = 5.0) -> list[DiscoveredDevice]:
+def _run_scan(mode: str, timeout_s: float) -> subprocess.CompletedProcess[str]:
+    secs = int(max(1, math.ceil(timeout_s)))
+    return subprocess.run(
+        ["bluetoothctl", "--timeout", str(secs), "scan", mode],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def discover_devices(*, timeout_s: float = 5.0, modes: tuple[str, ...] = ("le", "bredr")) -> list[DiscoveredDevice]:
     """
     Discovers nearby Bluetooth devices using BlueZ's bluetoothctl.
 
@@ -46,31 +58,29 @@ def discover_devices(*, timeout_s: float = 5.0) -> list[DiscoveredDevice]:
     start = time.monotonic()
     last_seen: dict[str, int] = {}
     names: dict[str, str] = {}
+    sources: dict[str, str] = {}
 
-    # `bluetoothctl --timeout <sec> scan on` is available on many BlueZ versions.
-    # We also run `bluetoothctl devices` afterwards as a fallback to capture devices
-    # even if scan output is sparse.
+    # Important for your setup: some devices only show up in BR/EDR, others only in LE.
+    # We scan both modes by default, then read the cached device list as fallback.
     try:
-        scan = subprocess.run(
-            ["bluetoothctl", "--timeout", str(int(max(1, timeout_s))), "scan", "on"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        scans = [_run_scan(m, timeout_s) for m in modes]
     except FileNotFoundError as e:
         raise RuntimeError("`bluetoothctl` not found. Install BlueZ tools and ensure it is in PATH.") from e
 
-    now_ms = int((time.monotonic() - start) * 1000)
-    for raw in (scan.stdout or "").splitlines():
-        parsed = _parse_device_line(raw)
-        if not parsed:
-            continue
-        bd, name = parsed
-        last_seen[bd] = now_ms
-        if name:
-            names[bd] = name
+    for mode, scan in zip(modes, scans, strict=False):
+        now_ms = int((time.monotonic() - start) * 1000)
+        for raw in (scan.stdout or "").splitlines():
+            parsed = _parse_device_line(raw)
+            if not parsed:
+                continue
+            bd, name = parsed
+            last_seen[bd] = now_ms
+            sources.setdefault(bd, mode)
+            if name:
+                names[bd] = name
 
     # Fallback: query the device cache list.
+    now_ms = int((time.monotonic() - start) * 1000)
     devs = subprocess.run(
         ["bluetoothctl", "devices"],
         check=False,
@@ -85,9 +95,17 @@ def discover_devices(*, timeout_s: float = 5.0) -> list[DiscoveredDevice]:
         last_seen.setdefault(bd, now_ms)
         if name:
             names.setdefault(bd, name)
+        sources.setdefault(bd, "cache")
 
     out: list[DiscoveredDevice] = []
     for bd in sorted(last_seen.keys()):
-        out.append(DiscoveredDevice(bd_addr=bd, name=names.get(bd), last_seen_ms=last_seen.get(bd)))
+        out.append(
+            DiscoveredDevice(
+                bd_addr=bd,
+                name=names.get(bd),
+                last_seen_ms=last_seen.get(bd),
+                source=sources.get(bd),
+            )
+        )
     return out
 

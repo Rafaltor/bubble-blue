@@ -62,7 +62,8 @@ def main() -> int:
             print("[APP] scan done:", flush=True)
             for d in devices:
                 label = d.name or "<?>"
-                print(f"[APP] - {d.bd_addr} name={label}", flush=True)
+                src = d.source or "?"
+                print(f"[APP] - {d.bd_addr} name={label} src={src}", flush=True)
 
         if args.auto_peer:
             key = str(args.auto_peer).strip().upper()
