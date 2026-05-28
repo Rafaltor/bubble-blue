@@ -19,7 +19,9 @@ from src.security.packet import (  # noqa: E402
     build_routing_header,
     packet_overhead,
     parse_bb_packet,
+    validate_timestamp,
 )
+from src.security.replay import ReplayFilter  # noqa: E402
 from src.transport.l2cap import L2CAPTransport  # noqa: E402
 
 
@@ -28,7 +30,8 @@ def _usage() -> None:
         "Usage:\n"
         "  python3 tests/test_phase1a.py server\n"
         "  python3 tests/test_phase1a.py client <PEER_BD_ADDR>\n"
-        "  python3 tests/test_phase1a.py intruder <PEER_BD_ADDR>",
+        "  python3 tests/test_phase1a.py intruder <PEER_BD_ADDR>\n"
+        "  python3 tests/test_phase1a.py replay <PEER_BD_ADDR>",
         flush=True,
     )
 
@@ -40,6 +43,8 @@ def run_server() -> None:
 
     # 2. Print "[SERVER] Waiting for encrypted BB packet..."
     print("[SERVER] Waiting for encrypted BB packet...", flush=True)
+
+    replay_filter = ReplayFilter()
 
     # 4. In on_receive:
     def on_receive(peer_bd_addr: str, data: bytes) -> None:
@@ -66,6 +71,20 @@ def run_server() -> None:
                 parsed["ciphertext"],
                 aad,
             )
+
+            # Post-decryption checks: timestamp + anti-replay
+            ts_ms = hdr["ts_ms"]
+            if not validate_timestamp(ts_ms):
+                print("❌ REJECTED: packet too old/future", flush=True)
+                return
+
+            src = hdr["src"]
+            seq = hdr["seq"]
+            if not replay_filter.check_and_update(src, seq):
+                print("❌ REJECTED: replay attack detected", flush=True)
+                return
+
+            print(f"✅ seq={seq} accepted", flush=True)
 
             # e. Print decrypted message
             try:
@@ -125,7 +144,7 @@ def run_client(peer_bd_addr: str) -> None:
 
     # 6. Print packet breakdown
     print("📦 Packet breakdown:", flush=True)
-    print("   Routing header : 18 bytes (clear)", flush=True)
+    print("   Routing header : 26 bytes (clear)", flush=True)
     print("   Session key enc: 60 bytes", flush=True)
     print("   Nonce          : 12 bytes", flush=True)
     print(f"   Ciphertext+tag : {len(result['ciphertext'])} bytes", flush=True)
@@ -197,6 +216,50 @@ def run_intruder(peer_bd_addr: str) -> None:
     )
 
 
+def run_replay(peer_bd_addr: str) -> None:
+    """Send the same BB packet twice; server should accept then reject replay."""
+    cfg = load_config()
+    group_key = cfg.group_key
+
+    routing_header = build_routing_header(
+        PKT_DATA,
+        src=cfg.local_bd_addr,
+        dst=peer_bd_addr,
+        ttl=10,
+        seq=42,
+    )
+
+    message = "REPLAY test — same packet sent twice".encode("utf-8")
+    result = encrypt_for_group(group_key, message, routing_header)
+
+    packet = build_bb_packet(
+        routing_header,
+        session_key_enc=result["session_key_enc"],
+        nonce=result["nonce"],
+        ciphertext=result["ciphertext"],
+    )
+
+    print(f"[REPLAY] Sending identical packet twice to {peer_bd_addr.upper()}", flush=True)
+    print("[REPLAY] Expect: first accepted, second rejected as replay", flush=True)
+
+    transport = L2CAPTransport()
+    transport.start()
+    try:
+        transport.send(peer_bd_addr, packet)
+        time.sleep(0.5)
+        transport.send(peer_bd_addr, packet)
+    except OSError as e:
+        print(f"❌ Connection error: {e}", flush=True)
+        return
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ Connection error: {e}", flush=True)
+        return
+    finally:
+        transport.stop()
+
+    print(f"✅ Replay test: two identical packets sent to {peer_bd_addr.upper()}", flush=True)
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         _usage()
@@ -224,6 +287,14 @@ def main(argv: list[str]) -> int:
             return 2
         peer = argv[2]
         run_intruder(peer)
+        return 0
+
+    if mode == "replay":
+        if len(argv) != 3:
+            _usage()
+            return 2
+        peer = argv[2]
+        run_replay(peer)
         return 0
 
     _usage()
