@@ -27,7 +27,8 @@ def _usage() -> None:
     print(
         "Usage:\n"
         "  python3 tests/test_phase1a.py server\n"
-        "  python3 tests/test_phase1a.py client <PEER_BD_ADDR>",
+        "  python3 tests/test_phase1a.py client <PEER_BD_ADDR>\n"
+        "  python3 tests/test_phase1a.py intruder <PEER_BD_ADDR>",
         flush=True,
     )
 
@@ -128,6 +129,7 @@ def run_client(peer_bd_addr: str) -> None:
     print("   Session key enc: 60 bytes", flush=True)
     print("   Nonce          : 12 bytes", flush=True)
     print(f"   Ciphertext+tag : {len(result['ciphertext'])} bytes", flush=True)
+    print(f"   Fixed overhead : {packet_overhead()} bytes", flush=True)
     print(f"   Total          : {len(packet)} bytes", flush=True)
 
     # 7. Send via L2CAPTransport
@@ -146,6 +148,53 @@ def run_client(peer_bd_addr: str) -> None:
 
     # 8. Print success
     print(f"✅ Phase 1A: encrypted packet sent to {peer_bd_addr.upper()}", flush=True)
+
+
+def run_intruder(peer_bd_addr: str) -> None:
+    """Send a well-formed BB packet encrypted with a wrong (random) group key."""
+    cfg = load_config()
+    wrong_key = os.urandom(32)
+
+    print("[INTRUDER] Using random group key (not from .env)", flush=True)
+
+    routing_header = build_routing_header(
+        PKT_DATA,
+        src=cfg.local_bd_addr,
+        dst=peer_bd_addr,
+        ttl=10,
+        seq=999,
+    )
+
+    message = "INTRUDER — wrong group key test".encode("utf-8")
+    result = encrypt_for_group(wrong_key, message, routing_header)
+
+    packet = build_bb_packet(
+        routing_header,
+        session_key_enc=result["session_key_enc"],
+        nonce=result["nonce"],
+        ciphertext=result["ciphertext"],
+    )
+
+    print(f"[INTRUDER] Sending {len(packet)}-byte packet to {peer_bd_addr.upper()}", flush=True)
+
+    transport = L2CAPTransport()
+    transport.start()
+    try:
+        transport.send(peer_bd_addr, packet)
+    except OSError as e:
+        print(f"❌ Connection error: {e}", flush=True)
+        return
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ Connection error: {e}", flush=True)
+        return
+    finally:
+        transport.stop()
+
+    print(
+        f"✅ Intruder packet sent to {peer_bd_addr.upper()} "
+        "(server should reject decryption)",
+        flush=True,
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -167,6 +216,14 @@ def main(argv: list[str]) -> int:
             return 2
         peer = argv[2]
         run_client(peer)
+        return 0
+
+    if mode == "intruder":
+        if len(argv) != 3:
+            _usage()
+            return 2
+        peer = argv[2]
+        run_intruder(peer)
         return 0
 
     _usage()
