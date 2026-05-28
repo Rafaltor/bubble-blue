@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from src.control.hello import ANON_ID_SIZE, build_hello, compute_anon_id, parse_hello_private, parse_hello_public
+
+
+@dataclass
+class _Hop1Entry:
+    bd_addr: str | None
+    last_seen_ms: int
+    seq: int | None
+
+
+class NeighborTable:
+    """
+    Per-node neighbor tables for the BB control plane.
+
+    - 1-hop: direct neighbors (nodes we have heard from / know at distance 1)
+    - 2-hop: for each 1-hop relay, anon_ids they advertise as their neighbors
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._1hop: dict[bytes, _Hop1Entry] = {}
+        self._2hop: dict[bytes, set[bytes]] = {}
+
+    def update_from_hello(
+        self,
+        parsed_public: dict[str, Any],
+        parsed_private: dict[str, Any] | None,
+    ) -> None:
+        """
+        Update 1-hop and 2-hop tables from a received Hello.
+
+        parsed_public: output of parse_hello_public()
+        parsed_private: output of parse_hello_private() or None if not a group member
+        """
+        sender_aid = bytes(parsed_public["anon_id"])
+        if len(sender_aid) != ANON_ID_SIZE:
+            raise ValueError("invalid sender anon_id length")
+
+        ts_ms = int(parsed_public["ts_ms"])
+        seq = int(parsed_public["seq"])
+        neighbor_aids = [bytes(a) for a in parsed_public["neighbor_anon_ids"]]
+
+        bd_sender: str | None = None
+        neighbor_bd: dict[bytes, str] = {}
+        if parsed_private is not None:
+            bd_sender = str(parsed_private["bd_addr"]).upper()
+            priv_neighbors = list(parsed_private["neighbor_bd_addrs"])
+            if len(priv_neighbors) != len(neighbor_aids):
+                raise ValueError("public/private neighbor count mismatch")
+            for aid, addr in zip(neighbor_aids, priv_neighbors, strict=True):
+                neighbor_bd[aid] = str(addr).upper()
+
+        with self._lock:
+            # Sender is 1-hop (we received their Hello directly).
+            self._upsert_1hop(sender_aid, bd_addr=bd_sender, last_seen_ms=ts_ms, seq=seq)
+
+            # Sender's advertised neighbors are 2-hop via this relay.
+            relay_set = self._2hop.setdefault(sender_aid, set())
+            for n_aid in neighbor_aids:
+                relay_set.add(n_aid)
+                self._upsert_1hop(
+                    n_aid,
+                    bd_addr=neighbor_bd.get(n_aid),
+                    last_seen_ms=ts_ms,
+                    seq=None,
+                )
+
+    def get_1hop(self) -> list[dict[str, Any]]:
+        """Return 1-hop entries as list of dicts (includes anon_id)."""
+        with self._lock:
+            out: list[dict[str, Any]] = []
+            for aid, ent in self._1hop.items():
+                out.append(
+                    {
+                        "anon_id": aid,
+                        "bd_addr": ent.bd_addr,
+                        "last_seen_ms": ent.last_seen_ms,
+                        "seq": ent.seq,
+                    }
+                )
+            out.sort(key=lambda e: e["anon_id"])
+            return out
+
+    def get_2hop(self) -> dict[bytes, set[bytes]]:
+        """Return 2-hop map: relay anon_id -> set of reachable anon_ids."""
+        with self._lock:
+            return {relay: set(targets) for relay, targets in self._2hop.items()}
+
+    def expire(self, timeout_ms: int) -> None:
+        """Remove stale 1-hop entries and their 2-hop relay rows."""
+        if timeout_ms < 0:
+            raise ValueError("timeout_ms must be >= 0")
+
+        now_ms = time.time_ns() // 1_000_000
+        with self._lock:
+            stale = [
+                aid
+                for aid, ent in self._1hop.items()
+                if (now_ms - ent.last_seen_ms) > timeout_ms
+            ]
+            for aid in stale:
+                self._1hop.pop(aid, None)
+                self._2hop.pop(aid, None)
+
+    def _upsert_1hop(
+        self,
+        anon_id: bytes,
+        *,
+        bd_addr: str | None,
+        last_seen_ms: int,
+        seq: int | None,
+    ) -> None:
+        ent = self._1hop.get(anon_id)
+        if ent is None:
+            self._1hop[anon_id] = _Hop1Entry(
+                bd_addr=bd_addr,
+                last_seen_ms=last_seen_ms,
+                seq=seq,
+            )
+            return
+
+        ent.last_seen_ms = max(ent.last_seen_ms, last_seen_ms)
+        if bd_addr is not None:
+            ent.bd_addr = bd_addr
+        if seq is not None:
+            ent.seq = seq
+
+
+if __name__ == "__main__":
+    group_key = b"\x42" * 32  # fixed key for deterministic anon IDs in test
+
+    addr_a = "40:D9:5A:8B:69:3F"
+    addr_b = "14:B5:CD:E2:49:ED"
+    addr_c = "00:11:22:33:44:55"
+
+    aid_a = compute_anon_id(group_key, addr_a)
+    aid_b = compute_anon_id(group_key, addr_b)
+    aid_c = compute_anon_id(group_key, addr_c)
+
+    table_a = NeighborTable()
+    table_b = NeighborTable()
+    table_c = NeighborTable()
+
+    # A receives Hello from B (B sees neighbors A, C)
+    pkt_b = build_hello(group_key, addr_b, seq=1, known_neighbors=[addr_a, addr_c], ts_ms=1_000)
+    pub_b = parse_hello_public(pkt_b)
+    priv_b = parse_hello_private(pkt_b, group_key)
+    assert priv_b is not None
+    table_a.update_from_hello(pub_b, priv_b)
+
+    hop_a = {e["anon_id"]: e for e in table_a.get_1hop()}
+    assert aid_b in hop_a
+    assert hop_a[aid_b]["bd_addr"] == addr_b.upper()
+    assert hop_a[aid_b]["seq"] == 1
+    two_a = table_a.get_2hop()
+    assert aid_c in two_a[aid_b]
+    assert aid_a in two_a[aid_b]
+    print("✅ node A learned B + 2-hop via B: OK")
+
+    # B receives Hello from A (A sees neighbor B)
+    pkt_a = build_hello(group_key, addr_a, seq=2, known_neighbors=[addr_b], ts_ms=2_000)
+    pub_a = parse_hello_public(pkt_a)
+    priv_a = parse_hello_private(pkt_a, group_key)
+    assert priv_a is not None
+    table_b.update_from_hello(pub_a, priv_a)
+
+    hop_b = {e["anon_id"]: e for e in table_b.get_1hop()}
+    assert aid_a in hop_b
+    assert hop_b[aid_a]["seq"] == 2
+    assert aid_b in table_b.get_2hop()[aid_a]
+    print("✅ node B learned A + 2-hop via A: OK")
+
+    # C receives Hello from B
+    pkt_b2 = build_hello(group_key, addr_b, seq=3, known_neighbors=[addr_a, addr_c], ts_ms=3_000)
+    pub_b2 = parse_hello_public(pkt_b2)
+    priv_b2 = parse_hello_private(pkt_b2, group_key)
+    assert priv_b2 is not None
+    table_c.update_from_hello(pub_b2, priv_b2)
+
+    hop_c = {e["anon_id"]: e for e in table_c.get_1hop()}
+    assert aid_b in hop_c
+    two_c = table_c.get_2hop()
+    assert aid_a in two_c[aid_b]
+    assert aid_c in two_c[aid_b]
+    print("✅ node C learned B + 2-hop via B: OK")
+
+    # Public-only update still works (non-member observer)
+    observer = NeighborTable()
+    observer.update_from_hello(pub_b, None)
+    obs_hop = {e["anon_id"]: e for e in observer.get_1hop()}
+    assert aid_b in obs_hop
+    assert obs_hop[aid_b]["bd_addr"] is None
+    print("✅ public-only hello update: OK")
+
+    # Expire stale entries on A (timeout 500ms, ts was 1000, now >> 1500)
+    table_a.expire(timeout_ms=500)
+    assert table_a.get_1hop() == []
+    assert table_a.get_2hop() == {}
+    print("✅ expire removes stale entries: OK")
+
+    print("\n✅ All neighbor table self-tests passed")
