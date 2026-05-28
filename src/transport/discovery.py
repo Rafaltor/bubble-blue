@@ -8,6 +8,17 @@ from dataclasses import dataclass
 
 
 _BD_ADDR_RE = re.compile(r"(?P<bd>([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})")
+_SCAN_PREFIX_RE = re.compile(r"^\s*(?:\[(?:NEW|CHG|DEL)\]\s+)?Device\s+", re.IGNORECASE)
+_LIKELY_KV_PREFIXES = (
+    "RSSI:",
+    "TXPOWER:",
+    "UUID:",
+    "CLASS:",
+    "ICON:",
+    "APPEARANCE:",
+    "MANUFACTURERDATA:",
+    "SERVICEDATA:",
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +36,10 @@ def _parse_device_line(line: str) -> tuple[str, str | None] | None:
       Device AA:BB:CC:DD:EE:FF Foo Bar
     Returns (bd_addr, name?) or None.
     """
+    # Avoid treating scan status lines as device lines.
+    if not _SCAN_PREFIX_RE.search(line):
+        return None
+
     m = _BD_ADDR_RE.search(line)
     if not m:
         return None
@@ -32,6 +47,9 @@ def _parse_device_line(line: str) -> tuple[str, str | None] | None:
 
     # Best-effort name extraction: everything after the BD addr
     after = line[m.end() :].strip()
+    if after and after.upper().startswith(_LIKELY_KV_PREFIXES):
+        # e.g. "[CHG] Device <bd> TxPower: 0x0000 (0)" is not a name
+        after = ""
     name = after if after else None
     return bd, name
 
@@ -44,6 +62,35 @@ def _run_scan(mode: str, timeout_s: float) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
     )
+
+
+def _bluetoothctl_info(bd_addr: str) -> str:
+    info = subprocess.run(
+        ["bluetoothctl", "info", bd_addr],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return info.stdout or ""
+
+
+def _parse_info_name(info_text: str) -> str | None:
+    # Typical lines:
+    #   Name: ubuntu
+    #   Alias: ubuntu
+    name = None
+    alias = None
+    for raw in info_text.splitlines():
+        line = raw.strip()
+        if line.startswith("Name:"):
+            val = line.split(":", 1)[1].strip()
+            if val:
+                name = val
+        elif line.startswith("Alias:"):
+            val = line.split(":", 1)[1].strip()
+            if val:
+                alias = val
+    return name or alias
 
 
 def discover_devices(*, timeout_s: float = 5.0, modes: tuple[str, ...] = ("le", "bredr")) -> list[DiscoveredDevice]:
@@ -96,6 +143,15 @@ def discover_devices(*, timeout_s: float = 5.0, modes: tuple[str, ...] = ("le", 
         if name:
             names.setdefault(bd, name)
         sources.setdefault(bd, "cache")
+
+    # Resolve missing/garbled names using `bluetoothctl info <BD_ADDR>`.
+    for bd in list(last_seen.keys()):
+        cur = names.get(bd)
+        if cur:
+            continue
+        resolved = _parse_info_name(_bluetoothctl_info(bd))
+        if resolved:
+            names[bd] = resolved
 
     out: list[DiscoveredDevice] = []
     for bd in sorted(last_seen.keys()):
