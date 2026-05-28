@@ -6,7 +6,8 @@ import sys
 import threading
 import time
 
-from config import load_config, print_config
+from config import PKT_DATA, PKT_HELLO, load_config, print_config
+from src.control.hello_manager import HelloManager, handle_pkt_data
 from src.transport.discovery import discover_devices
 from src.transport.l2cap import L2CAPTransport
 
@@ -50,8 +51,88 @@ def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
     return proc
 
 
+def _run_with_transport(
+    transport: L2CAPTransport,
+    hello_mgr: HelloManager,
+    cfg,
+    *,
+    peer: str | None,
+    message: str | None,
+    interval: float,
+) -> int:
+    hello_mgr.start()
+
+    if peer:
+        try:
+            transport.connect(peer.upper())
+        except OSError as e:
+            print(f"[APP] connect to {peer} failed: {e}", file=sys.stderr, flush=True)
+
+    if not peer:
+        print("[APP] listening (Hello + DATA). Ctrl+C to stop.", flush=True)
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            hello_mgr.stop()
+            transport.stop()
+            return 0
+
+    peer_u = peer.upper()
+
+    if interval > 0:
+        if not message:
+            print("[APP] --interval requires --message", file=sys.stderr)
+            return 2
+        msg = message.encode("utf-8")
+        print(f"[APP] sending DATA to={peer_u} every {interval}s. Ctrl+C to stop.", flush=True)
+        try:
+            while True:
+                transport.send(peer_u, msg)
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            hello_mgr.stop()
+            transport.stop()
+            return 0
+
+    if message is not None:
+        transport.send(peer_u, message.encode("utf-8"))
+        print("[APP] sent once. Ctrl+C to stop.", flush=True)
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            hello_mgr.stop()
+            transport.stop()
+            return 0
+
+    stop = threading.Event()
+
+    def stdin_loop() -> None:
+        print("[APP] interactive mode: type a line then Enter to send. Ctrl+D to exit.", flush=True)
+        for line in sys.stdin:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            transport.send(peer_u, line.encode("utf-8"))
+        stop.set()
+
+    th = threading.Thread(target=stdin_loop, name="stdin-loop", daemon=True)
+    th.start()
+
+    try:
+        while not stop.is_set():
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        hello_mgr.stop()
+        transport.stop()
+    return 0
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="BUBBLE-BLUE node (simple L2CAP ping/echo test)")
+    parser = argparse.ArgumentParser(description="BUBBLE-BLUE node (L2CAP + Hello + DATA)")
     parser.add_argument(
         "--scan",
         type=float,
@@ -86,10 +167,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Transport-level pairing helper (see setup_ble_pairing_agent docstring).
     _pairing_agent = setup_ble_pairing_agent()
 
-    # Optional pre-step: discovery
     selected_peer = args.peer
     if args.scan and args.scan > 0:
         print(f"[APP] scanning for devices for {args.scan:.1f}s ...", flush=True)
@@ -122,84 +201,54 @@ def main() -> int:
             selected_peer = chosen.bd_addr
             print(f"[APP] auto-selected peer={selected_peer} name={chosen.name or '<?>'}", flush=True)
         else:
-            # Scan-only mode
             return 0
 
     cfg = load_config(interface=args.interface, remote_bd_addr=selected_peer)
     print_config(cfg)
 
-    def on_receive(bd_addr: str, data: bytes) -> None:
+    hello_mgr: HelloManager | None = None
+
+    def on_receive(peer_bd_addr: str, data: bytes) -> None:
+        if not data:
+            return
+        pkt_type = data[0]
+        if pkt_type == PKT_HELLO:
+            if hello_mgr is None:
+                return
+            try:
+                hello_mgr.on_receive(peer_bd_addr, data)
+            except Exception as e:  # noqa: BLE001
+                print(f"[APP] Hello rx error from={peer_bd_addr}: {e}", flush=True)
+            return
+
+        if pkt_type == PKT_DATA:
+            handle_pkt_data(peer_bd_addr, data, cfg)
+            return
+
+        # Legacy cleartext / unknown framing
         try:
             text = data.decode("utf-8", errors="replace")
         except Exception:
             text = repr(data)
-        print(f"[APP] rx from={bd_addr} bytes={len(data)} text={text}", flush=True)
+        print(f"[APP] rx from={peer_bd_addr} bytes={len(data)} text={text}", flush=True)
 
-    # Listen-only mode: suppress L2CAP transport logs so stdout only shows `[APP]` lines.
-    t = L2CAPTransport(on_receive=on_receive, interface=args.interface, quiet=(selected_peer is None))
-    t.start()
+    transport = L2CAPTransport(
+        on_receive=on_receive,
+        interface=args.interface,
+        quiet=(selected_peer is None),
+    )
+    hello_mgr = HelloManager(cfg, transport)
+    transport.start()
 
-    if not selected_peer:
-        print("[APP] listening only (no --peer). Ctrl+C to stop.", flush=True)
-        try:
-            while True:
-                time.sleep(1.0)
-        except KeyboardInterrupt:
-            t.stop()
-            return 0
-
-    peer = selected_peer.upper()
-
-    if args.interval > 0:
-        if not args.message:
-            print("[APP] --interval requires --message", file=sys.stderr)
-            return 2
-
-        msg = args.message.encode("utf-8")
-        print(f"[APP] sending to={peer} every {args.interval}s. Ctrl+C to stop.", flush=True)
-        try:
-            while True:
-                t.send(peer, msg)
-                time.sleep(args.interval)
-        except KeyboardInterrupt:
-            t.stop()
-            return 0
-
-    if args.message is not None:
-        t.send(peer, args.message.encode("utf-8"))
-        print("[APP] sent once. Ctrl+C to stop.", flush=True)
-        try:
-            while True:
-                time.sleep(1.0)
-        except KeyboardInterrupt:
-            t.stop()
-            return 0
-
-    # Interactive mode: read stdin lines and send
-    stop = threading.Event()
-
-    def stdin_loop() -> None:
-        print("[APP] interactive mode: type a line then Enter to send. Ctrl+D to exit.", flush=True)
-        for line in sys.stdin:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            t.send(peer, line.encode("utf-8"))
-        stop.set()
-
-    th = threading.Thread(target=stdin_loop, name="stdin-loop", daemon=True)
-    th.start()
-
-    try:
-        while not stop.is_set():
-            time.sleep(0.2)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        t.stop()
-    return 0
+    return _run_with_transport(
+        transport,
+        hello_mgr,
+        cfg,
+        peer=selected_peer,
+        message=args.message,
+        interval=args.interval,
+    )
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
