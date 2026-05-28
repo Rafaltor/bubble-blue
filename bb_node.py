@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import threading
 import time
@@ -8,6 +9,45 @@ import time
 from config import load_config, print_config
 from src.transport.discovery import discover_devices
 from src.transport.l2cap import L2CAPTransport
+
+
+def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
+    """
+    Register a BlueZ pairing agent via bluetoothctl at node startup.
+
+    Security note: pairing is transport-level (link/key exchange only).
+    Group membership and payload protection are enforced by the AES group key
+    (BUBBLE_BLUE_GROUP_KEY) — pairing does not grant access to BB traffic.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["bluetoothctl"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("[APP] WARNING: bluetoothctl not found; skipping pairing agent setup", flush=True)
+        return None
+
+    # NoInputNoOutput: auto-accept pairing without user prompts.
+    # Keep this bluetoothctl session alive so the agent stays registered.
+    cmds = (
+        "agent NoInputNoOutput\n"
+        "default-agent\n"
+        "discoverable on\n"
+        "pairable on\n"
+    )
+    assert proc.stdin is not None
+    proc.stdin.write(cmds)
+    proc.stdin.flush()
+
+    print(
+        "[APP] BLE pairing agent: NoInputNoOutput (auto-accept), discoverable+pairable",
+        flush=True,
+    )
+    return proc
 
 
 def main() -> int:
@@ -45,6 +85,9 @@ def main() -> int:
         help="Bluetooth interface for local BD address lookup (default: hci0).",
     )
     args = parser.parse_args()
+
+    # Transport-level pairing helper (see setup_ble_pairing_agent docstring).
+    _pairing_agent = setup_ble_pairing_agent()
 
     # Optional pre-step: discovery
     selected_peer = args.peer
