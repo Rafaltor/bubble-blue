@@ -15,6 +15,12 @@ class _Hop1Entry:
     seq: int | None
 
 
+@dataclass
+class _ResolvedMember:
+    bd_addr: str
+    last_seen_ms: int
+
+
 class NeighborTable:
     """
     Per-node neighbor tables for the BB control plane.
@@ -27,6 +33,7 @@ class NeighborTable:
         self._lock = threading.RLock()
         self._1hop: dict[bytes, _Hop1Entry] = {}
         self._2hop: dict[bytes, set[bytes]] = {}
+        self._resolved: dict[bytes, _ResolvedMember] = {}
 
     def update_from_hello(
         self,
@@ -58,6 +65,12 @@ class NeighborTable:
                 neighbor_bd[aid] = str(addr).upper()
 
         with self._lock:
+            if parsed_private is not None:
+                assert bd_sender is not None
+                self._resolve_member(sender_aid, bd_sender, ts_ms)
+                for n_aid, n_bd in neighbor_bd.items():
+                    self._resolve_member(n_aid, n_bd, ts_ms)
+
             # Sender is 1-hop (we received their Hello directly).
             self._upsert_1hop(sender_aid, bd_addr=bd_sender, last_seen_ms=ts_ms, seq=seq)
 
@@ -65,9 +78,13 @@ class NeighborTable:
             relay_set = self._2hop.setdefault(sender_aid, set())
             for n_aid in neighbor_aids:
                 relay_set.add(n_aid)
+                resolved_bd = neighbor_bd.get(n_aid)
+                if resolved_bd is None:
+                    resolved = self._resolved.get(n_aid)
+                    resolved_bd = resolved.bd_addr if resolved else None
                 self._upsert_1hop(
                     n_aid,
-                    bd_addr=neighbor_bd.get(n_aid),
+                    bd_addr=resolved_bd,
                     last_seen_ms=ts_ms,
                     seq=None,
                 )
@@ -93,6 +110,25 @@ class NeighborTable:
         with self._lock:
             return {relay: set(targets) for relay, targets in self._2hop.items()}
 
+    def get_resolved_members(self) -> list[dict[str, Any]]:
+        """Return group members whose anon_id has been resolved to a real BD address."""
+        with self._lock:
+            out: list[dict[str, Any]] = []
+            for aid, ent in sorted(self._resolved.items(), key=lambda kv: kv[0]):
+                out.append(
+                    {
+                        "anon_id": aid,
+                        "bd_addr": ent.bd_addr,
+                        "last_seen_ms": ent.last_seen_ms,
+                    }
+                )
+            return out
+
+    def resolve_member(self, anon_id: bytes, bd_addr: str, last_seen_ms: int) -> None:
+        """Register or refresh anon_id → BD address resolution (thread-safe)."""
+        with self._lock:
+            self._resolve_member(anon_id, bd_addr, last_seen_ms)
+
     def expire(self, timeout_ms: int) -> None:
         """Remove stale 1-hop entries and their 2-hop relay rows."""
         if timeout_ms < 0:
@@ -108,6 +144,23 @@ class NeighborTable:
             for aid in stale:
                 self._1hop.pop(aid, None)
                 self._2hop.pop(aid, None)
+
+            stale_resolved = [
+                aid
+                for aid, ent in self._resolved.items()
+                if (now_ms - ent.last_seen_ms) > timeout_ms
+            ]
+            for aid in stale_resolved:
+                self._resolved.pop(aid, None)
+
+    def _resolve_member(self, anon_id: bytes, bd_addr: str, last_seen_ms: int) -> None:
+        """Store anon_id → BD mapping from a successfully decrypted Hello private part."""
+        if len(anon_id) != ANON_ID_SIZE:
+            raise ValueError("invalid anon_id length")
+        self._resolved[anon_id] = _ResolvedMember(
+            bd_addr=str(bd_addr).upper(),
+            last_seen_ms=int(last_seen_ms),
+        )
 
     def _upsert_1hop(
         self,
@@ -159,6 +212,10 @@ if __name__ == "__main__":
     assert aid_b in hop_a
     assert hop_a[aid_b]["bd_addr"] == addr_b.upper()
     assert hop_a[aid_b]["seq"] == 1
+    resolved_a = {r["anon_id"]: r for r in table_a.get_resolved_members()}
+    assert resolved_a[aid_b]["bd_addr"] == addr_b.upper()
+    assert resolved_a[aid_c]["bd_addr"] == addr_c.upper()
+    print("✅ anon_id resolution from private Hello: OK")
     two_a = table_a.get_2hop()
     assert aid_c in two_a[aid_b]
     assert aid_a in two_a[aid_b]
@@ -197,12 +254,14 @@ if __name__ == "__main__":
     obs_hop = {e["anon_id"]: e for e in observer.get_1hop()}
     assert aid_b in obs_hop
     assert obs_hop[aid_b]["bd_addr"] is None
+    assert observer.get_resolved_members() == []
     print("✅ public-only hello update: OK")
 
     # Expire stale entries on A (timeout 500ms, ts was 1000, now >> 1500)
     table_a.expire(timeout_ms=500)
     assert table_a.get_1hop() == []
     assert table_a.get_2hop() == {}
+    assert table_a.get_resolved_members() == []
     print("✅ expire removes stale entries: OK")
 
     print("\n✅ All neighbor table self-tests passed")

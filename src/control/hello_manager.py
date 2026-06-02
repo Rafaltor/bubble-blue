@@ -32,10 +32,14 @@ class HelloManager:
         self._local_bd = cfg.local_bd_addr.upper()
         self._interval_s = max(1, int(cfg.hello_interval_s))
         self._timeout_ms = int(cfg.neighbor_timeout_s) * 1000
-        self._group_members = {a.upper() for a in cfg.group_members}
 
         self.anon_id = compute_anon_id(self._group_key, self._local_bd)
         self.table = NeighborTable()
+        self.table.resolve_member(
+            self.anon_id,
+            self._local_bd,
+            time.time_ns() // 1_000_000,
+        )
 
         self._seq = 0
         self._seq_lock = threading.Lock()
@@ -62,6 +66,10 @@ class HelloManager:
         pub = parse_hello_public(data)
         priv = parse_hello_private(data, self._group_key)
         self.table.update_from_hello(pub, priv)
+
+    def get_resolved_members(self) -> list[dict[str, Any]]:
+        """Group members with resolved anon_id → BD address mappings."""
+        return self.table.get_resolved_members()
 
     def _next_seq(self) -> int:
         with self._seq_lock:
@@ -111,16 +119,15 @@ class HelloManager:
             for relay, targets in sorted(two_hop.items(), key=lambda kv: kv[0])
         }
 
-        known_members: set[str] = set(self._group_members)
-        for entry in one_hop:
-            bd = entry.get("bd_addr")
-            if bd:
-                known_members.add(str(bd).upper())
-        known_members.discard(self._local_bd)
+        resolved = self.get_resolved_members()
+        resolved_fmt = [
+            f"anon_id={_fmt_anon_id(m['anon_id'])} bd_addr={m['bd_addr']}"
+            for m in resolved
+        ]
 
         print(f"1-hop: [{', '.join(anon_ids)}]", flush=True)
         print(f"2-hop: {two_fmt}", flush=True)
-        print(f"known members: [{', '.join(sorted(known_members))}]", flush=True)
+        print(f"known members (resolved): [{', '.join(resolved_fmt)}]", flush=True)
 
     def _loop(self) -> None:
         # Send one Hello immediately, then on every interval.
