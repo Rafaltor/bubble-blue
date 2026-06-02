@@ -80,8 +80,15 @@ class HelloManager:
             self._seq += 1
             return self._seq
 
+    def _l2cap_peer_anon_ids(self) -> frozenset[bytes]:
+        """Map active L2CAP peer BD addresses to anon_ids."""
+        peers: set[bytes] = set()
+        for bd_addr in self._transport.connections():
+            peers.add(compute_anon_id(self._group_key, bd_addr))
+        return frozenset(peers)
+
     def _refresh_cds_role(self, *, verbose: bool) -> None:
-        self._is_cds = am_i_cds(self.anon_id, self.table)
+        self._is_cds = am_i_cds(self.anon_id, self.table, self._l2cap_peer_anon_ids())
         if verbose:
             if self._is_cds:
                 print("[CDS] I am a relay node", flush=True)
