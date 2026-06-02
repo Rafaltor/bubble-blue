@@ -137,15 +137,24 @@ def compute_cds(neighbor_table: NeighborTable) -> set[bytes]:
     return cds
 
 
-def _pair_has_direct_l2cap(u: bytes, v: bytes, l2cap_peers: set[bytes]) -> bool:
+def _pair_has_direct_l2cap(
+    u: bytes,
+    v: bytes,
+    l2cap_peers: set[bytes],
+    advertised: dict[bytes, set[bytes]],
+) -> bool:
     """
-    True only if u and v have a direct L2CAP link between them.
+    True if u and v have a direct link between them.
 
-    Hello neighbor lists must never imply u↔v connectivity. Co-presence in
-    l2cap_peers means each talks to us, not necessarily to each other.
+    Both must be in ``l2cap_peers`` (active L2CAP to this node). Hello is used
+    only to check u↔v: each must list the other in its Hello 1-hop set (mutual).
+    Hello must never add nodes to ``l2cap_peers`` — only pairwise adjacency.
     """
-    _ = l2cap_peers  # peers are only nodes with sockets to this node
-    return u == v
+    if u == v:
+        return True
+    if u not in l2cap_peers or v not in l2cap_peers:
+        return False
+    return _mutually_adjacent(u, v, advertised)
 
 
 def am_i_cds(
@@ -157,12 +166,11 @@ def am_i_cds(
     Return True if this node should relay packets (local CDS role).
 
     Direct L2CAP peers are exactly ``l2cap_peers`` (from transport.connections()).
-    Hello advertisements must not add peers or imply links between them.
 
-    RELAY iff some pair (u, v) of distinct direct L2CAP peers lacks a direct u↔v
-    L2CAP connection (never inferred from Hello private/public neighbor lists).
+    RELAY iff some pair (u, v) of distinct L2CAP peers is not directly linked
+    (no mutual Hello 1-hop listing between u and v). If every pair is linked
+    (e.g. 3 devices all in range with full mesh), this node stays LEAF.
     """
-    _ = neighbor_table  # topology table is not used for local L2CAP adjacency
     local = bytes(local_anon_id)
     peers = {bytes(p) for p in l2cap_peers}
     peers.discard(local)
@@ -170,8 +178,9 @@ def am_i_cds(
     if len(peers) < 2:
         return False
 
+    advertised = _advertised_neighbors(neighbor_table)
     for u, v in itertools.combinations(sorted(peers), 2):
-        if not _pair_has_direct_l2cap(u, v, peers):
+        if not _pair_has_direct_l2cap(u, v, peers, advertised):
             return True
     return False
 
@@ -227,6 +236,25 @@ def _build_linear_topology_table(group_key: bytes, addrs: list[str]) -> Neighbor
     return merged
 
 
+def _build_mesh_topology_table(
+    group_key: bytes,
+    addrs: list[str],
+    neighbor_map: dict[str, list[str]],
+) -> NeighborTable:
+    """Build NeighborTable from per-node neighbor lists (e.g. full triangle)."""
+    from src.control.hello import build_hello, parse_hello_private, parse_hello_public
+    from src.control.neighbors import NeighborTable
+
+    merged = NeighborTable()
+    for i, addr in enumerate(addrs):
+        neighbors = neighbor_map.get(addr, [])
+        pkt = build_hello(group_key, addr, seq=i + 1, known_neighbors=neighbors, ts_ms=1_000 + i)
+        pub = parse_hello_public(pkt)
+        priv = parse_hello_private(pkt, group_key)
+        merged.update_from_hello(pub, priv)
+    return merged
+
+
 if __name__ == "__main__":
     from src.control.hello import compute_anon_id
 
@@ -271,12 +299,34 @@ if __name__ == "__main__":
     assert am_i_cds(anon_by_addr[addrs[0]], table, {anon_by_addr[addrs[1]]}) is False
     assert am_i_cds(anon_by_addr[addrs[4]], table, {anon_by_addr[addrs[3]]}) is False
 
-    # Star: Arduino only L2CAP to Rubik2; RubikQ in Rubik2's Hello must not count.
-    rubik_q, rubik2, arduino = addrs[0], addrs[1], addrs[2]
-    aq, a2, aa = anon_by_addr[rubik_q], anon_by_addr[rubik2], anon_by_addr[arduino]
-    assert am_i_cds(aa, table, {a2}) is False
-    assert am_i_cds(a2, table, {aa, aq}) is True
-    # RubikQ not in Arduino's l2cap set — must not affect Arduino role
-    assert am_i_cds(aq, table, {a2}) is False
+    # Star: hub has L2CAP to two leaves; leaves do not list each other in Hello.
+    star_addrs = addrs[0:3]
+    h_addr, l1_addr, l2_addr = star_addrs
+    star_table = _build_mesh_topology_table(
+        group_key,
+        star_addrs,
+        {h_addr: [l1_addr, l2_addr], l1_addr: [h_addr], l2_addr: [h_addr]},
+    )
+    h, l1, l2 = anon_by_addr[h_addr], anon_by_addr[l1_addr], anon_by_addr[l2_addr]
+    assert am_i_cds(l1, star_table, {h}) is False
+    assert am_i_cds(h, star_table, {l1, l2}) is True
+    assert am_i_cds(l2, star_table, {h}) is False
+
+    # Full triangle X—Y—Z: each has L2CAP to both others, all mutually in Hello → all LEAF.
+    tri_addrs = addrs[0:3]
+    x, y, z = tri_addrs
+    tri_map = {
+        x: [y, z],
+        y: [x, z],
+        z: [x, y],
+    }
+    tri_table = _build_mesh_topology_table(group_key, tri_addrs, tri_map)
+    ax, ay, az = anon_by_addr[x], anon_by_addr[y], anon_by_addr[z]
+    for aid, peers in (
+        (ax, {ay, az}),
+        (ay, {ax, az}),
+        (az, {ax, ay}),
+    ):
+        assert am_i_cds(aid, tri_table, peers) is False, f"mesh node should be LEAF"
 
     print("\n✅ All CDS self-tests passed")

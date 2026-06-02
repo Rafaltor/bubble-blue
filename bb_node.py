@@ -7,7 +7,8 @@ import threading
 import time
 
 from config import PKT_DATA, PKT_HELLO, load_config, print_config
-from src.control.hello_manager import HelloManager, handle_pkt_data
+from src.control.hello_manager import HelloManager
+from src.forwarding.forwarder import PacketForwarder
 from src.transport.discovery import discover_devices
 from src.transport.l2cap import L2CAPTransport
 
@@ -64,11 +65,14 @@ def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
 def _run_with_transport(
     transport: L2CAPTransport,
     hello_mgr: HelloManager,
+    forwarder: PacketForwarder,
     cfg,
     *,
     peer: str | None,
     topology: frozenset[str] | None,
     message: str | None,
+    send: str | None,
+    dst: str | None,
     interval: float,
 ) -> int:
     hello_mgr.start()
@@ -84,6 +88,32 @@ def _run_with_transport(
             transport.connect(bd_addr)
         except OSError as e:
             print(f"[APP] connect to {bd_addr} failed: {e}", file=sys.stderr, flush=True)
+
+    if send is not None:
+        route_dst = (dst or peer or "").upper()
+        if not route_dst or route_dst == "00:00:00:00:00:00":
+            print(
+                "[APP] --send requires --dst (routing destination) or --peer",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 2
+        l2cap_peer = peer.upper() if peer else None
+        if not l2cap_peer and transport.connections():
+            l2cap_peer = transport.connections()[0]
+        try:
+            forwarder.send_data(send, route_dst, l2cap_peer=l2cap_peer)
+        except (OSError, RuntimeError) as e:
+            print(f"[APP] --send failed: {e}", file=sys.stderr, flush=True)
+            return 2
+        print("[APP] --send done. Listening for replies. Ctrl+C to stop.", flush=True)
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            hello_mgr.stop()
+            transport.stop()
+            return 0
 
     if not peer:
         print("[APP] listening (Hello + DATA). Ctrl+C to stop.", flush=True)
@@ -190,6 +220,16 @@ def main() -> int:
             "(incoming and outbound). Example: 40:D9:5A:8B:69:3F,14:B5:CD:E2:49:ED"
         ),
     )
+    parser.add_argument(
+        "--send",
+        default=None,
+        help='Send one test PKT_DATA (utf-8), then listen. Requires --dst or --peer for routing.',
+    )
+    parser.add_argument(
+        "--dst",
+        default=None,
+        help="Routing destination BD_ADDR for --send (final hop, may differ from --peer).",
+    )
     args = parser.parse_args()
 
     _pairing_agent = setup_ble_pairing_agent()
@@ -243,6 +283,7 @@ def main() -> int:
     print_config(cfg)
 
     hello_mgr: HelloManager | None = None
+    forwarder: PacketForwarder | None = None
 
     def on_receive(peer_bd_addr: str, data: bytes) -> None:
         if not data:
@@ -258,7 +299,9 @@ def main() -> int:
             return
 
         if pkt_type == PKT_DATA:
-            handle_pkt_data(peer_bd_addr, data, cfg)
+            if forwarder is None:
+                return
+            forwarder.handle(peer_bd_addr, data)
             return
 
         # Legacy cleartext / unknown framing
@@ -275,15 +318,19 @@ def main() -> int:
         allowed_peers=topology,
     )
     hello_mgr = HelloManager(cfg, transport)
+    forwarder = PacketForwarder(cfg, transport, hello_mgr)
     transport.start()
 
     return _run_with_transport(
         transport,
         hello_mgr,
+        forwarder,
         cfg,
         peer=selected_peer,
         topology=topology,
         message=args.message,
+        send=args.send,
+        dst=args.dst,
         interval=args.interval,
     )
 

@@ -23,10 +23,11 @@ class _ResolvedMember:
 
 class NeighborTable:
     """
-    Per-node neighbor tables for the BB control plane.
+    Per-node neighbor tables for the BB control plane (topology awareness).
 
-    - 1-hop: direct neighbors (nodes we have heard from / know at distance 1)
-    - 2-hop: for each 1-hop relay, anon_ids they advertise as their neighbors
+    - 1-hop / 2-hop / resolved: learned from Hello (CDS graph, member resolution)
+    - NOT the source of truth for active L2CAP peers — use transport.connections()
+      for CDS role (am_i_cds) and for what this node advertises in its own Hello.
     """
 
     def __init__(self) -> None:
@@ -41,7 +42,10 @@ class NeighborTable:
         parsed_private: dict[str, Any] | None,
     ) -> None:
         """
-        Update 1-hop and 2-hop tables from a received Hello.
+        Update topology tables from a received Hello (awareness only).
+
+        Does not create L2CAP connections. Private neighbor BD addresses are
+        stored for resolution/CDS graph only.
 
         parsed_public: output of parse_hello_public()
         parsed_private: output of parse_hello_private() or None if not a group member

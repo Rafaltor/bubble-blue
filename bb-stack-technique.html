@@ -428,6 +428,7 @@
     position: relative;
   }
   .phase-items li::before { content: '·'; position: absolute; left: 0; color: var(--accent); }
+  .phase-items li.good { color: var(--green); }
 
   /* LAYOUT HELPERS */
   .two-col {
@@ -614,7 +615,7 @@
       </div>
       <div class="meta-item">
         <span class="meta-label">Status</span>
-        <span class="meta-value">Phase 1A ✅ Phase 1B Hello ✅ CDS en cours</span>
+        <span class="meta-value">Phase 1A ✅ Phase 1B Hello + CDS ✅</span>
       </div>
     </div>
   </div>
@@ -635,7 +636,8 @@
         └── <code>src/</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code>, <code>discovery.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → <code>cds.py</code>
       </div>
     </div>
     <div>
@@ -648,6 +650,10 @@
         <div class="arch-layer">
           <span class="arch-layer-name">Control</span>
           <span class="arch-layer-tech"><code>hello_manager.py</code> → <code>hello.py</code> → <code>neighbors.py</code></span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">Forwarding (CDS)</span>
+          <span class="arch-layer-tech"><code>cds.py</code> — <code>compute_cds</code>, <code>am_i_cds</code></span>
         </div>
         <div class="arch-layer">
           <span class="arch-layer-name">Security</span>
@@ -814,8 +820,107 @@
   </div>
 </div>
 
-<!-- SLIDE 5: RÉSULTATS -->
+<!-- SLIDE 5: CDS -->
 <div class="slide" id="s5">
+  <div class="slide-num">CDS — CONNECTED DOMINATING SET</div>
+  <h2>Élection locale du rôle relais</h2>
+  <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1rem;">Implémenté dans <code>src/forwarding/cds.py</code> — intégré à <code>HelloManager</code></p>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Deux vues complémentaires</div>
+      <div class="compare-box plain" style="border-color: var(--accent); margin-bottom: 0.65rem;">
+        <div class="box-title" style="font-size: 0.8rem; color: var(--accent);"><code>compute_cds()</code> — vue globale</div>
+        <ul class="box-list">
+          <li>Graphe anonyme fusionné depuis les Hello publics</li>
+          <li>Arête <strong>u↔v</strong> seulement si <strong>mutuel</strong> (chaque nœud liste l'autre en 1-hop)</li>
+          <li>Algorithme <strong>Greedy CDS</strong> : ordre par degré décroissant, règle <code>_should_join_cds</code></li>
+          <li>Vérifie domination + connectivité du backbone (<code>_verify_cds_properties</code>)</li>
+        </ul>
+      </div>
+      <div class="compare-box plain" style="border-color: var(--green); margin-bottom: 0.65rem;">
+        <div class="box-title" style="font-size: 0.8rem; color: var(--green);"><code>am_i_cds()</code> — décision locale (runtime)</div>
+        <ul class="box-list">
+          <li><strong>RELAY</strong> si ∃ paire de voisins L2CAP distincts <em>sans</em> lien direct u↔v</li>
+          <li><strong>LEAF</strong> si &lt; 2 peers L2CAP, ou toutes les paires sont directement liées</li>
+          <li>Recalculé à chaque Hello reçu / changement de connexion</li>
+          <li>Log console : <code>[CDS] I am a relay node</code> / <code>leaf node</code></li>
+        </ul>
+      </div>
+      <div class="section-label">Séparation des sources (point clé)</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Donnée</th><th>Source</th><th>Usage CDS</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Peers L2CAP</strong></td>
+            <td><code>transport.connections()</code></td>
+            <td class="cell-good">Qui est physiquement connecté à <em>moi</em></td>
+          </tr>
+          <tr>
+            <td><strong>Adjacence u↔v</strong></td>
+            <td>Hello public (1-hop mutuel)</td>
+            <td class="cell-good">Lien direct entre deux peers L2CAP ?</td>
+          </tr>
+          <tr>
+            <td><strong>Table 2-hop Hello</strong></td>
+            <td><code>NeighborTable</code></td>
+            <td class="cell-neutral">Topologie globale / <code>compute_cds</code> uniquement</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Topologies testées (<code>cds.py</code> self-tests)</div>
+      <table class="table-compact" style="margin-bottom: 0.75rem;">
+        <thead>
+          <tr><th>Topologie</th><th>L2CAP local</th><th>Rôle</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Chaîne A—B—C—D—E</strong></td>
+            <td>B : peers {A, C}</td>
+            <td class="cell-good">B → <strong>RELAY</strong> (A et C pas voisins directs)</td>
+          </tr>
+          <tr>
+            <td><strong>Étoile (hub H)</strong></td>
+            <td>H : peers {L1, L2}</td>
+            <td class="cell-good">H → <strong>RELAY</strong> ; feuilles → LEAF</td>
+          </tr>
+          <tr>
+            <td><strong>Triangle complet X—Y—Z</strong></td>
+            <td>3 peers, tous mutuels Hello</td>
+            <td class="cell-good">tous → <strong>LEAF</strong> (mesh local)</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="section-label">Règle Greedy (rejoindre le CDS global)</div>
+      <div class="formula-box" style="font-size: 0.65rem; line-height: 1.5; margin-bottom: 0.65rem;">
+        Pour chaque candidat X (non déjà CDS) :<br>
+        1. Au moins <strong>2 voisins</strong> mutuels Hello<br>
+        2. ∃ paire de voisins <strong>(u, v)</strong> non adjacentes entre elles<br>
+        3. Aucun nœud CDS existant ne les relie déjà (pas de pont)<br>
+        → X rejoint le backbone
+      </div>
+      <div class="section-label">Intégration runtime</div>
+      <ul class="box-list">
+        <li><code>HelloManager._l2cap_peer_anon_ids()</code> — jamais les voisins appris par Hello seuls</li>
+        <li><code>_known_neighbor_bd_addrs()</code> — annonce uniquement les BD L2CAP actives</li>
+        <li>Prochaine étape : <strong>forwarding plane</strong> (relayer <code>PKT_DATA</code> si RELAY)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict" style="margin-top: 0.85rem;">
+    <div class="verdict-label">Synthèse</div>
+    Le CDS repose sur des <strong>anon_ids</strong> et des listes de voisins Hello — pas besoin de connaître les BD addresses pour décider le rôle.
+    Un nœud en mesh complet (3 boards à portée) reste <strong>LEAF</strong> : seul un relais est nécessaire quand deux peers L2CAP ne se « voient » pas mutuellement en Hello.
+  </div>
+</div>
+
+<!-- SLIDE 6: RÉSULTATS -->
+<div class="slide" id="s6">
   <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
   <h2>Tables de voisinage — Test sur 2 boards</h2>
 
@@ -864,18 +969,18 @@
   </div>
 </div>
 
-<!-- SLIDE 6: ROADMAP -->
-<div class="slide" id="s6">
+<!-- SLIDE 7: ROADMAP -->
+<div class="slide" id="s7">
   <div class="slide-num">PROCHAINES ÉTAPES</div>
-  <h2>Phase 1B CDS → Phase 2 BLE</h2>
+  <h2>Forwarding → Phase 2 BLE</h2>
 
   <div class="roadmap">
     <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.1);">
       <div class="phase-label">Phase 1B — En cours</div>
-      <div class="phase-title">CDS + Forwarding</div>
+      <div class="phase-title">Forwarding multihop</div>
       <ul class="phase-items">
-        <li>CDS Greedy algorithm</li>
-        <li>Forwarding plane</li>
+        <li class="good">CDS Greedy + <code>am_i_cds</code> ✅</li>
+        <li>Forwarding plane (<code>PKT_DATA</code> relay)</li>
         <li>Test 3 boards multihop</li>
       </ul>
     </div>
@@ -911,7 +1016,7 @@
   <div class="verdict" style="margin-top: 1.25rem; border-color: var(--yellow); border-left-color: var(--yellow);">
     <div class="verdict-label" style="color: var(--yellow);">Questions ouvertes</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
-      <li class="warn">❓ CDS avec topologie anonyme : les anon_ids suffisent-ils ?</li>
+      <li class="good">✅ CDS anonyme : <code>anon_ids</code> + Hello mutuel suffisent pour l'élection locale</li>
       <li class="warn">❓ Jitter window : nécessaire en BT Classic ou seulement BLE ?</li>
       <li class="warn">❓ Révocation : rotation de clé de groupe ou solution C ?</li>
       <li class="warn">❓ Mesures énergie : INA219 sur Rubik Pi ?</li>
@@ -925,14 +1030,15 @@
   <button onclick="goTo(2)" id="btn2">Architecture</button>
   <button onclick="goTo(3)" id="btn3">Transport &amp; Sécu</button>
   <button onclick="goTo(4)" id="btn4">Hello</button>
-  <button onclick="goTo(5)" id="btn5">Résultats</button>
-  <button onclick="goTo(6)" id="btn6">Roadmap</button>
-  <span id="slide-counter">1 / 6</span>
+  <button onclick="goTo(5)" id="btn5">CDS</button>
+  <button onclick="goTo(6)" id="btn6">Résultats</button>
+  <button onclick="goTo(7)" id="btn7">Roadmap</button>
+  <span id="slide-counter">1 / 7</span>
 </div>
 
 <script>
   let current = 1;
-  const total = 6;
+  const total = 7;
   let wheelLock = false;
 
   function goTo(n) {

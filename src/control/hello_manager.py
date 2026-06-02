@@ -63,12 +63,22 @@ class HelloManager:
     def stop(self) -> None:
         self._stop.set()
 
+    @property
+    def is_relay(self) -> bool:
+        """True when this node should relay PKT_DATA (CDS RELAY role)."""
+        return self._is_cds
+
+    def l2cap_peer_anon_ids(self) -> frozenset[bytes]:
+        """Anon_ids for active L2CAP peers (transport.connections() only)."""
+        return self._l2cap_peer_anon_ids()
+
     def on_receive(self, peer_bd_addr: str, data: bytes) -> None:
-        """Parse and ingest a received Hello packet."""
+        """Parse and ingest a received Hello packet (topology only — not L2CAP peers)."""
         _ = peer_bd_addr  # sender BD available for future link-local validation
         pub = parse_hello_public(data)
         priv = parse_hello_private(data, self._group_key)
         self.table.update_from_hello(pub, priv)
+        # CDS uses transport.connections() only; table update must not change l2cap_peers.
         self._refresh_cds_role(verbose=True)
 
     def get_resolved_members(self) -> list[dict[str, Any]]:
@@ -99,16 +109,10 @@ class HelloManager:
                 print("[CDS] I am a leaf node", flush=True)
 
     def _known_neighbor_bd_addrs(self) -> list[str]:
-        """BD addresses to advertise in our Hello private/public neighbor lists."""
-        addrs: set[str] = set(self._transport.connections())
+        """BD addresses with active L2CAP to us (advertised in our Hello)."""
+        addrs: set[str] = {bd.upper() for bd in self._transport.connections()}
         if self._cfg.remote_bd_addr not in ("00:00:00:00:00:00", self._local_bd):
             addrs.add(self._cfg.remote_bd_addr.upper())
-
-        for entry in self.table.get_1hop():
-            bd = entry.get("bd_addr")
-            if bd:
-                addrs.add(str(bd).upper())
-
         addrs.discard(self._local_bd)
         return sorted(addrs)
 
@@ -162,47 +166,3 @@ class HelloManager:
             self.print_neighbor_tables()
             if self._stop.wait(self._interval_s):
                 break
-
-
-def handle_pkt_data(peer_bd_addr: str, data: bytes, cfg: BubbleBlueConfig) -> None:
-    """Decrypt and print a PKT_DATA BB packet (routing header + crypto payload)."""
-    from src.security.crypto import decrypt_from_group
-    from src.security.packet import parse_bb_packet, validate_timestamp
-    from src.security.replay import ReplayFilter
-
-    # Module-level replay filter per process (simple MVP).
-    if not hasattr(handle_pkt_data, "_replay"):
-        handle_pkt_data._replay = ReplayFilter()  # type: ignore[attr-defined]
-    replay: ReplayFilter = handle_pkt_data._replay  # type: ignore[attr-defined]
-
-    try:
-        parsed = parse_bb_packet(data)
-        rh = parsed["routing_header"]
-        hdr = parsed["parsed_header"]
-
-        if not validate_timestamp(hdr["ts_ms"]):
-            print(f"[APP] DATA rejected from={peer_bd_addr}: timestamp out of window", flush=True)
-            return
-
-        if not replay.check_and_update(hdr["src"], hdr["seq"]):
-            print(f"[APP] DATA rejected from={peer_bd_addr}: replay detected", flush=True)
-            return
-
-        plaintext = decrypt_from_group(
-            cfg.group_key,
-            parsed["session_key_enc"],
-            parsed["nonce"],
-            parsed["ciphertext"],
-            rh,
-        )
-        try:
-            text = plaintext.decode("utf-8")
-        except UnicodeDecodeError:
-            text = repr(plaintext)
-        print(
-            f"[APP] DATA from={peer_bd_addr} src={hdr['src']} dst={hdr['dst']} "
-            f"ttl={hdr['ttl']} seq={hdr['seq']} text={text}",
-            flush=True,
-        )
-    except Exception as e:  # noqa: BLE001
-        print(f"[APP] DATA rx from={peer_bd_addr} bytes={len(data)} error={e}", flush=True)
