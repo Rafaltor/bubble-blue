@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from config import BubbleBlueConfig
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
+from src.forwarding.cds import am_i_cds
 
 if TYPE_CHECKING:
     from src.transport.l2cap import L2CAPTransport
@@ -45,6 +46,8 @@ class HelloManager:
         self._seq_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._is_cds = False
+        self._refresh_cds_role(verbose=False)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -66,6 +69,7 @@ class HelloManager:
         pub = parse_hello_public(data)
         priv = parse_hello_private(data, self._group_key)
         self.table.update_from_hello(pub, priv)
+        self._refresh_cds_role(verbose=True)
 
     def get_resolved_members(self) -> list[dict[str, Any]]:
         """Group members with resolved anon_id → BD address mappings."""
@@ -75,6 +79,14 @@ class HelloManager:
         with self._seq_lock:
             self._seq += 1
             return self._seq
+
+    def _refresh_cds_role(self, *, verbose: bool) -> None:
+        self._is_cds = am_i_cds(self.anon_id, self.table)
+        if verbose:
+            if self._is_cds:
+                print("[CDS] I am a relay node", flush=True)
+            else:
+                print("[CDS] I am a leaf node", flush=True)
 
     def _known_neighbor_bd_addrs(self) -> list[str]:
         """BD addresses to advertise in our Hello private/public neighbor lists."""
@@ -125,6 +137,8 @@ class HelloManager:
             for m in resolved
         ]
 
+        role = "RELAY" if self._is_cds else "LEAF"
+        print(f"CDS role: {role}", flush=True)
         print(f"1-hop: [{', '.join(anon_ids)}]", flush=True)
         print(f"2-hop: {two_fmt}", flush=True)
         print(f"known members (resolved): [{', '.join(resolved_fmt)}]", flush=True)
@@ -133,6 +147,7 @@ class HelloManager:
         # Send one Hello immediately, then on every interval.
         while not self._stop.is_set():
             self.table.expire(self._timeout_ms)
+            self._refresh_cds_role(verbose=False)
             self._send_hellos()
             self.print_neighbor_tables()
             if self._stop.wait(self._interval_s):

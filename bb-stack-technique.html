@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Stack Technique</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --surface2: #eef1f4;
+    --border: #d8dee6;
+    --accent: #0052cc;
+    --accent2: #0052cc;
+    --green: #1e7e34;
+    --red: #c0392b;
+    --yellow: #b88700;
+    --text: #1a2340;
+    --text-muted: #5a6378;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --nav-bg: rgba(17, 24, 39, 0.95);
+    --nav-border: #2a3548;
+    --nav-text: #c5cdd8;
+    --nav-text-muted: #8899aa;
+    --nav-width: 11.625rem;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* NAVIGATION */
+  #nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--nav-width);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+    background: var(--nav-bg);
+    border-right: 1px solid var(--nav-border);
+    padding: 1rem 0.75rem;
+    z-index: 1000;
+    overflow-y: auto;
+  }
+
+  #nav button {
+    background: none;
+    border: none;
+    color: var(--nav-text-muted);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+    text-align: left;
+    width: 100%;
+  }
+  #nav button:hover { color: #ffffff; }
+  #nav button.active { background: var(--accent); color: #ffffff; }
+  #slide-counter {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    color: var(--nav-text-muted);
+    margin-top: auto;
+    padding: 0.75rem 0.5rem 0;
+    border-top: 1px solid var(--nav-border);
+    text-align: center;
+  }
+
+  /* SLIDES */
+  .slide {
+    position: absolute;
+    top: 0;
+    left: var(--nav-width);
+    width: calc(100% - var(--nav-width));
+    height: 100%;
+    display: none;
+    padding: 3rem 4rem;
+    flex-direction: column;
+    justify-content: flex-start;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .slide.active { display: flex; animation: fadeIn 0.3s ease; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* SLIDE HEADER */
+  .slide-num {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+  }
+
+  h2 {
+    font-size: 1.8rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+    color: var(--text);
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+
+  .subtitle {
+    font-family: var(--sans);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 2rem;
+  }
+
+  /* TITLE SLIDE */
+  .title-slide {
+    justify-content: center;
+    background: var(--bg);
+  }
+
+  .title-slide h1 {
+    font-size: 5rem;
+    color: var(--text);
+    margin-bottom: 0.3rem;
+  }
+
+  .title-meta {
+    display: flex;
+    gap: 2rem;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .meta-item { display: flex; flex-direction: column; gap: 0.3rem; }
+  .meta-label { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .meta-value { font-family: var(--sans); font-size: 0.9rem; color: var(--accent); font-weight: 500; }
+
+  .plan-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.75rem;
+    margin-top: 2.5rem;
+  }
+
+  .plan-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    position: relative;
+  }
+  .plan-item::before {
+    content: attr(data-num);
+    position: absolute;
+    top: 0.5rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 1.5rem;
+    color: var(--border);
+    font-weight: 700;
+  }
+  .plan-item-title { font-size: 0.75rem; font-weight: 600; color: var(--accent); margin-bottom: 0.3rem; }
+  .plan-item-sub { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); }
+
+  /* TABLES */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    margin-bottom: 1.5rem;
+  }
+
+  th {
+    background: var(--surface2);
+    color: var(--text);
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    font-weight: 600;
+  }
+
+  td {
+    padding: 0.55rem 0.8rem;
+    border: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: middle;
+  }
+
+  tr:nth-child(even) td { background: rgba(26, 35, 64, 0.04); }
+
+  .cell-good { color: var(--green); font-weight: 600; }
+  .cell-bad { color: var(--red); }
+  .cell-warn { color: var(--yellow); }
+  .cell-neutral { color: var(--text-muted); }
+
+  /* COMPARISON BOXES */
+  .compare-grid { display: grid; gap: 1rem; }
+  .compare-2 { grid-template-columns: 1fr 1fr; }
+  .compare-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .compare-questions {
+    grid-template-columns: 1fr 1fr 1fr;
+    margin-bottom: 1rem;
+  }
+  .compare-questions .compare-box { padding: 0.9rem 1rem; }
+  .compare-questions .box-title { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  .compare-questions .box-list li { font-size: 0.68rem; }
+
+  .compare-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    position: relative;
+  }
+
+  .compare-box.winner { border-color: var(--green); }
+  .compare-box.loser { border-color: var(--border); opacity: 0.85; }
+  .compare-box.winner::after {
+    content: '✅ RETENU';
+    position: absolute;
+    top: 0.75rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 0.6rem;
+    color: var(--green);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .compare-box.loser::after {
+    content: '❌ ÉLIMINÉ';
+    position: absolute;
+    top: 0.75rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 0.6rem;
+    color: var(--red);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .compare-box.winner.plain::after,
+  .compare-box.loser.plain::after { content: none; }
+
+  tr.row-bb td { background: rgba(30, 126, 52, 0.06); }
+  tr.row-bb td:first-child {
+    border-left: 4px solid var(--green);
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .table-compact { font-size: 0.7rem; margin-bottom: 1rem; }
+  .table-compact th,
+  .table-compact td { padding: 0.45rem 0.55rem; }
+  .compare-box.phase2::after {
+    content: '🔄 PHASE 2';
+    position: absolute;
+    top: 0.75rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 0.6rem;
+    color: var(--yellow);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+
+  .box-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .box-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .box-list li {
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding-left: 1rem;
+    position: relative;
+  }
+  .box-list li::before { content: '→'; position: absolute; left: 0; color: var(--accent); }
+  .box-list li.good { color: var(--green); }
+  .box-list li.bad { color: var(--red); }
+  .box-list li.warn { color: var(--yellow); }
+
+  /* STAT BOXES */
+  .stat-row {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .stat-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .stat-label { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat-value { font-family: var(--sans); font-size: 1.4rem; font-weight: 700; }
+  .stat-context { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); }
+  .stat-box.green .stat-value { color: var(--green); }
+  .stat-box.red .stat-value { color: var(--red); }
+  .stat-box.blue .stat-value { color: var(--accent); }
+  .stat-box.yellow .stat-value { color: var(--yellow); }
+
+  /* VERDICT BOX */
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-top: 1rem;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+  }
+  .verdict-label {
+    font-size: 0.65rem;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  /* ROADMAP */
+  .roadmap {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  .roadmap-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .roadmap-item::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .roadmap-item.p1::before { background: var(--green); }
+  .roadmap-item.p2::before { background: var(--accent); }
+  .roadmap-item.p3::before { background: var(--yellow); }
+  .roadmap-item.p4::before { background: var(--text-muted); }
+
+  .phase-label {
+    font-family: var(--sans);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+  .p1 .phase-label { color: var(--green); }
+  .p2 .phase-label { color: var(--accent); }
+  .p3 .phase-label { color: var(--yellow); }
+  .p4 .phase-label { color: var(--text-muted); }
+
+  .phase-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.75rem; }
+
+  .phase-items {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .phase-items li {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    padding-left: 0.8rem;
+    position: relative;
+  }
+  .phase-items li::before { content: '·'; position: absolute; left: 0; color: var(--accent); }
+
+  /* LAYOUT HELPERS */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    flex: 1;
+  }
+
+  .section-label {
+    font-family: var(--sans);
+    font-size: 0.65rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+
+  /* ARCH DIAGRAM */
+  .arch-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 1rem 0;
+  }
+  .arch-layer {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: border-color 0.2s;
+  }
+  .arch-layer:hover { border-color: var(--accent); }
+  .arch-layer-name { font-weight: 600; font-size: 0.85rem; }
+  .arch-layer-desc { font-family: var(--sans); font-size: 0.7rem; color: var(--text-muted); }
+  .arch-layer-tech { font-family: var(--sans); font-size: 0.7rem; color: var(--accent); font-weight: 500; }
+  .arch-layer.highlight { border-color: var(--accent); background: var(--surface); border-left: 4px solid var(--accent); }
+
+  .arch-stack.seq { margin: 0; gap: 0.35rem; }
+  .arch-stack.seq .arch-layer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    padding: 0.55rem 0.9rem;
+  }
+  .arch-stack.seq .arch-layer-tech {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 0.65rem;
+    line-height: 1.35;
+  }
+  .arch-stack.seq.pipeline { gap: 0.25rem; margin-bottom: 0.75rem; }
+  .arch-stack.seq.pipeline .arch-layer { padding: 0.45rem 0.75rem; }
+  .arch-stack.seq.pipeline .arch-layer-name { font-size: 0.75rem; }
+  .arch-stack.seq.pipeline .arch-layer-desc,
+  .arch-stack.seq.pipeline .arch-layer-tech { font-size: 0.62rem; }
+
+  .formula-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    line-height: 1.55;
+    color: var(--text);
+    margin-bottom: 0.75rem;
+  }
+  .formula-box code { font-size: 0.66rem; color: var(--accent); }
+
+  /* UNICAST CALC */
+  .calc-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.6rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 0.4rem;
+    font-family: var(--sans);
+    font-size: 0.75rem;
+  }
+  .calc-label { color: var(--text-muted); flex: 1; }
+  .calc-bar-wrap { flex: 2; height: 6px; background: var(--border); border-radius: 3px; }
+  .calc-bar { height: 100%; border-radius: 3px; }
+  .calc-value { width: 80px; text-align: right; font-weight: 700; }
+  .bar-red { background: var(--red); }
+  .bar-yellow { background: var(--yellow); }
+  .bar-green { background: var(--green); }
+  .bar-blue { background: var(--accent); }
+
+  /* BATTERY */
+  .battery-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 0.5rem 0;
+  }
+  .battery-bar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .battery-fill-wrap {
+    height: 12px;
+    background: var(--border);
+    border-radius: 6px;
+    margin: 0.5rem 0;
+    overflow: hidden;
+  }
+  .battery-fill { height: 100%; border-radius: 6px; }
+
+  /* PROGRESS BARS FOR OVERHEAD */
+  .overhead-item {
+    margin-bottom: 0.6rem;
+  }
+  .overhead-header {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    margin-bottom: 0.25rem;
+  }
+  .overhead-bar-wrap {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .overhead-bar { height: 100%; border-radius: 4px; }
+
+  /* KEYBOARD HINT */
+  .kbd-hint {
+    position: fixed;
+    top: 1.5rem;
+    right: 2rem;
+    font-family: var(--sans);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.6rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="kbd-hint">
+  <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd> naviguer
+  <kbd class="kbd">F</kbd> plein écran
+</div>
+
+<!-- SLIDE 1: TITRE -->
+<div class="slide title-slide active" id="s1">
+  <div>
+    <div class="slide-num">BUBBLE-BLUE — STACK TECHNIQUE</div>
+    <h1>Implémentation Phase 1A + 1B</h1>
+    <h2 style="color: var(--text-muted); font-weight: 400; font-size: 1.3rem;">État d'avancement technique — Stack complet BT Classic</h2>
+    <div class="title-meta">
+      <div class="meta-item">
+        <span class="meta-label">Boards</span>
+        <span class="meta-value">Rubik Pi 3 × 2 (BT 5.0) + Arduino UNO Q (BT 5.1)</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Transport</span>
+        <span class="meta-value">BT Classic L2CAP</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Language</span>
+        <span class="meta-value">Python 3 + asyncio</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Status</span>
+        <span class="meta-value">Phase 1A ✅ Phase 1B Hello ✅ CDS en cours</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 2: ARCHITECTURE -->
+<div class="slide" id="s2">
+  <div class="slide-num">ARCHITECTURE</div>
+  <h2>Stack BB — Structure implémentée</h2>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Arborescence repo</div>
+      <div class="formula-box" style="line-height: 1.75; font-size: 0.72rem;">
+        <code>bubble-blue/</code><br>
+        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— entrypoint</span><br>
+        ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env secrets</span><br>
+        └── <code>src/</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code>, <code>discovery.py</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Couches (top → bottom)</div>
+      <div class="arch-stack seq pipeline">
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">Application</span>
+          <span class="arch-layer-tech"><code>bb_node.py</code></span>
+        </div>
+        <div class="arch-layer">
+          <span class="arch-layer-name">Control</span>
+          <span class="arch-layer-tech"><code>hello_manager.py</code> → <code>hello.py</code> → <code>neighbors.py</code></span>
+        </div>
+        <div class="arch-layer">
+          <span class="arch-layer-name">Security</span>
+          <span class="arch-layer-tech"><code>crypto.py</code> + <code>replay.py</code></span>
+        </div>
+        <div class="arch-layer">
+          <span class="arch-layer-name">Packet Format</span>
+          <span class="arch-layer-tech"><code>packet.py</code></span>
+        </div>
+        <div class="arch-layer">
+          <span class="arch-layer-name">Transport</span>
+          <span class="arch-layer-tech"><code>l2cap.py</code></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label" style="margin-top: 1.25rem;">Routage des paquets</div>
+  <div class="compare-grid compare-2" style="margin-top: 0.5rem;">
+    <div class="compare-box winner plain" style="border-color: var(--accent);">
+      <div class="box-title" style="font-size: 0.85rem;"><code>PKT_HELLO</code></div>
+      <ul class="box-list">
+        <li class="good">→ <code>HelloManager</code></li>
+        <li class="good">→ <code>NeighborTable</code> (<code>neighbors.py</code>)</li>
+      </ul>
+    </div>
+    <div class="compare-box winner plain" style="border-color: var(--green);">
+      <div class="box-title" style="font-size: 0.85rem;"><code>PKT_DATA</code></div>
+      <ul class="box-list">
+        <li class="good">→ couche <code>crypto</code> (déchiffrement + anti-replay)</li>
+        <li class="good">→ application (<code>bb_node.py</code>)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: TRANSPORT & SÉCURITÉ -->
+<div class="slide" id="s3">
+  <div class="slide-num">TRANSPORT &amp; SÉCURITÉ</div>
+  <h2>BT Classic L2CAP + AES-256-GCM</h2>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Transport L2CAP</div>
+      <ul class="box-list" style="margin-bottom: 1.25rem;">
+        <li><strong>Symétrique</strong> : chaque nœud = server + client</li>
+        <li><strong>Multi-connexions</strong> threadées (<code>l2cap.py</code>)</li>
+        <li><strong>Auto-pairing</strong> via <code>bluetoothctl</code> agent <code>NoInputNoOutput</code></li>
+        <li><strong>Auto-reconnexion</strong> sur déconnexion</li>
+      </ul>
+      <div class="stat-row" style="margin-bottom: 0;">
+        <div class="stat-box blue">
+          <span class="stat-label">PSM</span>
+          <span class="stat-value" style="font-size: 1.1rem;">0x1001</span>
+          <span class="stat-context"><code>config.py</code></span>
+        </div>
+        <div class="stat-box green">
+          <span class="stat-label">MTU</span>
+          <span class="stat-value" style="font-size: 1.1rem;">1021 B</span>
+          <span class="stat-context">BT Classic L2CAP</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Sécurité AES-256-GCM — Solution B</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Champ</th><th>Taille</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Routing header</td><td>26 B</td><td class="cell-neutral">Clair — src, dst, TTL, seq, ts</td></tr>
+          <tr><td>Session key enc</td><td>60 B</td><td class="cell-warn">Chiffré clé groupe</td></tr>
+          <tr><td>Nonce</td><td>12 B</td><td class="cell-neutral">Aléatoire par paquet</td></tr>
+          <tr><td>Payload</td><td>variable</td><td class="cell-warn">Chiffré session key</td></tr>
+          <tr><td>GCM Tag</td><td>16 B</td><td class="cell-good">Intégrité + auth</td></tr>
+          <tr style="background: rgba(0, 82, 204, 0.06);"><td><strong>Overhead fixe</strong></td><td><strong>98 B</strong></td><td>26 + 60 + 12</td></tr>
+          <tr style="background: rgba(30, 126, 52, 0.08);"><td><strong>Payload dispo</strong></td><td class="cell-good"><strong>923 B</strong></td><td>MTU 1021 − 98</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="verdict" style="margin-top: 1rem;">
+    <div class="verdict-label">Propriétés de sécurité</div>
+    <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 1.5rem; margin-top: 0.35rem;">
+      <li class="good">Forward secrecy — session key par paquet</li>
+      <li class="good">Authentification — GCM tag</li>
+      <li class="good">Anti-replay — fenêtre glissante 256 + timestamp ±120s</li>
+      <li class="good">Confidentialité des relais — chiffré avant forwarding</li>
+      <li class="good" style="grid-column: 1 / -1;">Révocation — exclusion du groupe (rotation clé)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- SLIDE 4: HELLO MESSAGES -->
+<div class="slide" id="s4">
+  <div class="slide-num">HELLO MESSAGES</div>
+  <h2>Topologie anonyme — Deux parties</h2>
+  <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1.25rem;">Seuls les membres connaissent la vraie identité des nœuds</p>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Design deux parties</div>
+      <div class="compare-box plain" style="border-color: var(--accent); margin-bottom: 0.75rem;">
+        <div class="box-title" style="font-size: 0.8rem; color: var(--accent);">PUBLIC <span style="font-weight: 400; color: var(--text-muted);">— clair, tout nœud CDS</span></div>
+        <ul class="box-list">
+          <li><code>anon_id</code> = HMAC-SHA256(<code>group_key</code>, <code>bd_addr</code>)[:8]</li>
+          <li><code>seq</code>, <code>timestamp</code></li>
+          <li>liste des voisins par <code>anon_id</code></li>
+        </ul>
+      </div>
+      <div class="compare-box plain" style="border-color: var(--yellow); margin-bottom: 0.75rem;">
+        <div class="box-title" style="font-size: 0.8rem; color: var(--yellow);">PRIVATE <span style="font-weight: 400; color: var(--text-muted);">— AES-GCM, membres seulement</span></div>
+        <ul class="box-list">
+          <li>vraie BD address</li>
+          <li>vrais voisins BD addresses</li>
+        </ul>
+      </div>
+      <div class="stat-row" style="margin-bottom: 0;">
+        <div class="stat-box blue">
+          <span class="stat-label">Hello packet size</span>
+          <span class="stat-value" style="font-size: 1.1rem;">73 B</span>
+          <span class="stat-context">ex. 1 voisin (<code>hello.py</code>)</span>
+        </div>
+        <div class="stat-box green">
+          <span class="stat-label">Intervalle</span>
+          <span class="stat-value" style="font-size: 1.1rem;">5 s</span>
+          <span class="stat-context"><code>hello_interval_s</code></span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Ce que chaque nœud voit</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Profil</th><th>Voit</th><th>Peut</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Relais CDS non-membre</strong></td>
+            <td class="cell-neutral">A77F ↔ B3C2 ↔ F91A</td>
+            <td class="cell-good">construire CDS ✅<br><span class="cell-good">ne voit pas qui est qui ✅</span></td>
+          </tr>
+          <tr>
+            <td><strong>Membre du groupe</strong></td>
+            <td class="cell-good">anon_ids + vraies BD addresses</td>
+            <td class="cell-good">CDS + identifier les membres ✅</td>
+          </tr>
+          <tr>
+            <td><strong>Attaquant extérieur</strong></td>
+            <td class="cell-bad">paquets chiffrés opaques</td>
+            <td class="cell-good">rien ✅</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="verdict" style="margin-top: 1rem;">
+    <div class="verdict-label">Synthèse</div>
+    La topologie reste opaque pour les non-membres.
+    Les relais CDS font leur travail sans connaître
+    l'identité des nœuds qu'ils servent.
+  </div>
+</div>
+
+<!-- SLIDE 5: RÉSULTATS -->
+<div class="slide" id="s5">
+  <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
+  <h2>Tables de voisinage — Test sur 2 boards</h2>
+
+  <div class="section-label">Sortie console — Rubik Pi</div>
+  <div class="formula-box" style="font-family: var(--sans); font-size: 0.68rem; line-height: 1.65; margin-bottom: 1.25rem;">
+<pre style="margin: 0; white-space: pre; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.66rem; color: var(--text);">Rubik Pi :
+  1-hop: [3761aa5042bc7796, ff9404aaa9898fe4]
+  2-hop: {3761aa5042bc7796: [ff9404aaa9898fe4]}
+  known members (resolved):
+    anon_id=3761aa5042bc7796 bd_addr=9C:B8:B4:9F:2D:75
+    anon_id=ff9404aaa9898fe4 bd_addr=40:D9:5A:8B:69:3F</pre>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Tests de sécurité validés</div>
+      <ul class="box-list">
+        <li class="good">Chiffrement/déchiffrement AES-GCM</li>
+        <li class="good">Rejet intrus (mauvaise clé de groupe)</li>
+        <li class="good">Rejet paquets falsifiés (GCM tag invalide)</li>
+        <li class="good">Rejet routing header modifié (AAD)</li>
+        <li class="good">Anti-replay (même paquet deux fois)</li>
+        <li class="good">Rejet timestamp &gt; ±120s</li>
+        <li class="good">Auto-pairing sans intervention manuelle</li>
+        <li class="good">Hello anonymes entre boards</li>
+        <li class="good">Résolution anon_id → BD address</li>
+      </ul>
+    </div>
+    <div>
+      <div class="section-label">Métriques mesurées</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Métrique</th><th>Valeur</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Overhead fixe paquet</td><td>98 bytes</td></tr>
+          <tr><td>Payload disponible</td><td class="cell-good">923 bytes</td></tr>
+          <tr><td>Hello packet size</td><td>73 bytes</td></tr>
+          <tr><td>Intervalle Hello</td><td>5 secondes</td></tr>
+          <tr><td>Fenêtre anti-replay</td><td>256 seq/nœud</td></tr>
+          <tr><td>Timestamp tolerance</td><td>±120 secondes</td></tr>
+          <tr><td>MTU BT Classic L2CAP</td><td>1021 bytes</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 6: ROADMAP -->
+<div class="slide" id="s6">
+  <div class="slide-num">PROCHAINES ÉTAPES</div>
+  <h2>Phase 1B CDS → Phase 2 BLE</h2>
+
+  <div class="roadmap">
+    <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.1);">
+      <div class="phase-label">Phase 1B — En cours</div>
+      <div class="phase-title">CDS + Forwarding</div>
+      <ul class="phase-items">
+        <li>CDS Greedy algorithm</li>
+        <li>Forwarding plane</li>
+        <li>Test 3 boards multihop</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p2">
+      <div class="phase-label">Phase 2 — Court terme</div>
+      <div class="phase-title">Port BLE GATT</div>
+      <ul class="phase-items">
+        <li>Port BLE GATT (<code>bleak</code>)</li>
+        <li>Dual-role Central + Peripheral</li>
+        <li>Benchmark BT Classic vs BLE</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p3">
+      <div class="phase-label">Phase 3 — Moyen terme</div>
+      <div class="phase-title">BLE L2CAP CoC</div>
+      <ul class="phase-items">
+        <li>BLE L2CAP CoC (contribution originale)</li>
+        <li>Mesures consommation énergie</li>
+        <li>Android Kotlin port</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p4">
+      <div class="phase-label">Phase 4 — Long terme</div>
+      <div class="phase-title">Production</div>
+      <ul class="phase-items">
+        <li>Wi-Fi Direct dans TAL</li>
+        <li>Audit sécurité externe</li>
+        <li>Démo Qualcomm Symposium</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict" style="margin-top: 1.25rem; border-color: var(--yellow); border-left-color: var(--yellow);">
+    <div class="verdict-label" style="color: var(--yellow);">Questions ouvertes</div>
+    <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
+      <li class="warn">❓ CDS avec topologie anonyme : les anon_ids suffisent-ils ?</li>
+      <li class="warn">❓ Jitter window : nécessaire en BT Classic ou seulement BLE ?</li>
+      <li class="warn">❓ Révocation : rotation de clé de groupe ou solution C ?</li>
+      <li class="warn">❓ Mesures énergie : INA219 sur Rubik Pi ?</li>
+    </ul>
+  </div>
+</div>
+
+<!-- NAVIGATION -->
+<div id="nav">
+  <button onclick="goTo(1)" class="active" id="btn1">Titre</button>
+  <button onclick="goTo(2)" id="btn2">Architecture</button>
+  <button onclick="goTo(3)" id="btn3">Transport &amp; Sécu</button>
+  <button onclick="goTo(4)" id="btn4">Hello</button>
+  <button onclick="goTo(5)" id="btn5">Résultats</button>
+  <button onclick="goTo(6)" id="btn6">Roadmap</button>
+  <span id="slide-counter">1 / 6</span>
+</div>
+
+<script>
+  let current = 1;
+  const total = 6;
+  let wheelLock = false;
+
+  function goTo(n) {
+    document.getElementById('s' + current).classList.remove('active');
+    document.getElementById('btn' + current).classList.remove('active');
+    current = n;
+    const slide = document.getElementById('s' + current);
+    slide.classList.add('active');
+    slide.scrollTop = 0;
+    document.getElementById('btn' + current).classList.add('active');
+    document.getElementById('slide-counter').textContent = current + ' / ' + total;
+  }
+
+  function canChangeSlideOnWheel(direction) {
+    const slide = document.querySelector('.slide.active');
+    if (!slide) return true;
+    const atTop = slide.scrollTop <= 0;
+    const atBottom = slide.scrollTop + slide.clientHeight >= slide.scrollHeight - 1;
+    if (direction > 0) return atBottom;
+    return atTop;
+  }
+
+  document.addEventListener('wheel', (e) => {
+    if (wheelLock) return;
+    const direction = Math.sign(e.deltaY);
+    if (direction === 0) return;
+    if (!canChangeSlideOnWheel(direction)) return;
+
+    if (direction > 0 && current < total) {
+      e.preventDefault();
+      wheelLock = true;
+      goTo(current + 1);
+      setTimeout(() => { wheelLock = false; }, 450);
+    } else if (direction < 0 && current > 1) {
+      e.preventDefault();
+      wheelLock = true;
+      goTo(current - 1);
+      setTimeout(() => { wheelLock = false; }, 450);
+    }
+  }, { passive: false });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' && current < total) goTo(current + 1);
+    if (e.key === 'ArrowLeft' && current > 1) goTo(current - 1);
+    if (e.key === 'f' || e.key === 'F') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+</script>
+</body>
+</html>
