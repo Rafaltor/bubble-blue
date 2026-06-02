@@ -48,12 +48,16 @@ class L2CAPTransport:
         backlog: int = 10,
         interface: str = "hci0",
         quiet: bool = False,
+        allowed_peers: frozenset[str] | None = None,
     ) -> None:
         self._cfg = load_config(interface=interface)
         self._node = self._cfg.node_name
         self._psm = int(self._cfg.psm)
         self._backlog = backlog
         self._quiet = quiet
+        self._allowed_peers = (
+            frozenset(a.upper() for a in allowed_peers) if allowed_peers is not None else None
+        )
 
         self.on_receive: Callable[[str, bytes], None] = on_receive or (lambda _a, _d: None)
 
@@ -63,6 +67,11 @@ class L2CAPTransport:
         self._server_sock: socket.socket | None = None
         self._server_thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
+
+    def _peer_allowed(self, bd_addr: str) -> bool:
+        if self._allowed_peers is None:
+            return True
+        return bd_addr.upper() in self._allowed_peers
 
     def start(self) -> None:
         with self._lock:
@@ -85,6 +94,9 @@ class L2CAPTransport:
             f"L2CAP listen src={self._cfg.local_bd_addr} psm=0x{self._psm:04X} backlog={self._backlog}",
             quiet=self._quiet,
         )
+        if self._allowed_peers is not None:
+            peers = ", ".join(sorted(self._allowed_peers))
+            _tlog_always(self._node, f"L2CAP topology allowlist ({len(self._allowed_peers)}): {peers}")
 
     def stop(self) -> None:
         self._stop_evt.set()
@@ -108,6 +120,12 @@ class L2CAPTransport:
 
     def connect(self, bd_addr: str) -> None:
         bd_addr = bd_addr.upper()
+        if not self._peer_allowed(bd_addr):
+            _tlog_always(
+                self._node,
+                f"L2CAP connect rejected (not in topology) peer={bd_addr}",
+            )
+            return
 
         with self._lock:
             existing = self._conns.get(bd_addr)
@@ -174,6 +192,17 @@ class L2CAPTransport:
 
             # BlueZ returns (bdaddr, psm) for L2CAP stream accept()
             peer_bd_addr = str(client_info[0]).upper() if client_info else "UNKNOWN"
+
+            if not self._peer_allowed(peer_bd_addr):
+                _tlog_always(
+                    self._node,
+                    f"L2CAP accept rejected (not in topology) peer={peer_bd_addr}",
+                )
+                try:
+                    client_sock.close()
+                except OSError:
+                    pass
+                continue
 
             with self._lock:
                 old = self._conns.get(peer_bd_addr)

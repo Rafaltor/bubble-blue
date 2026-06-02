@@ -12,6 +12,16 @@ from src.transport.discovery import discover_devices
 from src.transport.l2cap import L2CAPTransport
 
 
+def parse_topology(raw: str | None) -> frozenset[str] | None:
+    """Parse comma-separated BD addresses from --topology."""
+    if not raw:
+        return None
+    addrs = {part.strip().upper() for part in raw.split(",") if part.strip()}
+    if not addrs:
+        return None
+    return frozenset(addrs)
+
+
 def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
     """
     Register a BlueZ pairing agent via bluetoothctl at node startup.
@@ -57,16 +67,23 @@ def _run_with_transport(
     cfg,
     *,
     peer: str | None,
+    topology: frozenset[str] | None,
     message: str | None,
     interval: float,
 ) -> int:
     hello_mgr.start()
 
-    if peer:
+    connect_targets: list[str] = []
+    if topology:
+        connect_targets = sorted(topology)
+    elif peer:
+        connect_targets = [peer.upper()]
+
+    for bd_addr in connect_targets:
         try:
-            transport.connect(peer.upper())
+            transport.connect(bd_addr)
         except OSError as e:
-            print(f"[APP] connect to {peer} failed: {e}", file=sys.stderr, flush=True)
+            print(f"[APP] connect to {bd_addr} failed: {e}", file=sys.stderr, flush=True)
 
     if not peer:
         print("[APP] listening (Hello + DATA). Ctrl+C to stop.", flush=True)
@@ -165,6 +182,14 @@ def main() -> int:
         default="hci0",
         help="Bluetooth interface for local BD address lookup (default: hci0).",
     )
+    parser.add_argument(
+        "--topology",
+        default=None,
+        help=(
+            "Comma-separated allowlist of peer BD_ADDR for L2CAP "
+            "(incoming and outbound). Example: 40:D9:5A:8B:69:3F,14:B5:CD:E2:49:ED"
+        ),
+    )
     args = parser.parse_args()
 
     _pairing_agent = setup_ble_pairing_agent()
@@ -203,6 +228,17 @@ def main() -> int:
         else:
             return 0
 
+    topology = parse_topology(args.topology)
+    if topology:
+        print(f"[APP] topology allowlist: {', '.join(sorted(topology))}", flush=True)
+    if selected_peer and topology and selected_peer.upper() not in topology:
+        print(
+            f"[APP] --peer {selected_peer} is not in --topology allowlist",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
     cfg = load_config(interface=args.interface, remote_bd_addr=selected_peer)
     print_config(cfg)
 
@@ -235,7 +271,8 @@ def main() -> int:
     transport = L2CAPTransport(
         on_receive=on_receive,
         interface=args.interface,
-        quiet=(selected_peer is None),
+        quiet=(selected_peer is None and topology is None),
+        allowed_peers=topology,
     )
     hello_mgr = HelloManager(cfg, transport)
     transport.start()
@@ -245,6 +282,7 @@ def main() -> int:
         hello_mgr,
         cfg,
         peer=selected_peer,
+        topology=topology,
         message=args.message,
         interval=args.interval,
     )
