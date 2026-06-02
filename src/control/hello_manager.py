@@ -81,11 +81,14 @@ class HelloManager:
             return self._seq
 
     def _l2cap_peer_anon_ids(self) -> frozenset[bytes]:
-        """Map active L2CAP peer BD addresses to anon_ids."""
-        peers: set[bytes] = set()
-        for bd_addr in self._transport.connections():
-            peers.add(compute_anon_id(self._group_key, bd_addr))
-        return frozenset(peers)
+        """
+        Anon_ids for nodes with an active L2CAP socket to this node.
+
+        Only transport.connections() — never Hello-advertised neighbors.
+        """
+        return frozenset(
+            compute_anon_id(self._group_key, bd_addr) for bd_addr in self._transport.connections()
+        )
 
     def _refresh_cds_role(self, *, verbose: bool) -> None:
         self._is_cds = am_i_cds(self.anon_id, self.table, self._l2cap_peer_anon_ids())

@@ -137,6 +137,17 @@ def compute_cds(neighbor_table: NeighborTable) -> set[bytes]:
     return cds
 
 
+def _pair_has_direct_l2cap(u: bytes, v: bytes, l2cap_peers: set[bytes]) -> bool:
+    """
+    True only if u and v have a direct L2CAP link between them.
+
+    Hello neighbor lists must never imply u↔v connectivity. Co-presence in
+    l2cap_peers means each talks to us, not necessarily to each other.
+    """
+    _ = l2cap_peers  # peers are only nodes with sockets to this node
+    return u == v
+
+
 def am_i_cds(
     local_anon_id: bytes,
     neighbor_table: NeighborTable,
@@ -145,9 +156,13 @@ def am_i_cds(
     """
     Return True if this node should relay packets (local CDS role).
 
-    RELAY iff among DIRECT L2CAP peers, some pair (u, v) is not mutually listed
-    in each other's Hello 1-hop neighbor advertisements.
+    Direct L2CAP peers are exactly ``l2cap_peers`` (from transport.connections()).
+    Hello advertisements must not add peers or imply links between them.
+
+    RELAY iff some pair (u, v) of distinct direct L2CAP peers lacks a direct u↔v
+    L2CAP connection (never inferred from Hello private/public neighbor lists).
     """
+    _ = neighbor_table  # topology table is not used for local L2CAP adjacency
     local = bytes(local_anon_id)
     peers = {bytes(p) for p in l2cap_peers}
     peers.discard(local)
@@ -155,9 +170,8 @@ def am_i_cds(
     if len(peers) < 2:
         return False
 
-    advertised = _advertised_neighbors(neighbor_table)
     for u, v in itertools.combinations(sorted(peers), 2):
-        if not _mutually_adjacent(u, v, advertised):
+        if not _pair_has_direct_l2cap(u, v, peers):
             return True
     return False
 
@@ -256,5 +270,13 @@ if __name__ == "__main__":
     assert am_i_cds(anon_by_addr[addrs[1]], table, {anon_by_addr[addrs[0]], anon_by_addr[addrs[2]]}) is True
     assert am_i_cds(anon_by_addr[addrs[0]], table, {anon_by_addr[addrs[1]]}) is False
     assert am_i_cds(anon_by_addr[addrs[4]], table, {anon_by_addr[addrs[3]]}) is False
+
+    # Star: Arduino only L2CAP to Rubik2; RubikQ in Rubik2's Hello must not count.
+    rubik_q, rubik2, arduino = addrs[0], addrs[1], addrs[2]
+    aq, a2, aa = anon_by_addr[rubik_q], anon_by_addr[rubik2], anon_by_addr[arduino]
+    assert am_i_cds(aa, table, {a2}) is False
+    assert am_i_cds(a2, table, {aa, aq}) is True
+    # RubikQ not in Arduino's l2cap set — must not affect Arduino role
+    assert am_i_cds(aq, table, {a2}) is False
 
     print("\n✅ All CDS self-tests passed")
