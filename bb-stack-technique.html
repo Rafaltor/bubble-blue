@@ -611,11 +611,11 @@
       </div>
       <div class="meta-item">
         <span class="meta-label">Language</span>
-        <span class="meta-value">Python 3 + asyncio</span>
+        <span class="meta-value">Python 3 + threading</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">Status</span>
-        <span class="meta-value">Phase 1A ✅ Phase 1B Hello + CDS ✅</span>
+        <span class="meta-value">Phase 1A ✅ Phase 1B complète ✅ (3 boards)</span>
       </div>
     </div>
   </div>
@@ -631,13 +631,15 @@
       <div class="section-label">Arborescence repo</div>
       <div class="formula-box" style="line-height: 1.75; font-size: 0.72rem;">
         <code>bubble-blue/</code><br>
-        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— entrypoint</span><br>
+        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— CLI + <code>--chat</code></span><br>
         ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env secrets</span><br>
+        ├── <code>tests/</code> <span style="color: var(--text-muted);">— phase1a, forwarder, bb_api</span><br>
         └── <code>src/</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>bb_api.py</code> (<code>BBNode</code>)<br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code>, <code>discovery.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → <code>cds.py</code>
+        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → <code>cds.py</code>, <code>forwarder.py</code>
       </div>
     </div>
     <div>
@@ -645,15 +647,15 @@
       <div class="arch-stack seq pipeline">
         <div class="arch-layer highlight">
           <span class="arch-layer-name">Application</span>
-          <span class="arch-layer-tech"><code>bb_node.py</code></span>
+          <span class="arch-layer-tech"><code>bb_node.py</code> · <code>BBNode</code> (<code>bb_api.py</code>)</span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">Forwarding</span>
+          <span class="arch-layer-tech"><code>forwarder.py</code> + <code>cds.py</code> (<code>am_i_cds</code>)</span>
         </div>
         <div class="arch-layer">
           <span class="arch-layer-name">Control</span>
           <span class="arch-layer-tech"><code>hello_manager.py</code> → <code>hello.py</code> → <code>neighbors.py</code></span>
-        </div>
-        <div class="arch-layer highlight">
-          <span class="arch-layer-name">Forwarding (CDS)</span>
-          <span class="arch-layer-tech"><code>cds.py</code> — <code>compute_cds</code>, <code>am_i_cds</code></span>
         </div>
         <div class="arch-layer">
           <span class="arch-layer-name">Security</span>
@@ -683,8 +685,9 @@
     <div class="compare-box winner plain" style="border-color: var(--green);">
       <div class="box-title" style="font-size: 0.85rem;"><code>PKT_DATA</code></div>
       <ul class="box-list">
-        <li class="good">→ couche <code>crypto</code> (déchiffrement + anti-replay)</li>
-        <li class="good">→ application (<code>bb_node.py</code>)</li>
+        <li class="good">→ <code>PacketForwarder</code> (RELAY : forward brut · LEAF : livrer)</li>
+        <li class="good">→ <code>crypto</code> si destinataire (AAD sans TTL)</li>
+        <li class="good">→ <code>bb_node</code> / callback <code>on_message</code></li>
       </ul>
     </div>
   </div>
@@ -702,7 +705,7 @@
         <li><strong>Symétrique</strong> : chaque nœud = server + client</li>
         <li><strong>Multi-connexions</strong> threadées (<code>l2cap.py</code>)</li>
         <li><strong>Auto-pairing</strong> via <code>bluetoothctl</code> agent <code>NoInputNoOutput</code></li>
-        <li><strong>Auto-reconnexion</strong> sur déconnexion</li>
+        <li><strong>Allowlist</strong> <code>--topology</code> (connexions entrantes/sortantes filtrées)</li>
       </ul>
       <div class="stat-row" style="margin-bottom: 0;">
         <div class="stat-box blue">
@@ -731,6 +734,7 @@
           <tr><td>GCM Tag</td><td>16 B</td><td class="cell-good">Intégrité + auth</td></tr>
           <tr style="background: rgba(0, 82, 204, 0.06);"><td><strong>Overhead fixe</strong></td><td><strong>98 B</strong></td><td>26 + 60 + 12</td></tr>
           <tr style="background: rgba(30, 126, 52, 0.08);"><td><strong>Payload dispo</strong></td><td class="cell-good"><strong>923 B</strong></td><td>MTU 1021 − 98</td></tr>
+          <tr><td>AAD multihop</td><td colspan="2" class="cell-good"><code>routing_header_aad()</code> — TTL forcé à 0 (relai sans casser GCM)</td></tr>
         </tbody>
       </table>
     </div>
@@ -741,7 +745,7 @@
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 1.5rem; margin-top: 0.35rem;">
       <li class="good">Forward secrecy — session key par paquet</li>
       <li class="good">Authentification — GCM tag</li>
-      <li class="good">Anti-replay — fenêtre glissante 256 + timestamp ±120s</li>
+      <li class="good">Timestamp ±120s (runtime) · replay bitmap 256 (module, intégration à venir)</li>
       <li class="good">Confidentialité des relais — chiffré avant forwarding</li>
       <li class="good" style="grid-column: 1 / -1;">Révocation — exclusion du groupe (rotation clé)</li>
     </ul>
@@ -906,8 +910,8 @@
       <div class="section-label">Intégration runtime</div>
       <ul class="box-list">
         <li><code>HelloManager._l2cap_peer_anon_ids()</code> — jamais les voisins appris par Hello seuls</li>
-        <li><code>_known_neighbor_bd_addrs()</code> — annonce uniquement les BD L2CAP actives</li>
-        <li>Prochaine étape : <strong>forwarding plane</strong> (relayer <code>PKT_DATA</code> si RELAY)</li>
+        <li><code>PacketForwarder</code> — <code>is_relay()</code> via <code>HelloManager.is_relay</code></li>
+        <li class="good"><strong>Hardware 3 boards</strong> (linéaire) : Arduino=<strong>RELAY</strong>, RubikQ+Rubik2=<strong>LEAF</strong></li>
       </ul>
     </div>
   </div>
@@ -919,34 +923,73 @@
   </div>
 </div>
 
-<!-- SLIDE 6: RÉSULTATS -->
+<!-- SLIDE 6: FORWARDING -->
 <div class="slide" id="s6">
-  <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
-  <h2>Tables de voisinage — Test sur 2 boards</h2>
+  <div class="slide-num">FORWARDING</div>
+  <h2>Forwarding &amp; test non-membre</h2>
 
-  <div class="section-label">Sortie console — Rubik Pi</div>
-  <div class="formula-box" style="font-family: var(--sans); font-size: 0.68rem; line-height: 1.65; margin-bottom: 1.25rem;">
-<pre style="margin: 0; white-space: pre; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.66rem; color: var(--text);">Rubik Pi :
-  1-hop: [3761aa5042bc7796, ff9404aaa9898fe4]
-  2-hop: {3761aa5042bc7796: [ff9404aaa9898fe4]}
-  known members (resolved):
-    anon_id=3761aa5042bc7796 bd_addr=9C:B8:B4:9F:2D:75
-    anon_id=ff9404aaa9898fe4 bd_addr=40:D9:5A:8B:69:3F</pre>
+  <div class="two-col">
+    <div>
+      <div class="section-label">Forwarding multihop (<code>forwarder.py</code>)</div>
+      <ul class="box-list" style="margin-bottom: 1rem;">
+        <li><strong>RELAY</strong> → forward des octets chiffrés bruts vers tous les peers sauf ingress</li>
+        <li><strong>LEAF</strong> → déchiffre et livre uniquement si <code>dst</code> = local ou broadcast</li>
+        <li>Déduplication <code>(src, seq)</code> — cache en mémoire</li>
+        <li>TTL décrémenté à chaque saut (AAD GCM sans TTL)</li>
+      </ul>
+      <div class="compare-box plain" style="border-color: var(--green);">
+        <div class="box-title" style="font-size: 0.8rem; color: var(--green);">Test hardware — 3 boards (topologie linéaire)</div>
+        <ul class="box-list">
+          <li class="good"><strong>RubikQ</strong> → envoie <code>PKT_DATA</code></li>
+          <li class="good"><strong>Arduino (RELAY)</strong> → forward</li>
+          <li class="good"><strong>Rubik2</strong> → reçoit et déchiffre ✅</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Test non-membre (Arduino hors groupe)</div>
+      <ul class="box-list" style="margin-bottom: 1rem;">
+        <li>Arduino : <strong>mauvaise clé de groupe</strong> → <code>InvalidTag</code> au déchiffrement</li>
+        <li class="good">Relais quand même les paquets chiffrés en <strong>RELAY</strong> ✅</li>
+        <li class="good">RubikQ ↔ Rubik2 : messages sécurisés, contenu illisible sur Arduino ✅</li>
+        <li>Arduino ne voit que des <strong>octets chiffrés opaques</strong></li>
+      </ul>
+      <div class="verdict" style="margin-top: 0;">
+        <div class="verdict-label">Verdict</div>
+        Un relais CDS non-membre transporte les paquets
+        sans jamais accéder au contenu — confidentialité
+        des relais validée expérimentalement.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: RÉSULTATS -->
+<div class="slide" id="s7">
+  <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
+  <h2>Validation hardware — 2 et 3 boards</h2>
+
+  <div class="section-label">Sortie console — Rubik Pi (2 boards)</div>
+  <div class="formula-box" style="margin-bottom: 1rem;">
+<pre style="margin: 0; white-space: pre; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.66rem; color: var(--text);">CDS role: LEAF
+1-hop: [3761aa5042bc7796, ff9404aaa9898fe4]
+2-hop: {3761aa5042bc7796: [ff9404aaa9898fe4]}
+known members (resolved):
+  anon_id=3761aa5042bc7796 bd_addr=9C:B8:B4:9F:2D:75
+  anon_id=ff9404aaa9898fe4 bd_addr=40:D9:5A:8B:69:3F</pre>
   </div>
 
   <div class="two-col">
     <div>
-      <div class="section-label">Tests de sécurité validés</div>
+      <div class="section-label">Tests validés (hardware + unitaires)</div>
       <ul class="box-list">
-        <li class="good">Chiffrement/déchiffrement AES-GCM</li>
-        <li class="good">Rejet intrus (mauvaise clé de groupe)</li>
-        <li class="good">Rejet paquets falsifiés (GCM tag invalide)</li>
-        <li class="good">Rejet routing header modifié (AAD)</li>
-        <li class="good">Anti-replay (même paquet deux fois)</li>
-        <li class="good">Rejet timestamp &gt; ±120s</li>
-        <li class="good">Auto-pairing sans intervention manuelle</li>
-        <li class="good">Hello anonymes entre boards</li>
-        <li class="good">Résolution anon_id → BD address</li>
+        <li class="good">CDS linéaire 3 boards : <strong>Arduino=RELAY</strong>, RubikQ+Rubik2=<strong>LEAF</strong></li>
+        <li class="good">Forwarding multihop : RubikQ → Arduino → Rubik2 ✅</li>
+        <li class="good">Relais non-membre : forward sans lecture du contenu ✅</li>
+        <li class="good">Chat mode (<code>--chat</code> / <code>BBNode</code>) : groupe 3 boards ✅</li>
+        <li class="good">Chiffrement AES-GCM · rejet intrus · GCM tag · AAD</li>
+        <li class="good">Hello anonymes · résolution anon_id → BD</li>
+        <li class="good">Auto-pairing · timestamp ±120s</li>
       </ul>
     </div>
     <div>
@@ -958,6 +1001,7 @@
         <tbody>
           <tr><td>Overhead fixe paquet</td><td>98 bytes</td></tr>
           <tr><td>Payload disponible</td><td class="cell-good">923 bytes</td></tr>
+          <tr><td>Taille message chat (typ.)</td><td class="cell-good">~144 bytes total</td></tr>
           <tr><td>Hello packet size</td><td>73 bytes</td></tr>
           <tr><td>Intervalle Hello</td><td>5 secondes</td></tr>
           <tr><td>Fenêtre anti-replay</td><td>256 seq/nœud</td></tr>
@@ -969,46 +1013,52 @@
   </div>
 </div>
 
-<!-- SLIDE 7: ROADMAP -->
-<div class="slide" id="s7">
+<!-- SLIDE 8: ROADMAP -->
+<div class="slide" id="s8">
   <div class="slide-num">PROCHAINES ÉTAPES</div>
-  <h2>Forwarding → Phase 2 BLE</h2>
+  <h2>Phase 1B terminée → BLE &amp; mesures</h2>
 
-  <div class="roadmap">
-    <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.1);">
-      <div class="phase-label">Phase 1B — En cours</div>
-      <div class="phase-title">Forwarding multihop</div>
+  <div class="roadmap" style="grid-template-columns: repeat(5, 1fr);">
+    <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.12);">
+      <div class="phase-label" style="color: var(--green);">Phase 1B — ✅</div>
+      <div class="phase-title">Stack BT Classic</div>
       <ul class="phase-items">
-        <li class="good">CDS Greedy + <code>am_i_cds</code> ✅</li>
-        <li>Forwarding plane (<code>PKT_DATA</code> relay)</li>
-        <li>Test 3 boards multihop</li>
+        <li class="good">CDS + <code>am_i_cds</code></li>
+        <li class="good"><code>PacketForwarder</code></li>
+        <li class="good"><code>BBNode</code> + <code>--chat</code></li>
+        <li class="good">Test 3 boards multihop</li>
       </ul>
     </div>
     <div class="roadmap-item p2">
-      <div class="phase-label">Phase 2 — Court terme</div>
-      <div class="phase-title">Port BLE GATT</div>
+      <div class="phase-label">Phase 2</div>
+      <div class="phase-title">BLE GATT</div>
       <ul class="phase-items">
-        <li>Port BLE GATT (<code>bleak</code>)</li>
+        <li>Port <code>bleak</code></li>
         <li>Dual-role Central + Peripheral</li>
         <li>Benchmark BT Classic vs BLE</li>
       </ul>
     </div>
     <div class="roadmap-item p3">
-      <div class="phase-label">Phase 3 — Moyen terme</div>
+      <div class="phase-label">Phase 3</div>
       <div class="phase-title">BLE L2CAP CoC</div>
       <ul class="phase-items">
-        <li>BLE L2CAP CoC (contribution originale)</li>
-        <li>Mesures consommation énergie</li>
-        <li>Android Kotlin port</li>
+        <li>Contribution originale</li>
+        <li>Aucun projet mesh existant</li>
       </ul>
     </div>
     <div class="roadmap-item p4">
-      <div class="phase-label">Phase 4 — Long terme</div>
-      <div class="phase-title">Production</div>
+      <div class="phase-label">Phase 4</div>
+      <div class="phase-title">Énergie</div>
       <ul class="phase-items">
-        <li>Wi-Fi Direct dans TAL</li>
-        <li>Audit sécurité externe</li>
-        <li>Démo Qualcomm Symposium</li>
+        <li>INA219 sur Rubik Pi</li>
+        <li>CDS vs flooding</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p4">
+      <div class="phase-label">Phase 5</div>
+      <div class="phase-title">Android</div>
+      <ul class="phase-items">
+        <li>Kotlin <code>createL2capChannel()</code></li>
       </ul>
     </div>
   </div>
@@ -1016,10 +1066,10 @@
   <div class="verdict" style="margin-top: 1.25rem; border-color: var(--yellow); border-left-color: var(--yellow);">
     <div class="verdict-label" style="color: var(--yellow);">Questions ouvertes</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
-      <li class="good">✅ CDS anonyme : <code>anon_ids</code> + Hello mutuel suffisent pour l'élection locale</li>
-      <li class="warn">❓ Jitter window : nécessaire en BT Classic ou seulement BLE ?</li>
-      <li class="warn">❓ Révocation : rotation de clé de groupe ou solution C ?</li>
-      <li class="warn">❓ Mesures énergie : INA219 sur Rubik Pi ?</li>
+      <li class="good">✅ CDS anonyme · forwarding multihop · relais non-membre</li>
+      <li class="warn">❓ Jitter window : BT Classic ou BLE seulement ?</li>
+      <li class="warn">❓ Révocation : rotation clé ou solution C ?</li>
+      <li class="warn">❓ Intégrer replay bitmap 256 dans <code>PacketForwarder</code></li>
     </ul>
   </div>
 </div>
@@ -1031,14 +1081,15 @@
   <button onclick="goTo(3)" id="btn3">Transport &amp; Sécu</button>
   <button onclick="goTo(4)" id="btn4">Hello</button>
   <button onclick="goTo(5)" id="btn5">CDS</button>
-  <button onclick="goTo(6)" id="btn6">Résultats</button>
-  <button onclick="goTo(7)" id="btn7">Roadmap</button>
-  <span id="slide-counter">1 / 7</span>
+  <button onclick="goTo(6)" id="btn6">Forwarding</button>
+  <button onclick="goTo(7)" id="btn7">Résultats</button>
+  <button onclick="goTo(8)" id="btn8">Roadmap</button>
+  <span id="slide-counter">1 / 8</span>
 </div>
 
 <script>
   let current = 1;
-  const total = 7;
+  const total = 8;
   let wheelLock = false;
 
   function goTo(n) {

@@ -38,11 +38,13 @@ class PacketForwarder:
         *,
         topology: frozenset[str] | None = None,
         on_message: OnMessageCallback | None = None,
+        quiet: bool = False,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._hello_mgr = hello_mgr
         self._topology = frozenset(topology) if topology else None
+        self._quiet = quiet
         self._on_message = on_message or _default_on_message
         self._forwarded: set[tuple[str, int]] = set()
         self._fwd_lock = threading.RLock()
@@ -132,7 +134,8 @@ class PacketForwarder:
                 self._deliver(src, data)
 
         except Exception as e:  # noqa: BLE001
-            print(f"[FWD] error from={ingress}: {e}", flush=True)
+            if not self._quiet:
+                print(f"[FWD] error from={ingress}: {e}", flush=True)
 
     def _relay_packet(
         self,
@@ -158,9 +161,11 @@ class PacketForwarder:
                     for peer in self._peer_targets(exclude=ingress):
                         try:
                             self._transport.send(peer, out)
-                            print(f"[FWD] relay → {peer} seq={seq} ttl={new_ttl}", flush=True)
+                            if not self._quiet:
+                                print(f"[FWD] relay → {peer} seq={seq} ttl={new_ttl}", flush=True)
                         except OSError as e:
-                            print(f"[FWD] relay failed {peer}: {e}", flush=True)
+                            if not self._quiet:
+                                print(f"[FWD] relay failed {peer}: {e}", flush=True)
 
         if dst == local or dst == BROADCAST_BD_ADDR:
             self._deliver(src, data)
@@ -176,7 +181,8 @@ class PacketForwarder:
                 routing_header_aad(parsed["routing_header"]),
             )
         except InvalidTag:
-            print(f"[FWD] decrypt failed from={src} (check group key)", flush=True)
+            if not self._quiet:
+                print(f"[FWD] decrypt failed from={src} (check group key)", flush=True)
             return
 
         try:
@@ -207,4 +213,4 @@ def _packet_with_ttl(data: bytes, new_ttl: int) -> bytes:
 
 
 def _default_on_message(sender_bd_addr: str, text: str) -> None:
-    print(f"[{sender_bd_addr}] {text}", flush=True)
+    print(f"[{sender_bd_addr}] {text}", flush=True)  # noqa: T201

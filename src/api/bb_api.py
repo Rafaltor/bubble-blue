@@ -4,6 +4,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
+from src.api.chat_log import ChatLog
 from src.control.hello_manager import HelloManager
 from src.forwarding.forwarder import PacketForwarder
 from src.transport.l2cap import L2CAPTransport
@@ -38,11 +39,13 @@ class BBNode:
         interface: str = "hci0",
         remote_bd_addr: str | None = None,
         quiet: bool = True,
+        chat_mode: bool = False,
         setup_pairing_agent: bool = True,
     ) -> None:
         self._interface = interface
         self._remote_bd_addr = remote_bd_addr
-        self._quiet = quiet
+        self._quiet = quiet or chat_mode
+        self._chat_mode = chat_mode
         self._topology: frozenset[str] | None = None
         self._pairing_proc: subprocess.Popen[str] | None = None
 
@@ -81,7 +84,10 @@ class BBNode:
                         try:
                             hm.on_receive(peer_bd_addr, data)
                         except Exception as e:  # noqa: BLE001
-                            print(f"[BB] Hello rx error from={peer_bd_addr}: {e}", flush=True)
+                            if self._chat_mode:
+                                ChatLog.emit(f"[BB] Hello error: {e}", err=True)
+                            elif not self._quiet:
+                                print(f"[BB] Hello rx error from={peer_bd_addr}: {e}", flush=True)
                     return
                 if pkt_type == PKT_DATA and fwd is not None:
                     fwd.handle(peer_bd_addr, data)
@@ -92,13 +98,14 @@ class BBNode:
                 quiet=self._quiet,
                 allowed_peers=self._topology,
             )
-            hello_mgr = HelloManager(self._cfg, transport)
+            hello_mgr = HelloManager(self._cfg, transport, quiet=self._quiet)
             forwarder = PacketForwarder(
                 self._cfg,
                 transport,
                 hello_mgr,
                 topology=self._topology,
                 on_message=self._on_chat_message,
+                quiet=self._quiet,
             )
             hello_holder[0] = hello_mgr
             forwarder_holder[0] = forwarder
@@ -177,14 +184,20 @@ class BBNode:
             try:
                 self._transport.connect(bd_addr)
             except OSError as e:
-                print(f"[BB] connect to {bd_addr} failed: {e}", flush=True)
+                if self._chat_mode:
+                    ChatLog.emit(f"[BB] connect {bd_addr} failed: {e}", err=True)
+                elif not self._quiet:
+                    print(f"[BB] connect to {bd_addr} failed: {e}", flush=True)
 
     def _on_chat_message(self, sender_bd_addr: str, text: str) -> None:
         cb = self.on_message
         if cb is not None:
             cb(sender_bd_addr, text)
             return
-        print(f"[{sender_bd_addr}] {text}", flush=True)
+        if self._chat_mode:
+            ChatLog.emit(f"[{sender_bd_addr}] {text}", force=True)
+        else:
+            print(f"[{sender_bd_addr}] {text}", flush=True)
 
     @staticmethod
     def _setup_ble_pairing_agent() -> subprocess.Popen[str] | None:

@@ -8,6 +8,8 @@ import time
 
 from config import PKT_DATA, PKT_HELLO, load_config, print_config
 from src.api.bb_api import BBNode
+from src.api.chat_input import read_chat_line
+from src.api.chat_log import ChatLog
 from src.control.hello_manager import HelloManager
 from src.forwarding.forwarder import PacketForwarder
 from src.transport.discovery import discover_devices
@@ -24,7 +26,7 @@ def parse_topology(raw: str | None) -> frozenset[str] | None:
     return frozenset(addrs)
 
 
-def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
+def setup_ble_pairing_agent(*, quiet: bool = False) -> subprocess.Popen[str] | None:
     """
     Register a BlueZ pairing agent via bluetoothctl at node startup.
 
@@ -41,7 +43,8 @@ def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
             text=True,
         )
     except FileNotFoundError:
-        print("[APP] WARNING: bluetoothctl not found; skipping pairing agent setup", flush=True)
+        if not quiet:
+            print("[APP] WARNING: bluetoothctl not found; skipping pairing agent setup", flush=True)
         return None
 
     # NoInputNoOutput: auto-accept pairing without user prompts.
@@ -56,10 +59,11 @@ def setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
     proc.stdin.write(cmds)
     proc.stdin.flush()
 
-    print(
-        "[APP] BLE pairing agent: NoInputNoOutput (auto-accept), discoverable+pairable",
-        flush=True,
-    )
+    if not quiet:
+        print(
+            "[APP] BLE pairing agent: NoInputNoOutput (auto-accept), discoverable+pairable",
+            flush=True,
+        )
     return proc
 
 
@@ -180,37 +184,37 @@ def _run_with_transport(
 
 
 def run_chat_mode(*, topology: frozenset[str] | None, interface: str) -> int:
-    """Interactive chat using BBNode API."""
-    node = BBNode(interface=interface, quiet=False, setup_pairing_agent=False)
+    """Interactive chat using BBNode API (minimal logs, pause while typing)."""
+    node = BBNode(interface=interface, quiet=True, chat_mode=True, setup_pairing_agent=False)
 
     def on_message(sender_bd_addr: str, text: str) -> None:
-        print(f"[{sender_bd_addr}] {text}", flush=True)
+        ChatLog.emit(f"[{sender_bd_addr}] {text}", force=True)
 
     node.on_message = on_message
 
     try:
         node.start(topology)
-        for _ in range(6):
+        for _ in range(8):
             time.sleep(1.0)
-            if len(node.peers()) >= 1:
+            if node.peers():
                 break
         role = "RELAY" if node.is_relay() else "LEAF"
-        print(f"[chat] local={node.local_bd_addr} CDS role={role}", flush=True)
-        if topology:
-            print(f"[chat] topology: {', '.join(sorted(topology))}", flush=True)
-        print(f"[chat] peers: {', '.join(node.peers()) or '(none yet)'}", flush=True)
-        print("[chat] type a message and press Enter. Ctrl+C to quit.", flush=True)
+        n_peers = len(node.peers())
+        ChatLog.emit(f"chat ready · {role} · {n_peers} peer(s) · Ctrl+C quit", force=True)
 
-        for line in sys.stdin:
-            line = line.rstrip("\n")
+        while True:
+            try:
+                line = read_chat_line("> ")
+            except KeyboardInterrupt:
+                break
             if not line:
                 continue
             try:
                 node.send(line)
             except (OSError, RuntimeError) as e:
-                print(f"[chat] send failed: {e}", file=sys.stderr, flush=True)
+                ChatLog.emit(f"send failed: {e}", err=True)
     except KeyboardInterrupt:
-        print("\n[chat] exiting.", flush=True)
+        ChatLog.emit("bye", force=True)
     finally:
         node.stop()
     return 0
@@ -280,7 +284,7 @@ def main() -> int:
         if args.scan and args.scan > 0:
             print("[APP] --chat cannot be combined with --scan", file=sys.stderr, flush=True)
             return 2
-        _pairing_agent = setup_ble_pairing_agent()
+        setup_ble_pairing_agent(quiet=True)
         return run_chat_mode(topology=topology, interface=args.interface)
 
     _pairing_agent = setup_ble_pairing_agent()
@@ -361,14 +365,15 @@ def main() -> int:
             text = repr(data)
         print(f"[APP] rx from={peer_bd_addr} bytes={len(data)} text={text}", flush=True)
 
+    l2cap_quiet = selected_peer is None and topology is None
     transport = L2CAPTransport(
         on_receive=on_receive,
         interface=args.interface,
-        quiet=(selected_peer is None and topology is None),
+        quiet=l2cap_quiet,
         allowed_peers=topology,
     )
-    hello_mgr = HelloManager(cfg, transport)
-    forwarder = PacketForwarder(cfg, transport, hello_mgr, topology=topology)
+    hello_mgr = HelloManager(cfg, transport, quiet=l2cap_quiet)
+    forwarder = PacketForwarder(cfg, transport, hello_mgr, topology=topology, quiet=l2cap_quiet)
     transport.start()
 
     return _run_with_transport(

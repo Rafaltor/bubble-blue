@@ -26,9 +26,10 @@ class HelloManager:
     - Prints 1-hop / 2-hop tables every hello_interval_s
     """
 
-    def __init__(self, cfg: BubbleBlueConfig, transport: L2CAPTransport) -> None:
+    def __init__(self, cfg: BubbleBlueConfig, transport: L2CAPTransport, *, quiet: bool = False) -> None:
         self._cfg = cfg
         self._transport = transport
+        self._quiet = quiet
         self._group_key = cfg.group_key
         self._local_bd = cfg.local_bd_addr.upper()
         self._interval_s = max(1, int(cfg.hello_interval_s))
@@ -55,10 +56,11 @@ class HelloManager:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="bb-hello-mgr", daemon=True)
         self._thread.start()
-        print(
-            f"[APP] HelloManager started (anon_id={self.anon_id.hex()}, interval={self._interval_s}s)",
-            flush=True,
-        )
+        if not self._quiet:
+            print(
+                f"[APP] HelloManager started (anon_id={self.anon_id.hex()}, interval={self._interval_s}s)",
+                flush=True,
+            )
 
     def stop(self) -> None:
         self._stop.set()
@@ -79,7 +81,7 @@ class HelloManager:
         priv = parse_hello_private(data, self._group_key)
         self.table.update_from_hello(pub, priv)
         # CDS uses transport.connections() only; table update must not change l2cap_peers.
-        self.refresh_cds_role(verbose=True)
+        self.refresh_cds_role(verbose=not self._quiet)
 
     def get_resolved_members(self) -> list[dict[str, Any]]:
         """Group members with resolved anon_id → BD address mappings."""
@@ -133,9 +135,12 @@ class HelloManager:
             try:
                 self._transport.send(peer, pkt)
             except OSError as e:
-                print(f"[APP] Hello send failed peer={peer}: {e}", flush=True)
+                if not self._quiet:
+                    print(f"[APP] Hello send failed peer={peer}: {e}", flush=True)
 
     def print_neighbor_tables(self) -> None:
+        if self._quiet:
+            return
         """Print 1-hop / 2-hop / known member BD addresses."""
         one_hop = self.table.get_1hop()
         two_hop = self.table.get_2hop()
@@ -164,6 +169,7 @@ class HelloManager:
             self.table.expire(self._timeout_ms)
             self.refresh_cds_role(verbose=False)
             self._send_hellos()
-            self.print_neighbor_tables()
+            if not self._quiet:
+                self.print_neighbor_tables()
             if self._stop.wait(self._interval_s):
                 break
