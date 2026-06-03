@@ -196,12 +196,6 @@ def run_chat_mode(*, topology: frozenset[str] | None, interface: str) -> int:
                 break
         role = "RELAY" if node.is_relay() else "LEAF"
         print(f"[chat] local={node.local_bd_addr} CDS role={role}", flush=True)
-        if role == "LEAF" and topology and len(topology) >= 2:
-            print(
-                "[chat] WARN: 2+ peers in topology but LEAF — need L2CAP to 2 neighbors "
-                "and Hello before relay works",
-                flush=True,
-            )
         if topology:
             print(f"[chat] topology: {', '.join(sorted(topology))}", flush=True)
         print(f"[chat] peers: {', '.join(node.peers()) or '(none yet)'}", flush=True)

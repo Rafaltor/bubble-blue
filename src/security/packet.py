@@ -16,6 +16,10 @@ from typing import Any
 #   [8B]  ts_ms    : uint64 big-endian (Unix timestamp milliseconds)
 ROUTING_HEADER_FORMAT = "!B6s6sBLQ"  # big-endian
 ROUTING_HEADER_SIZE = 26
+# TTL is mutable when relays forward; it must not be part of the AES-GCM AAD.
+_ROUTING_HEADER_TTL_OFFSET = 13
+
+BROADCAST_BD_ADDR = "FF:FF:FF:FF:FF:FF"
 
 _ROUTING_HEADER_STRUCT = struct.Struct(ROUTING_HEADER_FORMAT)
 
@@ -79,6 +83,21 @@ def build_routing_header(
 
     # Pack in network order: type | src(6) | dst(6) | ttl | seq (u32) | ts_ms (u64)
     return _ROUTING_HEADER_STRUCT.pack(pkt_type, src_b, dst_b, ttl, seq, int(ts_ms))
+
+
+def routing_header_aad(routing_header: bytes) -> bytes:
+    """
+    AAD for payload AES-GCM: full routing header with TTL zeroed.
+
+    Relays decrement TTL on the wire without breaking decryption at the next hop.
+    """
+    if len(routing_header) < ROUTING_HEADER_SIZE:
+        raise ValueError(
+            f"routing header requires {ROUTING_HEADER_SIZE} bytes (got {len(routing_header)})"
+        )
+    aad = bytearray(routing_header[:ROUTING_HEADER_SIZE])
+    aad[_ROUTING_HEADER_TTL_OFFSET] = 0
+    return bytes(aad)
 
 
 def parse_routing_header(data: bytes) -> dict:
@@ -177,6 +196,7 @@ if __name__ == "__main__":
 
     rh = build_routing_header(0x02, src, dst, ttl=10, seq=42)
     assert len(rh) == ROUTING_HEADER_SIZE
+    assert routing_header_aad(rh)[13] == 0
     parsed: dict[str, Any] = parse_routing_header(rh)
     assert parsed["src"] == src.upper()
     assert parsed["dst"] == dst.upper()

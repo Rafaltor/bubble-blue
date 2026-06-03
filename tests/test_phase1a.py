@@ -19,6 +19,7 @@ from src.security.packet import (  # noqa: E402
     build_routing_header,
     packet_overhead,
     parse_bb_packet,
+    routing_header_aad,
     validate_timestamp,
 )
 from src.security.replay import ReplayFilter  # noqa: E402
@@ -60,10 +61,7 @@ def run_server() -> None:
                 flush=True,
             )
 
-            # c. Use routing_header as AAD
-            aad = rh
-
-            # d. Decrypt payload with group_key
+            aad = routing_header_aad(rh)
             plaintext = decrypt_from_group(
                 group_key,
                 parsed["session_key_enc"],
@@ -132,7 +130,7 @@ def run_client(peer_bd_addr: str) -> None:
     message = f"Hello BB from {cfg.node_name} — Phase 1A test".encode("utf-8")
 
     # 4. Encrypt with encrypt_for_group(cfg.group_key, message, routing_header)
-    result = encrypt_for_group(group_key, message, routing_header)
+    result = encrypt_for_group(group_key, message, routing_header_aad(routing_header))
 
     # 5. Build complete BB packet
     packet = build_bb_packet(
@@ -185,7 +183,7 @@ def run_intruder(peer_bd_addr: str) -> None:
     )
 
     message = "INTRUDER — wrong group key test".encode("utf-8")
-    result = encrypt_for_group(wrong_key, message, routing_header)
+    result = encrypt_for_group(wrong_key, message, routing_header_aad(routing_header))
 
     packet = build_bb_packet(
         routing_header,
@@ -230,7 +228,7 @@ def run_replay(peer_bd_addr: str) -> None:
     )
 
     message = "REPLAY test — same packet sent twice".encode("utf-8")
-    result = encrypt_for_group(group_key, message, routing_header)
+    result = encrypt_for_group(group_key, message, routing_header_aad(routing_header))
 
     packet = build_bb_packet(
         routing_header,

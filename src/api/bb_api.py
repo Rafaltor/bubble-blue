@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import subprocess
 import threading
-import time
 from collections.abc import Callable
 from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
 from src.control.hello_manager import HelloManager
-from src.forwarding.forwarder import BROADCAST_BD_ADDR, PacketForwarder
+from src.forwarding.forwarder import PacketForwarder
 from src.transport.l2cap import L2CAPTransport
 
 OnMessageCallback = Callable[[str, str], None]
@@ -53,9 +52,6 @@ class BBNode:
         self._forwarder: PacketForwarder | None = None
         self._started = False
         self._lock = threading.RLock()
-        self._connect_stop = threading.Event()
-        self._connect_thread: threading.Thread | None = None
-
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
 
@@ -116,18 +112,10 @@ class BBNode:
             self._started = True
 
             if self._topology:
-                self._connect_all_topology_peers()
-                self._connect_stop.clear()
-                self._connect_thread = threading.Thread(
-                    target=self._topology_connect_loop,
-                    name="bb-topology-connect",
-                    daemon=True,
-                )
-                self._connect_thread.start()
+                self._connect_topology_peers()
 
     def stop(self) -> None:
         """Stop Hello manager, L2CAP transport, and pairing agent."""
-        self._connect_stop.set()
         with self._lock:
             if self._hello_mgr is not None:
                 self._hello_mgr.stop()
@@ -179,17 +167,7 @@ class BBNode:
             raise RuntimeError("BBNode not started; call start() first")
         return self._forwarder
 
-    def _l2cap_hop_for(self, dst_bd_addr: str) -> str | None:
-        """Pick L2CAP next hop toward ``dst_bd_addr`` (direct peer or first link)."""
-        dst = dst_bd_addr.upper()
-        connected = self.peers()
-        if dst in connected:
-            return dst
-        if connected:
-            return connected[0]
-        return None
-
-    def _connect_all_topology_peers(self) -> None:
+    def _connect_topology_peers(self) -> None:
         if self._transport is None or not self._topology:
             return
         local = self._require_cfg().local_bd_addr.upper()
@@ -200,14 +178,6 @@ class BBNode:
                 self._transport.connect(bd_addr)
             except OSError as e:
                 print(f"[BB] connect to {bd_addr} failed: {e}", flush=True)
-
-    def _topology_connect_loop(self) -> None:
-        """Keep outbound L2CAP up toward every peer in --topology."""
-        while not self._connect_stop.wait(4.0):
-            try:
-                self._connect_all_topology_peers()
-            except Exception as e:  # noqa: BLE001
-                print(f"[BB] topology connect loop error: {e}", flush=True)
 
     def _on_chat_message(self, sender_bd_addr: str, text: str) -> None:
         cb = self.on_message
