@@ -3,11 +3,9 @@ from __future__ import annotations
 import subprocess
 import threading
 from collections.abc import Callable
-from typing import Any
-
 from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
 from src.control.hello_manager import HelloManager
-from src.forwarding.forwarder import PacketForwarder
+from src.forwarding.forwarder import BROADCAST_BD_ADDR, PacketForwarder
 from src.transport.l2cap import L2CAPTransport
 
 OnMessageCallback = Callable[[str, str], None]
@@ -100,7 +98,7 @@ class BBNode:
                 self._cfg,
                 transport,
                 hello_mgr,
-                on_deliver=self._on_deliver,
+                on_message=self._on_chat_message,
             )
             hello_holder[0] = hello_mgr
             forwarder_holder[0] = forwarder
@@ -140,21 +138,12 @@ class BBNode:
             self._pairing_proc = None
 
     def send(self, text: str) -> None:
-        """
-        Send a chat message as PKT_DATA to reachable group peers.
-
-        Uses connected L2CAP peers as destinations when available; otherwise
-        falls back to configured group members or topology allowlist.
-        """
+        """Send a broadcast PKT_DATA (dst=FF:FF:FF:FF:FF:FF) to the next L2CAP hop."""
         fwd = self._require_forwarder()
-        cfg = self._require_cfg()
-        destinations = self._send_destinations()
-        if not destinations:
-            raise RuntimeError("No send destinations (connect a peer or set group members)")
-
-        for dst in destinations:
-            hop = self._l2cap_hop_for(dst)
-            fwd.send_data(text, dst, l2cap_peer=hop)
+        hop = self._l2cap_hop_for(BROADCAST_BD_ADDR)
+        if hop is None:
+            raise RuntimeError("No L2CAP peers connected; cannot send PKT_DATA")
+        fwd.send_data(text, BROADCAST_BD_ADDR, l2cap_peer=hop)
 
     def peers(self) -> list[str]:
         """Active L2CAP peer BD addresses."""
@@ -186,25 +175,6 @@ class BBNode:
             raise RuntimeError("BBNode not started; call start() first")
         return self._forwarder
 
-    def _send_destinations(self) -> list[str]:
-        cfg = self._require_cfg()
-        local = cfg.local_bd_addr
-        connected = set(self.peers())
-        if connected:
-            return sorted(connected)
-
-        members = [m for m in cfg.group_members if m.upper() != local]
-        if members:
-            return sorted(members)
-
-        if self._topology:
-            return sorted(a for a in self._topology if a.upper() != local)
-
-        remote = cfg.remote_bd_addr
-        if remote not in ("00:00:00:00:00:00", local):
-            return [remote.upper()]
-        return []
-
     def _l2cap_hop_for(self, dst_bd_addr: str) -> str | None:
         """Pick L2CAP next hop toward ``dst_bd_addr`` (direct peer or first link)."""
         dst = dst_bd_addr.upper()
@@ -215,19 +185,12 @@ class BBNode:
             return connected[0]
         return None
 
-    def _on_deliver(self, _ingress_peer: str, plaintext: bytes, hdr: dict[str, Any]) -> None:
-        sender = str(hdr["src"]).upper()
-        try:
-            text = plaintext.decode("utf-8")
-        except UnicodeDecodeError:
-            text = repr(plaintext)
-
+    def _on_chat_message(self, sender_bd_addr: str, text: str) -> None:
         cb = self.on_message
         if cb is not None:
-            cb(sender, text)
+            cb(sender_bd_addr, text)
             return
-
-        print(f"[{sender}] {text}", flush=True)
+        print(f"[{sender_bd_addr}] {text}", flush=True)
 
     @staticmethod
     def _setup_ble_pairing_agent() -> subprocess.Popen[str] | None:

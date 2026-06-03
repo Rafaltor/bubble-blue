@@ -60,10 +60,12 @@ def test_bbnode_lifecycle_and_callback() -> None:
         mock_fwd.send_data.assert_called_once()
         args, kwargs = mock_fwd.send_data.call_args
         assert args[0] == "hi"
-        assert args[1] == "AA:BB:CC:DD:EE:02"
+        from src.forwarding.forwarder import BROADCAST_BD_ADDR  # noqa: E402
 
-        deliver = mock_fwd_cls.call_args.kwargs["on_deliver"]
-        deliver("AA:BB:CC:DD:EE:02", b"hello", {"src": "AA:BB:CC:DD:EE:02", "dst": cfg.local_bd_addr})
+        assert args[1] == BROADCAST_BD_ADDR
+
+        on_msg = mock_fwd_cls.call_args.kwargs["on_message"]
+        on_msg("AA:BB:CC:DD:EE:02", "hello")
         assert messages == [("AA:BB:CC:DD:EE:02", "hello")]
 
         node.stop()
