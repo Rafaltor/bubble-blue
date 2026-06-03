@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 
 from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
@@ -56,6 +58,10 @@ class BBNode:
         self._lock = threading.RLock()
         self._connect_stop = threading.Event()
         self._connect_thread: threading.Thread | None = None
+        self._connect_last_err: dict[str, str] = {}
+        self._connect_last_log: dict[str, float] = {}
+        self._connect_backoff_until: dict[str, float] = {}
+        self._connect_streak: dict[str, int] = {}
 
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
@@ -217,11 +223,47 @@ class BBNode:
     def _connect_peers(self) -> None:
         if self._transport is None:
             return
+        now = time.monotonic()
         for bd in sorted(self._connect_targets()):
+            if bd in self._transport.connections():
+                self._connect_last_err.pop(bd, None)
+                self._connect_backoff_until.pop(bd, None)
+                self._connect_streak.pop(bd, None)
+                continue
+            if now < self._connect_backoff_until.get(bd, 0.0):
+                continue
             try:
                 self._transport.connect(bd)
+                self._connect_last_err.pop(bd, None)
+                self._connect_backoff_until.pop(bd, None)
+                self._connect_streak.pop(bd, None)
             except OSError as e:
-                self._dispatch_log(f"connect {bd} failed: {e}")
+                self._backoff_after_connect_fail(bd, e)
+                self._log_connect_failure(bd, e)
+
+    def _backoff_after_connect_fail(self, bd: str, e: OSError) -> None:
+        if e.errno not in (
+            errno.EHOSTDOWN,
+            errno.ECONNREFUSED,
+            errno.ENETUNREACH,
+            errno.ETIMEDOUT,
+        ):
+            return
+        key = f"{e.errno}"
+        streak = self._connect_streak.get(bd, 0) + 1 if self._connect_last_err.get(bd) == key else 1
+        self._connect_streak[bd] = streak
+        self._connect_backoff_until[bd] = time.monotonic() + min(60.0, 4.0 * streak)
+
+    def _log_connect_failure(self, bd: str, e: OSError) -> None:
+        key = f"{e.errno}"
+        now = time.monotonic()
+        prev = self._connect_last_err.get(bd)
+        last = self._connect_last_log.get(bd, 0.0)
+        self._connect_last_err[bd] = key
+        if prev == key and now - last < 45.0:
+            return
+        self._connect_last_log[bd] = now
+        self._dispatch_log(f"connect {bd} failed: {e}")
 
     def _connect_loop(self) -> None:
         while not self._connect_stop.wait(4.0):
@@ -234,9 +276,11 @@ class BBNode:
         assert self.on_message is not None
         self.on_message(sender, text)
 
-    def _dispatch_log(self, msg: str) -> None:
+    def _dispatch_log(self, msg: str, *, err: bool | None = None) -> None:
         if self.on_log:
-            self.on_log(msg, True)
+            # Chat mode: network retries are not errors (buffer while typing).
+            is_err = err if err is not None else not self._quiet
+            self.on_log(msg, is_err)
 
     @staticmethod
     def _setup_ble_pairing_agent() -> subprocess.Popen[str] | None:

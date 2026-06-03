@@ -75,10 +75,13 @@ def run_chat(
             except KeyboardInterrupt:
                 break
             if line:
+                if not node.peers():
+                    ChatLog.emit("no peer connected — message not sent", force=True, err=True)
+                    continue
                 try:
                     node.send(line)
                 except (OSError, RuntimeError) as e:
-                    ChatLog.emit(str(e), err=True)
+                    ChatLog.emit(str(e), force=True, err=True)
     except KeyboardInterrupt:
         pass
     finally:

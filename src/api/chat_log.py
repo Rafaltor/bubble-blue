@@ -11,18 +11,22 @@ class ChatLog:
 
     _lock = threading.Lock()
     _typing = False
-    _pending: list[str] = []
+    _pending: list[tuple[str, bool]] = []
 
     @classmethod
     def emit(cls, msg: str, *, err: bool = False, force: bool = False) -> None:
-        stream = sys.stderr if err else sys.stdout
         line = msg if msg.endswith("\n") else f"{msg}\n"
         with cls._lock:
             if cls._typing and not force:
-                cls._pending.append(line)
+                cls._pending.append((line, err))
                 return
-            stream.write(line)
-            stream.flush()
+            cls._write(line, err)
+
+    @classmethod
+    def _write(cls, line: str, err: bool) -> None:
+        stream = sys.stderr if err else sys.stdout
+        stream.write(line)
+        stream.flush()
 
     @classmethod
     def set_typing(cls, active: bool) -> None:
@@ -32,10 +36,8 @@ class ChatLog:
                 return
             pending = cls._pending
             cls._pending = []
-        for line in pending:
-            sys.stdout.write(line)
-        if pending:
-            sys.stdout.flush()
+        for line, err in pending:
+            cls._write(line, err)
 
     @classmethod
     def flush_pending(cls) -> None:
