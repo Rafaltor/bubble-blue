@@ -35,20 +35,39 @@ def setup_ble_pairing_agent(*, quiet: bool = False) -> None:
     proc.stdin.flush()
 
 
-def run_chat(topology: frozenset[str] | None, interface: str) -> int:
-    node = BBNode(interface=interface, quiet=True, setup_pairing_agent=False)
+def run_chat(
+    topology: frozenset[str] | None,
+    interface: str,
+    peer: str | None = None,
+) -> int:
+    node = BBNode(
+        interface=interface,
+        remote_bd_addr=peer,
+        quiet=True,
+        setup_pairing_agent=False,
+    )
     node.on_message = lambda s, t: ChatLog.emit(f"[{s}] {t}", force=True)
     node.on_log = lambda m, err: ChatLog.emit(m, err=err)
 
     setup_ble_pairing_agent(quiet=True)
     try:
         node.start(topology)
-        for _ in range(8):
-            time.sleep(1.0)
-            if node.peers():
+        time.sleep(1.0)
+        targets = node.connect_targets()
+        for _ in range(12):
+            if node.peers() or not targets:
                 break
+            time.sleep(1.0)
         role = "RELAY" if node.is_relay() else "LEAF"
-        ChatLog.emit(f"chat ready · {role} · {len(node.peers())} peer(s)", force=True)
+        n = len(node.peers())
+        ChatLog.emit(f"local {node.local_bd_addr} · {role} · {n} peer(s)", force=True)
+        if targets:
+            ChatLog.emit(f"dial: {', '.join(targets)}", force=True)
+        elif n == 0:
+            ChatLog.emit(
+                "no peer — use --topology ADDR or set BUBBLE_BLUE_GROUP_MEMBERS in .env",
+                force=True,
+            )
 
         while True:
             try:
@@ -124,7 +143,7 @@ def main() -> int:
         if args.scan:
             print("[APP] --chat incompatible with --scan", file=sys.stderr)
             return 2
-        return run_chat(topology, args.interface)
+        return run_chat(topology, args.interface, args.peer)
 
     if args.scan and args.scan > 0:
         devices = discover_devices(timeout_s=args.scan)

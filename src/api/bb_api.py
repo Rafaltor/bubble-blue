@@ -54,6 +54,8 @@ class BBNode:
         self._forwarder: PacketForwarder | None = None
         self._started = False
         self._lock = threading.RLock()
+        self._connect_stop = threading.Event()
+        self._connect_thread: threading.Thread | None = None
 
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
@@ -71,6 +73,8 @@ class BBNode:
                 interface=self._interface,
                 remote_bd_addr=self._remote_bd_addr,
             )
+            allowlist = self._connect_targets()
+            allowed_peers = frozenset(allowlist) if allowlist else None
 
             holder: dict[str, HelloManager | PacketForwarder | None] = {
                 "hello": None,
@@ -94,7 +98,7 @@ class BBNode:
                 on_receive=on_receive,
                 interface=self._interface,
                 quiet=self._quiet,
-                allowed_peers=self._topology,
+                allowed_peers=allowed_peers,
             )
             hello = HelloManager(self._cfg, transport, quiet=self._quiet)
             fwd = PacketForwarder(
@@ -109,14 +113,24 @@ class BBNode:
 
             transport.start()
             hello.start()
-            self._connect_peers()
 
             self._transport = transport
             self._hello_mgr = hello
             self._forwarder = fwd
             self._started = True
 
+            self._connect_peers()
+            if allowlist:
+                self._connect_stop.clear()
+                self._connect_thread = threading.Thread(
+                    target=self._connect_loop,
+                    name="bb-connect",
+                    daemon=True,
+                )
+                self._connect_thread.start()
+
     def stop(self) -> None:
+        self._connect_stop.set()
         with self._lock:
             if self._hello_mgr is not None:
                 self._hello_mgr.stop()
@@ -149,6 +163,10 @@ class BBNode:
             return []
         return self._transport.connections()
 
+    def connect_targets(self) -> list[str]:
+        """BD addresses this node will try to reach (topology + env + --peer)."""
+        return sorted(self._connect_targets())
+
     def is_relay(self) -> bool:
         if self._hello_mgr is None:
             return False
@@ -175,23 +193,42 @@ class BBNode:
             raise RuntimeError("no L2CAP peers connected")
         return peers[0]
 
-    def _connect_peers(self) -> None:
-        if self._transport is None:
-            return
-        local = self._require_cfg().local_bd_addr.upper()
+    def _connect_targets(self) -> set[str]:
+        """Peers to dial: --topology, then .env group members, then --peer."""
+        if self._cfg is None:
+            cfg = load_config(
+                interface=self._interface,
+                remote_bd_addr=self._remote_bd_addr,
+            )
+        else:
+            cfg = self._cfg
+        local = cfg.local_bd_addr.upper()
         targets: set[str] = set()
         if self._topology:
             targets.update(self._topology)
-        remote = self._require_cfg().remote_bd_addr
+        for bd in cfg.group_members:
+            targets.add(bd.upper())
+        remote = (self._remote_bd_addr or cfg.remote_bd_addr).upper()
         if remote not in ("00:00:00:00:00:00", local):
-            targets.add(remote.upper())
-        for bd in sorted(targets):
-            if bd == local:
-                continue
+            targets.add(remote)
+        targets.discard(local)
+        return targets
+
+    def _connect_peers(self) -> None:
+        if self._transport is None:
+            return
+        for bd in sorted(self._connect_targets()):
             try:
                 self._transport.connect(bd)
             except OSError as e:
-                self._dispatch_log(f"[BB] connect {bd}: {e}", True)
+                self._dispatch_log(f"connect {bd} failed: {e}", True)
+
+    def _connect_loop(self) -> None:
+        while not self._connect_stop.wait(4.0):
+            try:
+                self._connect_peers()
+            except Exception as e:  # noqa: BLE001
+                self._dispatch_log(f"connect loop: {e}", True)
 
     def _dispatch_message(self, sender: str, text: str) -> None:
         assert self.on_message is not None
