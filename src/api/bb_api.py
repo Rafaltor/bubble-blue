@@ -221,14 +221,14 @@ class BBNode:
             try:
                 self._transport.connect(bd)
             except OSError as e:
-                self._dispatch_log(f"connect {bd} failed: {e}", True)
+                self._dispatch_log(f"connect {bd} failed: {e}")
 
     def _connect_loop(self) -> None:
         while not self._connect_stop.wait(4.0):
             try:
                 self._connect_peers()
             except Exception as e:  # noqa: BLE001
-                self._dispatch_log(f"connect loop: {e}", True)
+                self._dispatch_log(f"connect loop: {e}")
 
     def _dispatch_message(self, sender: str, text: str) -> None:
         assert self.on_message is not None
