@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import socket
 import threading
 from dataclasses import dataclass
@@ -22,6 +23,19 @@ def _tlog(node: str, msg: str, *, quiet: bool) -> None:
     if quiet:
         return
     _tlog_always(node, msg)
+
+
+def _expected_socket_close(err: OSError, *, stopping: bool, replaced: bool) -> bool:
+    """Normal teardown: peer hung up, local close, or a newer socket replaced this one."""
+    if stopping or replaced:
+        return True
+    return err.errno in (
+        errno.ECONNRESET,  # 104 — peer reset the L2CAP link
+        errno.ECONNABORTED,
+        errno.EPIPE,       # broken pipe on send/recv
+        errno.ENOTCONN,
+        errno.EBADF,       # 9 — recv after sock.close() (re-accept / reconnect race)
+    )
 
 
 @dataclass(frozen=True)
@@ -243,7 +257,15 @@ class L2CAPTransport:
     def _recv_loop(self, peer_bd_addr: str, sock: socket.socket) -> None:
         try:
             while not self._stop_evt.is_set():
-                data = sock.recv(4096)
+                try:
+                    data = sock.recv(4096)
+                except OSError as e:
+                    with self._lock:
+                        cur = self._conns.get(peer_bd_addr)
+                        replaced = cur is None or cur.sock is not sock
+                    if _expected_socket_close(e, stopping=self._stop_evt.is_set(), replaced=replaced):
+                        break
+                    raise
                 if not data:
                     break
 
@@ -257,7 +279,11 @@ class L2CAPTransport:
                 except Exception as e:  # noqa: BLE001
                     _tlog_always(self._node, f"on_receive error src={peer_bd_addr}: {e}")
         except OSError as e:
-            _tlog_always(self._node, f"L2CAP socket error peer={peer_bd_addr}: {e}")
+            with self._lock:
+                cur = self._conns.get(peer_bd_addr)
+                replaced = cur is None or cur.sock is not sock
+            if not _expected_socket_close(e, stopping=self._stop_evt.is_set(), replaced=replaced):
+                _tlog_always(self._node, f"L2CAP socket error peer={peer_bd_addr}: {e}")
         finally:
             try:
                 sock.close()
@@ -271,5 +297,6 @@ class L2CAPTransport:
                     removed = True
             if removed and self.on_peer_disconnected:
                 self.on_peer_disconnected(peer_bd_addr)
-            _tlog(self._node, f"L2CAP disconnect peer={peer_bd_addr}", quiet=self._quiet)
+            if removed:
+                _tlog(self._node, f"L2CAP disconnect peer={peer_bd_addr}", quiet=self._quiet)
 
