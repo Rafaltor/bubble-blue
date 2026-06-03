@@ -72,9 +72,6 @@ def run_chat(
             ChatLog.interrupt(
                 "aucun peer — --topology ADDR ou BUBBLE_BLUE_GROUP_MEMBERS dans .env"
             )
-        for bd in node.peers():
-            ChatLog.interrupt(f"peer connecté: {bd}")
-
         while True:
             try:
                 line = read_chat_line("> ")

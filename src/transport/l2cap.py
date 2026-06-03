@@ -215,6 +215,7 @@ class L2CAPTransport:
 
             with self._lock:
                 old = self._conns.get(peer_bd_addr)
+                was_live = bool(old and old.sock.fileno() != -1)
                 if old:
                     try:
                         old.sock.close()
@@ -230,7 +231,7 @@ class L2CAPTransport:
                 self._conns[peer_bd_addr] = PeerConn(bd_addr=peer_bd_addr, sock=client_sock, thread=t)
                 t.start()
 
-            if self.on_peer_connected:
+            if self.on_peer_connected and not was_live:
                 self.on_peer_connected(peer_bd_addr)
 
             _tlog(

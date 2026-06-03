@@ -82,7 +82,28 @@ def test_leaf_delivers_broadcast() -> None:
     assert got == ["hi"]
 
 
+def test_dedup_same_packet_twice() -> None:
+    cfg = _cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
+    hello = _FakeHelloMgr(relay=False)
+    got: list[str] = []
+    fails: list[str] = []
+    fwd = PacketForwarder(
+        cfg,
+        transport,
+        hello,
+        on_message=lambda _s, t: got.append(t),
+        on_decrypt_fail=lambda s: fails.append(s),
+    )  # type: ignore[arg-type]
+    pkt = fwd.build_packet(b"once", BROADCAST_BD_ADDR)
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    assert got == ["once"]
+    assert fails == []
+
+
 if __name__ == "__main__":
     test_relay_decrypts_after_ttl_change()
     test_leaf_delivers_broadcast()
+    test_dedup_same_packet_twice()
     print("✅ forwarder tests passed")

@@ -65,6 +65,7 @@ class BBNode:
         self._connect_last_log: dict[str, float] = {}
         self._connect_backoff_until: dict[str, float] = {}
         self._connect_streak: dict[str, int] = {}
+        self._active_peers: set[str] = set()
 
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
@@ -133,6 +134,7 @@ class BBNode:
             self._forwarder = fwd
             self._started = True
 
+            self._active_peers = {p.upper() for p in transport.connections()}
             self._connect_peers()
             if allowlist:
                 self._connect_stop.clear()
@@ -154,6 +156,7 @@ class BBNode:
             self._transport = None
             self._forwarder = None
             self._started = False
+            self._active_peers.clear()
 
         if self._pairing_proc is not None:
             try:
@@ -285,12 +288,20 @@ class BBNode:
         self.on_message(sender, text)
 
     def _dispatch_peer_connected(self, bd_addr: str) -> None:
+        bd = bd_addr.upper()
+        if bd in self._active_peers:
+            return
+        self._active_peers.add(bd)
         if self.on_peer_connected:
-            self.on_peer_connected(bd_addr.upper())
+            self.on_peer_connected(bd)
 
     def _dispatch_peer_disconnected(self, bd_addr: str) -> None:
+        bd = bd_addr.upper()
+        if bd not in self._active_peers:
+            return
+        self._active_peers.discard(bd)
         if self.on_peer_disconnected:
-            self.on_peer_disconnected(bd_addr.upper())
+            self.on_peer_disconnected(bd)
 
     def _dispatch_decrypt_fail(self, src: str) -> None:
         if self.on_decrypt_fail:
