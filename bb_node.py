@@ -181,7 +181,7 @@ def _run_with_transport(
 
 def run_chat_mode(*, topology: frozenset[str] | None, interface: str) -> int:
     """Interactive chat using BBNode API."""
-    node = BBNode(interface=interface, quiet=True, setup_pairing_agent=False)
+    node = BBNode(interface=interface, quiet=False, setup_pairing_agent=False)
 
     def on_message(sender_bd_addr: str, text: str) -> None:
         print(f"[{sender_bd_addr}] {text}", flush=True)

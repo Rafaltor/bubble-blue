@@ -173,7 +173,13 @@ class PacketForwarder:
             seq = int(hdr["seq"])
 
             self._hello_mgr.refresh_cds_role()
-            if self._hello_mgr.is_relay:
+            outbound = self._all_peer_targets(exclude=ingress)
+
+            # Multihop chat: forward broadcast to every other hop in topology,
+            # even when CDS says LEAF (common when only one L2CAP socket is up).
+            if dst == BROADCAST_BD_ADDR and outbound:
+                self._handle_relay(ingress, data, hdr, src, seq, dst, local)
+            elif self._hello_mgr.is_relay:
                 self._handle_relay(ingress, data, hdr, src, seq, dst, local)
             else:
                 self._handle_leaf(data, hdr, src, seq, dst, local)
@@ -279,16 +285,18 @@ class PacketForwarder:
             print(
                 f"[FWD] relay FAILED src={hdr['src']} seq={hdr['seq']}: "
                 f"no peers except ingress={ingress} "
-                f"(connections={self._transport.connections()})",
+                f"(connections={self._transport.connections()} "
+                f"topology={sorted(self._topology) if self._topology else None})",
                 flush=True,
             )
             return
 
+        cds = "CDS" if self._hello_mgr.is_relay else "topology"
         for peer in targets:
             try:
                 self._transport.send(peer, data)
                 print(
-                    f"[FWD] relay → {peer} src={hdr['src']} dst={hdr['dst']} "
+                    f"[FWD] relay ({cds}) → {peer} src={hdr['src']} dst={hdr['dst']} "
                     f"seq={hdr['seq']} ttl={data[_TTL_OFFSET]}",
                     flush=True,
                 )
