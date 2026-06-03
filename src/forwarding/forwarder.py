@@ -23,15 +23,12 @@ if TYPE_CHECKING:
 
 OnMessageCallback = Callable[[str, str], None]
 
-# Broadcast destination — RELAY forwards; unicast selective routing TBD.
 BROADCAST_BD_ADDR = "FF:FF:FF:FF:FF:FF"
-
-# TTL byte offset: type(1) + src(6) + dst(6) = 13
 _TTL_OFFSET = 13
 
 
 class PacketBloomFilter:
-    """Probabilistic (src, seq) deduplication for relay and leaf paths."""
+    """Dedup (src, seq) before forwarding — per-node, forward path only."""
 
     def __init__(self, *, m_bits: int = 65536, k_hashes: int = 4) -> None:
         self._m = max(64, int(m_bits))
@@ -61,7 +58,6 @@ class PacketBloomFilter:
         return f"{src_addr.upper()}:{int(seq)}".encode()
 
     def contains(self, src_addr: str, seq: int) -> bool:
-        """True if (src, seq) was already seen (may be false positive)."""
         key = self._key(src_addr, seq)
         with self._lock:
             return all(self._get_bit(i) for i in self._indexes(key))
@@ -75,12 +71,8 @@ class PacketBloomFilter:
 
 class PacketForwarder:
     """
-    PKT_DATA receive path.
-
-    RELAY: Bloom dedup → mark seen → decrement TTL → forward wire copy →
-           try local decrypt (on_message / silent InvalidTag).
-
-    LEAF: Bloom dedup → mark seen → try local decrypt only.
+    PKT_DATA: RELAY nodes forward first (raw bytes, TTL--), then try local chat delivery.
+    LEAF nodes only deliver when dst is us or broadcast.
     """
 
     def __init__(
@@ -89,13 +81,17 @@ class PacketForwarder:
         transport: L2CAPTransport,
         hello_mgr: HelloManager,
         *,
+        topology: frozenset[str] | None = None,
         on_message: OnMessageCallback | None = None,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._hello_mgr = hello_mgr
+        self._topology = frozenset(topology) if topology else None
         self._on_message = on_message or _default_on_message
-        self._bloom = PacketBloomFilter()
+        self._forward_bloom = PacketBloomFilter()
+        self._delivered: set[tuple[str, int]] = set()
+        self._delivered_lock = threading.RLock()
         self._seq_lock = threading.Lock()
         self._tx_seq = 0
 
@@ -105,6 +101,7 @@ class PacketForwarder:
             return self._tx_seq
 
     def is_relay(self) -> bool:
+        self._hello_mgr.refresh_cds_role()
         return self._hello_mgr.is_relay
 
     def build_data_packet(
@@ -112,17 +109,15 @@ class PacketForwarder:
         plaintext: str | bytes,
         dst_bd_addr: str = BROADCAST_BD_ADDR,
     ) -> bytes:
-        """Build a signed/encrypted PKT_DATA BB packet for transmission."""
         if isinstance(plaintext, str):
             payload = plaintext.encode("utf-8")
         else:
             payload = bytes(plaintext)
 
-        dst = dst_bd_addr.upper()
         rh = build_routing_header(
             PKT_DATA,
             self._cfg.local_bd_addr,
-            dst,
+            dst_bd_addr.upper(),
             ttl=self._cfg.ttl_max,
             seq=self._next_seq(),
         )
@@ -134,6 +129,16 @@ class PacketForwarder:
             enc["ciphertext"],
         )
 
+    def broadcast(self, plaintext: str | bytes) -> None:
+        """Chat: one broadcast packet (dst=FF:FF:…) sent on every L2CAP / topology link."""
+        packet = self.build_data_packet(plaintext, BROADCAST_BD_ADDR)
+        targets = self._all_peer_targets(exclude=None)
+        if not targets:
+            raise RuntimeError("No L2CAP peers; cannot send chat message")
+        for peer in targets:
+            self._transport.send(peer, packet)
+            print(f"[FWD] chat → {peer} dst={BROADCAST_BD_ADDR} bytes={len(packet)}", flush=True)
+
     def send_data(
         self,
         plaintext: str | bytes,
@@ -141,111 +146,100 @@ class PacketForwarder:
         *,
         l2cap_peer: str | None = None,
     ) -> None:
-        """Send PKT_DATA to ``l2cap_peer`` (or first connected peer)."""
         packet = self.build_data_packet(plaintext, dst_bd_addr)
         peer = (l2cap_peer or self._cfg.remote_bd_addr).upper()
         if peer in ("00:00:00:00:00:00", self._cfg.local_bd_addr):
-            peers = self._transport.connections()
-            if not peers:
+            targets = self._all_peer_targets(exclude=None)
+            if not targets:
                 raise RuntimeError("No L2CAP peers connected; cannot send PKT_DATA")
-            peer = peers[0]
+            peer = targets[0]
         self._transport.send(peer, packet)
-        print(
-            f"[FWD] sent PKT_DATA l2cap_peer={peer} dst={dst_bd_addr.upper()} "
-            f"bytes={len(packet)}",
-            flush=True,
-        )
-
-    def broadcast(self, plaintext: str | bytes) -> None:
-        """Send one broadcast PKT_DATA copy to every connected L2CAP peer."""
-        packet = self.build_data_packet(plaintext, BROADCAST_BD_ADDR)
-        peers = [p.upper() for p in self._transport.connections()]
-        if not peers:
-            raise RuntimeError("No L2CAP peers connected; cannot send PKT_DATA")
-        for peer in peers:
-            self._transport.send(peer, packet)
-            print(
-                f"[FWD] broadcast → {peer} dst={BROADCAST_BD_ADDR} bytes={len(packet)}",
-                flush=True,
-            )
 
     def handle(self, ingress_peer: str, data: bytes) -> None:
-        """Process an incoming PKT_DATA frame from ``ingress_peer``."""
         ingress = ingress_peer.upper()
-
         try:
             if len(data) < ROUTING_HEADER_SIZE:
                 return
             hdr = parse_routing_header(data)
             if hdr["type"] != PKT_DATA:
                 return
-
             if not validate_timestamp(hdr["ts_ms"]):
-                print(
-                    f"[FWD] rejected from={ingress}: timestamp out of window",
-                    flush=True,
-                )
+                print(f"[FWD] drop from={ingress}: bad timestamp", flush=True)
                 return
-
-            src = hdr["src"].upper()
-            seq = int(hdr["seq"])
-
-            if self._bloom.contains(src, seq):
-                return
-
-            self._bloom.add(src, seq)
 
             local = self._cfg.local_bd_addr.upper()
             dst = hdr["dst"].upper()
+            src = hdr["src"].upper()
+            seq = int(hdr["seq"])
 
+            self._hello_mgr.refresh_cds_role()
             if self._hello_mgr.is_relay:
-                self._handle_relay(ingress, data, hdr, dst, local)
+                self._handle_relay(ingress, data, hdr, src, seq, dst, local)
             else:
-                self._handle_leaf(data, hdr, dst, local)
+                self._handle_leaf(data, hdr, src, seq, dst, local)
 
         except Exception as e:  # noqa: BLE001
-            print(f"[FWD] rx from={ingress} bytes={len(data)} error={e}", flush=True)
+            print(f"[FWD] rx from={ingress} error={e}", flush=True)
+
+    def _handle_relay(
+        self,
+        ingress: str,
+        data: bytes,
+        hdr: dict,
+        src: str,
+        seq: int,
+        dst: str,
+        local: str,
+    ) -> None:
+        ttl = int(hdr["ttl"])
+        if ttl == 0:
+            print(f"[FWD] drop relay src={src} seq={seq}: ttl=0", flush=True)
+            return
+
+        new_ttl = ttl - 1
+
+        # 1) Forward first (broadcast or not for us)
+        if self._should_relay(dst, local) and new_ttl > 0:
+            if self._forward_bloom.contains(src, seq):
+                print(f"[FWD] skip forward src={src} seq={seq}: already relayed", flush=True)
+            else:
+                self._forward_bloom.add(src, seq)
+                out = _packet_with_ttl(data, new_ttl)
+                self._relay(ingress, out, hdr)
+        elif self._should_relay(dst, local):
+            print(f"[FWD] drop forward src={src} seq={seq}: ttl exhausted after decrement", flush=True)
+
+        # 2) Local chat delivery (broadcast or unicast to us)
+        if self._should_deliver(dst, local):
+            self._try_deliver(src, seq, data)
+
+    def _handle_leaf(
+        self,
+        data: bytes,
+        hdr: dict,
+        src: str,
+        seq: int,
+        dst: str,
+        local: str,
+    ) -> None:
+        if self._should_deliver(dst, local):
+            self._try_deliver(src, seq, data)
 
     @staticmethod
     def _should_deliver(dst: str, local: str) -> bool:
-        """Deliver locally for unicast-to-self or group broadcast."""
         return dst == local or dst == BROADCAST_BD_ADDR
 
     @staticmethod
     def _should_relay(dst: str, local: str) -> bool:
-        """Relay when destination is not us (includes broadcast)."""
         return dst != local
 
-    def _handle_relay(
-        self,
-        ingress_peer: str,
-        data: bytes,
-        hdr: dict,
-        dst: str,
-        local: str,
-    ) -> None:
-        """Forward first (if not for us only), then local delivery if applicable."""
-        ttl = int(hdr["ttl"])
-        if ttl == 0:
-            return
+    def _try_deliver(self, src: str, seq: int, data: bytes) -> None:
+        key = (src, seq)
+        with self._delivered_lock:
+            if key in self._delivered:
+                return
+            self._delivered.add(key)
 
-        new_ttl = ttl - 1
-        if new_ttl == 0:
-            return
-
-        if self._should_relay(dst, local):
-            out = _packet_with_ttl(data, new_ttl)
-            self._relay(ingress_peer, out, hdr)
-
-        if self._should_deliver(dst, local):
-            self._try_deliver(hdr["src"], data)
-
-    def _handle_leaf(self, data: bytes, hdr: dict, dst: str, local: str) -> None:
-        """Decrypt locally only when addressed to us or broadcast."""
-        if self._should_deliver(dst, local):
-            self._try_deliver(hdr["src"], data)
-
-    def _try_deliver(self, src: str, data: bytes) -> None:
         try:
             parsed = parse_bb_packet(data)
             plaintext = decrypt_from_group(
@@ -262,15 +256,35 @@ class PacketForwarder:
             text = plaintext.decode("utf-8")
         except UnicodeDecodeError:
             text = repr(plaintext)
+        self._on_message(src, text)
 
-        self._on_message(src.upper(), text)
+    def _all_peer_targets(self, *, exclude: str | None) -> list[str]:
+        """L2CAP connections plus topology allowlist (for multihop relay/send)."""
+        local = self._cfg.local_bd_addr.upper()
+        ex = exclude.upper() if exclude else None
+        out: set[str] = set()
+        for p in self._transport.connections():
+            pu = p.upper()
+            if pu != local and pu != ex:
+                out.add(pu)
+        if self._topology:
+            for p in self._topology:
+                if p != local and p != ex:
+                    out.add(p)
+        return sorted(out)
 
-    def _relay(self, ingress_peer: str, data: bytes, hdr: dict) -> None:
-        peers = [p.upper() for p in self._transport.connections() if p.upper() != ingress_peer]
-        if not peers:
+    def _relay(self, ingress: str, data: bytes, hdr: dict) -> None:
+        targets = self._all_peer_targets(exclude=ingress)
+        if not targets:
+            print(
+                f"[FWD] relay FAILED src={hdr['src']} seq={hdr['seq']}: "
+                f"no peers except ingress={ingress} "
+                f"(connections={self._transport.connections()})",
+                flush=True,
+            )
             return
 
-        for peer in peers:
+        for peer in targets:
             try:
                 self._transport.send(peer, data)
                 print(
@@ -283,13 +297,8 @@ class PacketForwarder:
 
 
 def _packet_with_ttl(data: bytes, new_ttl: int) -> bytes:
-    """Copy wire packet with decremented TTL (only routing-header TTL changes)."""
-    if len(data) < ROUTING_HEADER_SIZE:
-        raise ValueError("packet too short")
-    if not (0 <= new_ttl <= 0xFF):
-        raise ValueError("ttl out of range")
     buf = bytearray(data)
-    buf[_TTL_OFFSET] = new_ttl
+    buf[_TTL_OFFSET] = new_ttl & 0xFF
     return bytes(buf)
 
 

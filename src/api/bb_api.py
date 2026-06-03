@@ -98,6 +98,7 @@ class BBNode:
                 self._cfg,
                 transport,
                 hello_mgr,
+                topology=self._topology,
                 on_message=self._on_chat_message,
             )
             hello_holder[0] = hello_mgr

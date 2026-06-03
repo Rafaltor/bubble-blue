@@ -47,7 +47,7 @@ class HelloManager:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._is_cds = False
-        self._refresh_cds_role(verbose=False)
+        self.refresh_cds_role(verbose=False)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -79,7 +79,7 @@ class HelloManager:
         priv = parse_hello_private(data, self._group_key)
         self.table.update_from_hello(pub, priv)
         # CDS uses transport.connections() only; table update must not change l2cap_peers.
-        self._refresh_cds_role(verbose=True)
+        self.refresh_cds_role(verbose=True)
 
     def get_resolved_members(self) -> list[dict[str, Any]]:
         """Group members with resolved anon_id → BD address mappings."""
@@ -100,7 +100,8 @@ class HelloManager:
             compute_anon_id(self._group_key, bd_addr) for bd_addr in self._transport.connections()
         )
 
-    def _refresh_cds_role(self, *, verbose: bool) -> None:
+    def refresh_cds_role(self, *, verbose: bool = False) -> None:
+        """Recompute RELAY/LEAF from current L2CAP peers and Hello tables."""
         self._is_cds = am_i_cds(self.anon_id, self.table, self._l2cap_peer_anon_ids())
         if verbose:
             if self._is_cds:
@@ -161,7 +162,7 @@ class HelloManager:
         # Send one Hello immediately, then on every interval.
         while not self._stop.is_set():
             self.table.expire(self._timeout_ms)
-            self._refresh_cds_role(verbose=False)
+            self.refresh_cds_role(verbose=False)
             self._send_hellos()
             self.print_neighbor_tables()
             if self._stop.wait(self._interval_s):
