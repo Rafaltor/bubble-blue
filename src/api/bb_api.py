@@ -35,6 +35,9 @@ class BBNode:
 
     on_message: OnMessageCallback | None = None
     on_log: LogFn | None = None
+    on_peer_connected: Callable[[str], None] | None = None
+    on_peer_disconnected: Callable[[str], None] | None = None
+    on_decrypt_fail: Callable[[str], None] | None = None
 
     def __init__(
         self,
@@ -105,6 +108,8 @@ class BBNode:
                 interface=self._interface,
                 quiet=self._quiet,
                 allowed_peers=allowed_peers,
+                on_peer_connected=self._dispatch_peer_connected,
+                on_peer_disconnected=self._dispatch_peer_disconnected,
             )
             hello = HelloManager(self._cfg, transport, quiet=self._quiet)
             fwd = PacketForwarder(
@@ -113,6 +118,9 @@ class BBNode:
                 hello,
                 on_message=self._dispatch_message,
                 on_log=self._dispatch_log if self.on_log else None,
+                on_decrypt_fail=(
+                    self._dispatch_decrypt_fail if self.on_decrypt_fail else None
+                ),
             )
             holder["hello"] = hello
             holder["fwd"] = fwd
@@ -275,6 +283,18 @@ class BBNode:
     def _dispatch_message(self, sender: str, text: str) -> None:
         assert self.on_message is not None
         self.on_message(sender, text)
+
+    def _dispatch_peer_connected(self, bd_addr: str) -> None:
+        if self.on_peer_connected:
+            self.on_peer_connected(bd_addr.upper())
+
+    def _dispatch_peer_disconnected(self, bd_addr: str) -> None:
+        if self.on_peer_disconnected:
+            self.on_peer_disconnected(bd_addr.upper())
+
+    def _dispatch_decrypt_fail(self, src: str) -> None:
+        if self.on_decrypt_fail:
+            self.on_decrypt_fail(src.upper())
 
     def _dispatch_log(self, msg: str, *, err: bool | None = None) -> None:
         if self.on_log:

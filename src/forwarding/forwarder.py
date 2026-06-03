@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 OnMessageCallback = Callable[[str, str], None]
 LogCallback = Callable[[str], None]
+OnDecryptFailCallback = Callable[[str], None]
 
 _TTL_OFFSET = 13
 
@@ -42,12 +43,14 @@ class PacketForwarder:
         *,
         on_message: OnMessageCallback,
         on_log: LogCallback | None = None,
+        on_decrypt_fail: OnDecryptFailCallback | None = None,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._hello_mgr = hello_mgr
         self._on_message = on_message
         self._on_log = on_log
+        self._on_decrypt_fail = on_decrypt_fail
         self._forwarded: set[tuple[str, int]] = set()
         self._fwd_lock = threading.RLock()
         self._seq_lock = threading.Lock()
@@ -151,7 +154,10 @@ class PacketForwarder:
                 routing_header_aad(parsed["routing_header"]),
             )
         except InvalidTag:
-            self._log(f"[FWD] decrypt failed src={src}")
+            if self._on_decrypt_fail:
+                self._on_decrypt_fail(src.upper())
+            else:
+                self._log(f"[FWD] decrypt failed src={src}")
             return
         text = plain.decode("utf-8", errors="replace")
         self._on_message(src.upper(), text)

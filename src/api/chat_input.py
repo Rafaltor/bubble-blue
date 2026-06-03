@@ -10,8 +10,10 @@ from src.api.chat_log import ChatLog
 
 def read_chat_line(prompt: str = "> ") -> str:
     """
-    Read one line with echo; pause background log output while typing.
+    Read one line with echo; chat notifications redraw the prompt while typing.
     """
+    ChatLog.set_prompt(prompt)
+
     if not sys.stdin.isatty():
         sys.stdout.write(prompt)
         sys.stdout.flush()
@@ -19,14 +21,10 @@ def read_chat_line(prompt: str = "> ") -> str:
 
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
-    chars: list[str] = []
 
-    ChatLog.set_typing(True)
+    ChatLog.begin_input()
     try:
         tty.setcbreak(fd)
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
-
         while True:
             ready, _, _ = select.select([sys.stdin], [], [], 0.2)
             if not ready:
@@ -34,23 +32,15 @@ def read_chat_line(prompt: str = "> ") -> str:
             ch = sys.stdin.read(1)
             if ch in ("\n", "\r"):
                 break
-            if ch in ("\x03", "\x04"):  # Ctrl+C / Ctrl+D
+            if ch in ("\x03", "\x04"):
                 raise KeyboardInterrupt
             if ch in ("\x7f", "\b"):
-                if chars:
-                    chars.pop()
-                    sys.stdout.write("\b \b")
-                    sys.stdout.flush()
+                ChatLog.backspace()
                 continue
-            if ch == "\x1b":  # ignore escape sequences
+            if ch == "\x1b":
                 continue
-            chars.append(ch)
-            sys.stdout.write(ch)
-            sys.stdout.flush()
+            ChatLog.append_char(ch)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        ChatLog.set_typing(False)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
 
-    return "".join(chars)
+    return ChatLog.end_input()

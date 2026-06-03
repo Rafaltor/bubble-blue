@@ -49,6 +49,8 @@ class L2CAPTransport:
         interface: str = "hci0",
         quiet: bool = False,
         allowed_peers: frozenset[str] | None = None,
+        on_peer_connected: Callable[[str], None] | None = None,
+        on_peer_disconnected: Callable[[str], None] | None = None,
     ) -> None:
         self._cfg = load_config(interface=interface)
         self._node = self._cfg.node_name
@@ -60,6 +62,8 @@ class L2CAPTransport:
         )
 
         self.on_receive: Callable[[str, bytes], None] = on_receive or (lambda _a, _d: None)
+        self.on_peer_connected = on_peer_connected
+        self.on_peer_disconnected = on_peer_disconnected
 
         self._lock = threading.RLock()
         self._conns: dict[str, PeerConn] = {}
@@ -127,6 +131,7 @@ class L2CAPTransport:
             )
             return
 
+        is_new = False
         with self._lock:
             existing = self._conns.get(bd_addr)
             if existing and existing.sock.fileno() != -1:
@@ -143,6 +148,10 @@ class L2CAPTransport:
             )
             self._conns[bd_addr] = PeerConn(bd_addr=bd_addr, sock=sock, thread=t)
             t.start()
+            is_new = True
+
+        if is_new and self.on_peer_connected:
+            self.on_peer_connected(bd_addr)
 
         _tlog(
             self._node,
@@ -221,6 +230,9 @@ class L2CAPTransport:
                 self._conns[peer_bd_addr] = PeerConn(bd_addr=peer_bd_addr, sock=client_sock, thread=t)
                 t.start()
 
+            if self.on_peer_connected:
+                self.on_peer_connected(peer_bd_addr)
+
             _tlog(
                 self._node,
                 f"L2CAP accept src={peer_bd_addr} dst={self._cfg.local_bd_addr} psm=0x{self._psm:04X}",
@@ -250,9 +262,13 @@ class L2CAPTransport:
                 sock.close()
             except OSError:
                 pass
+            removed = False
             with self._lock:
                 cur = self._conns.get(peer_bd_addr)
                 if cur and cur.sock is sock:
                     self._conns.pop(peer_bd_addr, None)
+                    removed = True
+            if removed and self.on_peer_disconnected:
+                self.on_peer_disconnected(peer_bd_addr)
             _tlog(self._node, f"L2CAP disconnect peer={peer_bd_addr}", quiet=self._quiet)
 

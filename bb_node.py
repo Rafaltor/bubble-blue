@@ -46,7 +46,12 @@ def run_chat(
         quiet=True,
         setup_pairing_agent=False,
     )
-    node.on_message = lambda s, t: ChatLog.emit(f"[{s}] {t}", force=True)
+    node.on_message = lambda s, t: ChatLog.interrupt(f"[{s}] {t}")
+    node.on_peer_connected = lambda bd: ChatLog.interrupt(f"peer connecté: {bd}")
+    node.on_peer_disconnected = lambda bd: ChatLog.interrupt(f"peer déconnecté: {bd}")
+    node.on_decrypt_fail = lambda src: ChatLog.interrupt(
+        f"paquet non déchiffrable (mauvaise clé ?) de {src}"
+    )
     node.on_log = lambda m, err: ChatLog.emit(m, err=err)
 
     setup_ble_pairing_agent(quiet=True)
@@ -60,14 +65,15 @@ def run_chat(
             time.sleep(1.0)
         role = "RELAY" if node.is_relay() else "LEAF"
         n = len(node.peers())
-        ChatLog.emit(f"local {node.local_bd_addr} · {role} · {n} peer(s)", force=True)
+        ChatLog.interrupt(f"local {node.local_bd_addr} · {role} · {n} peer(s)")
         if targets:
-            ChatLog.emit(f"dial: {', '.join(targets)}", force=True)
+            ChatLog.interrupt(f"dial: {', '.join(targets)}")
         elif n == 0:
-            ChatLog.emit(
-                "no peer — use --topology ADDR or set BUBBLE_BLUE_GROUP_MEMBERS in .env",
-                force=True,
+            ChatLog.interrupt(
+                "aucun peer — --topology ADDR ou BUBBLE_BLUE_GROUP_MEMBERS dans .env"
             )
+        for bd in node.peers():
+            ChatLog.interrupt(f"peer connecté: {bd}")
 
         while True:
             try:
@@ -76,12 +82,12 @@ def run_chat(
                 break
             if line:
                 if not node.peers():
-                    ChatLog.emit("no peer connected — message not sent", force=True, err=True)
+                    ChatLog.interrupt("aucun peer connecté — message non envoyé", err=True)
                     continue
                 try:
                     node.send(line)
                 except (OSError, RuntimeError) as e:
-                    ChatLog.emit(str(e), force=True, err=True)
+                    ChatLog.interrupt(str(e), err=True)
     except KeyboardInterrupt:
         pass
     finally:
