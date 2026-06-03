@@ -157,6 +157,19 @@ class PacketForwarder:
             flush=True,
         )
 
+    def broadcast(self, plaintext: str | bytes) -> None:
+        """Send one broadcast PKT_DATA copy to every connected L2CAP peer."""
+        packet = self.build_data_packet(plaintext, BROADCAST_BD_ADDR)
+        peers = [p.upper() for p in self._transport.connections()]
+        if not peers:
+            raise RuntimeError("No L2CAP peers connected; cannot send PKT_DATA")
+        for peer in peers:
+            self._transport.send(peer, packet)
+            print(
+                f"[FWD] broadcast → {peer} dst={BROADCAST_BD_ADDR} bytes={len(packet)}",
+                flush=True,
+            )
+
     def handle(self, ingress_peer: str, data: bytes) -> None:
         """Process an incoming PKT_DATA frame from ``ingress_peer``."""
         ingress = ingress_peer.upper()
@@ -183,16 +196,35 @@ class PacketForwarder:
 
             self._bloom.add(src, seq)
 
+            local = self._cfg.local_bd_addr.upper()
+            dst = hdr["dst"].upper()
+
             if self._hello_mgr.is_relay:
-                self._handle_relay(ingress, data, hdr)
+                self._handle_relay(ingress, data, hdr, dst, local)
             else:
-                self._handle_leaf(data, hdr)
+                self._handle_leaf(data, hdr, dst, local)
 
         except Exception as e:  # noqa: BLE001
             print(f"[FWD] rx from={ingress} bytes={len(data)} error={e}", flush=True)
 
-    def _handle_relay(self, ingress_peer: str, data: bytes, hdr: dict) -> None:
-        """Forward first, then attempt local delivery."""
+    @staticmethod
+    def _should_deliver(dst: str, local: str) -> bool:
+        return dst == local or dst == BROADCAST_BD_ADDR
+
+    @staticmethod
+    def _should_relay(dst: str, local: str) -> bool:
+        """Relay when destination is not us (includes broadcast)."""
+        return dst != local
+
+    def _handle_relay(
+        self,
+        ingress_peer: str,
+        data: bytes,
+        hdr: dict,
+        dst: str,
+        local: str,
+    ) -> None:
+        """Forward first (if not for us only), then local delivery if applicable."""
         ttl = int(hdr["ttl"])
         if ttl == 0:
             return
@@ -201,19 +233,17 @@ class PacketForwarder:
         if new_ttl == 0:
             return
 
-        if self._should_forward(hdr["dst"]):
+        if self._should_relay(dst, local):
             out = _packet_with_ttl(data, new_ttl)
             self._relay(ingress_peer, out, hdr)
 
-        self._try_deliver(hdr["src"], data)
+        if self._should_deliver(dst, local):
+            self._try_deliver(hdr["src"], data)
 
-    def _handle_leaf(self, data: bytes, hdr: dict) -> None:
-        """Decrypt locally only; no relay."""
-        self._try_deliver(hdr["src"], data)
-
-    def _should_forward(self, dst: str) -> bool:
-        """Broadcast always; unicast selective forwarding not implemented yet."""
-        return dst.upper() == BROADCAST_BD_ADDR
+    def _handle_leaf(self, data: bytes, hdr: dict, dst: str, local: str) -> None:
+        """Decrypt locally only when addressed to us or broadcast."""
+        if self._should_deliver(dst, local):
+            self._try_deliver(hdr["src"], data)
 
     def _try_deliver(self, src: str, data: bytes) -> None:
         try:

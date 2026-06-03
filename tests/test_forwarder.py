@@ -69,15 +69,53 @@ def test_relay_forwards_broadcast_with_decremented_ttl() -> None:
     assert relayed[26:] == pkt[26:]
 
 
-def test_relay_drops_unicast_dst() -> None:
+def test_relay_forwards_unicast_dst() -> None:
     cfg = _test_cfg()
     transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
     hello = _FakeHelloMgr(relay=True)
     fwd = PacketForwarder(cfg, transport, hello)  # type: ignore[arg-type]
 
     pkt = fwd.build_data_packet(b"hello", "AA:BB:CC:DD:EE:99")
+    transport.sent.clear()
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
-    assert transport.sent == []
+    assert len(transport.sent) == 1
+    assert transport.sent[0][0] == "AA:BB:CC:DD:EE:03"
+
+
+def test_relay_skips_deliver_for_unicast_to_other() -> None:
+    cfg = _test_cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+    hello = _FakeHelloMgr(relay=True)
+    messages: list[tuple[str, str]] = []
+    fwd = PacketForwarder(
+        cfg,
+        transport,
+        hello,
+        on_message=lambda s, t: messages.append((s, t)),
+    )  # type: ignore[arg-type]
+
+    pkt = fwd.build_data_packet(b"hello", "AA:BB:CC:DD:EE:99")
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    assert messages == []
+
+
+def test_relay_delivers_broadcast_locally() -> None:
+    cfg = _test_cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+    hello = _FakeHelloMgr(relay=True)
+    messages: list[str] = []
+    fwd = PacketForwarder(
+        cfg,
+        transport,
+        hello,
+        on_message=lambda _s, t: messages.append(t),
+    )  # type: ignore[arg-type]
+
+    pkt = fwd.build_data_packet(b"group", BROADCAST_BD_ADDR)
+    transport.sent.clear()
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    assert messages == ["group"]
+    assert len(transport.sent) == 1
 
 
 def test_leaf_does_not_forward() -> None:
@@ -108,6 +146,35 @@ def test_deliver_on_leaf() -> None:
     assert transport.sent == []
 
 
+def test_broadcast_sends_to_all_peers() -> None:
+    cfg = _test_cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+    hello = _FakeHelloMgr(relay=False)
+    fwd = PacketForwarder(cfg, transport, hello)  # type: ignore[arg-type]
+
+    fwd.broadcast("hi")
+    assert len(transport.sent) == 2
+    assert transport.sent[0][1] == transport.sent[1][1]
+    assert parse_routing_header(transport.sent[0][1])["dst"] == BROADCAST_BD_ADDR
+
+
+def test_leaf_skips_unicast_to_other() -> None:
+    cfg = _test_cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
+    hello = _FakeHelloMgr(relay=False)
+    messages: list[tuple[str, str]] = []
+    fwd = PacketForwarder(
+        cfg,
+        transport,
+        hello,
+        on_message=lambda s, t: messages.append((s, t)),
+    )  # type: ignore[arg-type]
+
+    pkt = fwd.build_data_packet(b"nope", "AA:BB:CC:DD:EE:99")
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    assert messages == []
+
+
 def test_build_packet_broadcast_default() -> None:
     cfg = _test_cfg()
     transport = _FakeTransport([])
@@ -123,8 +190,12 @@ def test_build_packet_broadcast_default() -> None:
 if __name__ == "__main__":
     test_bloom_filter()
     test_relay_forwards_broadcast_with_decremented_ttl()
-    test_relay_drops_unicast_dst()
+    test_relay_forwards_unicast_dst()
+    test_relay_skips_deliver_for_unicast_to_other()
+    test_relay_delivers_broadcast_locally()
     test_leaf_does_not_forward()
     test_deliver_on_leaf()
+    test_broadcast_sends_to_all_peers()
+    test_leaf_skips_unicast_to_other()
     test_build_packet_broadcast_default()
     print("✅ All forwarder tests passed")

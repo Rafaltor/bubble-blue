@@ -138,12 +138,8 @@ class BBNode:
             self._pairing_proc = None
 
     def send(self, text: str) -> None:
-        """Send a broadcast PKT_DATA (dst=FF:FF:FF:FF:FF:FF) to the next L2CAP hop."""
-        fwd = self._require_forwarder()
-        hop = self._l2cap_hop_for(BROADCAST_BD_ADDR)
-        if hop is None:
-            raise RuntimeError("No L2CAP peers connected; cannot send PKT_DATA")
-        fwd.send_data(text, BROADCAST_BD_ADDR, l2cap_peer=hop)
+        """Send a group message (dst=FF:FF:FF:FF:FF:FF) to all connected L2CAP peers."""
+        self._require_forwarder().broadcast(text)
 
     def peers(self) -> list[str]:
         """Active L2CAP peer BD addresses."""
