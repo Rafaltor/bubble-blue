@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import os
 import subprocess
 import threading
 import time
@@ -12,6 +13,25 @@ from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwa
 from src.transport.l2cap import L2CAPTransport
 
 LogFn = Callable[[str, bool], None]
+
+
+def topology_from_env() -> frozenset[str] | None:
+    """Optional allowlist/dial list from BUBBLE_BLUE_TOPOLOGY."""
+    return parse_topology(os.environ.get("BUBBLE_BLUE_TOPOLOGY"))
+
+
+def merge_topology(
+    cli: str | frozenset[str] | set[str] | None,
+    *,
+    use_env: bool = True,
+) -> frozenset[str] | None:
+    """CLI --topology wins; else BUBBLE_BLUE_TOPOLOGY from .env."""
+    topo = parse_topology(cli)
+    if topo:
+        return topo
+    if use_env:
+        return topology_from_env()
+    return None
 
 
 def parse_topology(raw: str | frozenset[str] | set[str] | None) -> frozenset[str] | None:

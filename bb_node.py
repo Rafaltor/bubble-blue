@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
 
 from config import load_config, print_config
-from src.api.bb_api import BBNode, parse_topology
+from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
 from src.transport.discovery import discover_devices
@@ -131,18 +132,22 @@ def main() -> int:
     parser.add_argument("--scan", type=float, default=0.0)
     parser.add_argument("--auto-peer", default=None)
     parser.add_argument("--peer", default=None)
-    parser.add_argument("--interface", default="hci0")
+    parser.add_argument(
+        "--interface",
+        default=os.environ.get("BUBBLE_BLUE_INTERFACE", "hci0"),
+    )
     parser.add_argument(
         "--topology",
         default=None,
-        help="Comma-separated BD_ADDR: L2CAP allowlist + connect on start",
+        help="Comma-separated peer BD_ADDR (allowlist + outbound connect). "
+        "Default: BUBBLE_BLUE_TOPOLOGY or BUBBLE_BLUE_GROUP_MEMBERS in .env",
     )
     parser.add_argument("--send", default=None)
     parser.add_argument("--dst", default=None)
     parser.add_argument("--chat", action="store_true")
     args = parser.parse_args()
 
-    topology = parse_topology(args.topology)
+    topology = merge_topology(args.topology)
     peer = args.peer
 
     if args.chat:

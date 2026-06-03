@@ -68,15 +68,23 @@ This layer is responsible for maintaining neighborhood state and distributing th
 
 ## Installation
 
-The exact build/run commands depend on the current state of the repository. A typical setup on a Linux node is:
-
 1. Clone the repository.
-2. Create and activate a Python virtual environment.
-3. Install Python dependencies (if present in `requirements.txt` / `pyproject.toml`).
-4. Ensure Bluetooth is enabled and the controller is visible to the OS (via `bluetoothctl` / BlueZ tools).
-5. Run the node agent/service (entrypoint to be defined by the repository structure).
+2. Copy `.env.example` to `.env` and set a shared group key (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
+3. Install BlueZ tools (`hciconfig`, `bluetoothctl`) and ensure Bluetooth is up.
+4. Run the node (requires `sudo` for L2CAP on most boards):
 
-If you add a concrete entrypoint (e.g. `src/bubble_blue/node.py`), update this section with the exact commands for both Rubik Pi 3 and Arduino UNO Q.
+```bash
+# Show local BD_ADDR and config
+python3 config.py
+
+# Discover nearby controllers
+sudo python3 bb_node.py --scan 8
+
+# Interactive mesh chat (configure peers in .env or --topology)
+sudo python3 bb_node.py --chat
+```
+
+**Two-node minimum:** same `BUBBLE_BLUE_GROUP_KEY` on both boards; each board lists the other's BD_ADDR in `BUBBLE_BLUE_GROUP_MEMBERS` (or use `--topology` on one side). Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Repository structure
 
@@ -93,14 +101,13 @@ As the project matures, the structure may expand to include:
 
 ## Current status
 
-This project is under active development.
+Runnable stack on Linux + BlueZ:
 
-Recommended next steps for making the repository immediately runnable:
+- **Entrypoint:** `bb_node.py` (`--chat`, `--topology`, `--scan`, `--send`)
+- **API:** `src/api/bb_api.py` (`BBNode`)
+- **Planes:** L2CAP transport, Hello/CDS control, PKT_DATA forwarder, AES-GCM group crypto
 
-- Define a clear **node entrypoint** (CLI/service) for each platform.
-- Add dependency manifests (`pyproject.toml` or `requirements.txt`) and pinned tool versions where appropriate.
-- Document the **AES configuration** (mode, key derivation, rotation strategy) and threat model assumptions.
-- Provide a minimal **two-node** and **three-node multihop** demo with expected logs/output.
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for environment variables and deployment patterns.
 
 ## Security notes
 

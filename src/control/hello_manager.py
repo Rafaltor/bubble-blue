@@ -121,8 +121,10 @@ class HelloManager:
 
     def _send_hellos(self) -> None:
         peers = list(self._transport.connections())
-        if not peers and self._cfg.remote_bd_addr not in ("00:00:00:00:00:00",):
-            peers = [self._cfg.remote_bd_addr.upper()]
+        if not peers:
+            peers = [b for b in self._cfg.group_members if b != self._local_bd]
+            if not peers and self._cfg.remote_bd_addr not in ("00:00:00:00:00:00",):
+                peers = [self._cfg.remote_bd_addr.upper()]
 
         if not peers:
             return

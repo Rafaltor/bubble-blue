@@ -45,6 +45,8 @@ def _load_dotenv(path: str = ".env") -> None:
 _load_dotenv()
 
 DEFAULT_REMOTE_BD_ADDR = os.environ.get("BUBBLE_BLUE_REMOTE_BD_ADDR", "00:00:00:00:00:00")
+_DEFAULT_INTERFACE = os.environ.get("BUBBLE_BLUE_INTERFACE", "hci0")
+_BD_ADDR_ENV_RE = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
 
 
 @dataclass(frozen=True)
@@ -91,21 +93,47 @@ def _load_group_key() -> bytes:
         raise RuntimeError(f"Invalid BUBBLE_BLUE_GROUP_KEY: {e}") from e
 
 
-def _load_group_members() -> list[str]:
-    """Load group member BD addresses from env."""
+def _normalize_bd_addr(addr: str, *, label: str) -> str | None:
+    a = addr.strip().upper()
+    if not a or a == "00:00:00:00:00:00":
+        return None
+    if not _BD_ADDR_ENV_RE.match(a):
+        print(f"[BB] WARNING: ignoring invalid {label}: {addr!r}", flush=True)
+        return None
+    return a
+
+
+def _load_group_members(*, local_bd_addr: str | None = None) -> list[str]:
+    """Peers to dial / allowlist from BUBBLE_BLUE_GROUP_MEMBERS (excludes local)."""
     raw = os.environ.get("BUBBLE_BLUE_GROUP_MEMBERS", "")
     if not raw:
         return []
-    return [addr.strip().upper() for addr in raw.split(",") if addr.strip()]
+    local = (local_bd_addr or "").upper()
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        bd = _normalize_bd_addr(part, label="BUBBLE_BLUE_GROUP_MEMBERS entry")
+        if bd is None or bd == local or bd in seen:
+            continue
+        seen.add(bd)
+        out.append(bd)
+    return out
 
 
-def get_local_bd_addr(interface: str = "hci0") -> str:
+def get_local_bd_addr(interface: str | None = None) -> str:
     """
-    Reads the local controller BD address dynamically via `hciconfig hci0`.
+    Local controller BD_ADDR: BUBBLE_BLUE_LOCAL_BD_ADDR, else `hciconfig <interface>`.
     """
+    override = os.environ.get("BUBBLE_BLUE_LOCAL_BD_ADDR", "").strip()
+    if override:
+        bd = _normalize_bd_addr(override, label="BUBBLE_BLUE_LOCAL_BD_ADDR")
+        if bd is not None:
+            return bd
+
+    iface = interface or _DEFAULT_INTERFACE
     try:
         proc = subprocess.run(
-            ["hciconfig", interface],
+            ["hciconfig", iface],
             check=True,
             capture_output=True,
             text=True,
@@ -114,30 +142,34 @@ def get_local_bd_addr(interface: str = "hci0") -> str:
         raise RuntimeError("`hciconfig` not found. Install BlueZ tools and ensure it is in PATH.") from e
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
-        raise RuntimeError(f"`hciconfig {interface}` failed{': ' + stderr if stderr else ''}.") from e
+        raise RuntimeError(f"`hciconfig {iface}` failed{': ' + stderr if stderr else ''}.") from e
 
     m = _BD_ADDR_RE.search(proc.stdout or "")
     if not m:
         out = (proc.stdout or "").strip()
-        raise RuntimeError(f"Could not parse BD Address from `hciconfig {interface}` output.\n{out}")
+        raise RuntimeError(f"Could not parse BD Address from `hciconfig {iface}` output.\n{out}")
     return m.group(1).upper()
 
 
 def load_config(
     *,
     remote_bd_addr: str | None = None,
-    interface: str = "hci0",
+    interface: str | None = None,
 ) -> BubbleBlueConfig:
+    iface = interface or _DEFAULT_INTERFACE
+    local = get_local_bd_addr(interface=iface)
+    remote = remote_bd_addr or DEFAULT_REMOTE_BD_ADDR
+    remote_n = _normalize_bd_addr(remote, label="remote BD_ADDR") or "00:00:00:00:00:00"
     return BubbleBlueConfig(
         psm=0x1001,
-        local_bd_addr=get_local_bd_addr(interface=interface),
-        remote_bd_addr=(remote_bd_addr or DEFAULT_REMOTE_BD_ADDR).upper(),
+        local_bd_addr=local,
+        remote_bd_addr=remote_n,
         node_name=socket.gethostname(),
         hello_interval_s=5,
         neighbor_timeout_s=15,
         ttl_max=10,
         group_key=_load_group_key(),
-        group_members=_load_group_members(),
+        group_members=_load_group_members(local_bd_addr=local),
         replay_window=256,
     )
 
@@ -154,7 +186,7 @@ def format_config(cfg: BubbleBlueConfig) -> str:
             f"- Neighbor timeout (s) : {cfg.neighbor_timeout_s}",
             f"- TTL max              : {cfg.ttl_max}",
             f"- Group key            : {'SET' if cfg.group_key else 'NOT SET'}",
-            f"- Group members        : {len(cfg.group_members)} nodes",
+            f"- Group members        : {', '.join(cfg.group_members) or '(none — use --topology or .env)'}",
             f"- Replay window        : {cfg.replay_window}",
         ]
     )
