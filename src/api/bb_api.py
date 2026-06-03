@@ -3,16 +3,16 @@ from __future__ import annotations
 import subprocess
 import threading
 from collections.abc import Callable
+
 from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
-from src.api.chat_log import ChatLog
 from src.control.hello_manager import HelloManager
-from src.forwarding.forwarder import PacketForwarder
+from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
 from src.transport.l2cap import L2CAPTransport
 
-OnMessageCallback = Callable[[str, str], None]
+LogFn = Callable[[str, bool], None]
 
 
-def _parse_topology(raw: str | frozenset[str] | set[str] | None) -> frozenset[str] | None:
+def parse_topology(raw: str | frozenset[str] | set[str] | None) -> frozenset[str] | None:
     if raw is None:
         return None
     if isinstance(raw, frozenset):
@@ -25,27 +25,26 @@ def _parse_topology(raw: str | frozenset[str] | set[str] | None) -> frozenset[st
 
 class BBNode:
     """
-    High-level BUBBLE-BLUE node API (L2CAP + Hello + PKT_DATA forwarding).
+    BUBBLE-BLUE node: L2CAP + Hello (control) + PKT_DATA (forward).
 
-    ``on_message(sender_bd_addr, text)`` is invoked for locally delivered chat payloads
-    (routing header ``src``, not the L2CAP ingress hop).
+    Configure ``on_message`` and optionally ``on_log`` (stderr-style diagnostics).
+    ``start(topology=...)`` sets the L2CAP allowlist and opens connections to those peers.
     """
 
     on_message: OnMessageCallback | None = None
+    on_log: LogFn | None = None
 
     def __init__(
         self,
         *,
         interface: str = "hci0",
         remote_bd_addr: str | None = None,
-        quiet: bool = True,
-        chat_mode: bool = False,
+        quiet: bool = False,
         setup_pairing_agent: bool = True,
     ) -> None:
         self._interface = interface
         self._remote_bd_addr = remote_bd_addr
-        self._quiet = quiet or chat_mode
-        self._chat_mode = chat_mode
+        self._quiet = quiet
         self._topology: frozenset[str] | None = None
         self._pairing_proc: subprocess.Popen[str] | None = None
 
@@ -55,42 +54,41 @@ class BBNode:
         self._forwarder: PacketForwarder | None = None
         self._started = False
         self._lock = threading.RLock()
+
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
 
     def start(self, topology: str | frozenset[str] | set[str] | None = None) -> None:
-        """Start transport, Hello manager, and connect to topology peers."""
+        if self.on_message is None:
+            raise RuntimeError("set BBNode.on_message before start()")
+
         with self._lock:
             if self._started:
                 return
 
-            self._topology = _parse_topology(topology)
+            self._topology = parse_topology(topology)
             self._cfg = load_config(
                 interface=self._interface,
                 remote_bd_addr=self._remote_bd_addr,
             )
 
-            hello_holder: list[HelloManager | None] = [None]
-            forwarder_holder: list[PacketForwarder | None] = [None]
+            holder: dict[str, HelloManager | PacketForwarder | None] = {
+                "hello": None,
+                "fwd": None,
+            }
 
-            def on_receive(peer_bd_addr: str, data: bytes) -> None:
+            def on_receive(peer: str, data: bytes) -> None:
                 if not data:
                     return
-                pkt_type = data[0]
-                hm = hello_holder[0]
-                fwd = forwarder_holder[0]
-                if pkt_type == PKT_HELLO:
+                if data[0] == PKT_HELLO:
+                    hm = holder["hello"]
                     if hm is not None:
-                        try:
-                            hm.on_receive(peer_bd_addr, data)
-                        except Exception as e:  # noqa: BLE001
-                            if self._chat_mode:
-                                ChatLog.emit(f"[BB] Hello error: {e}", err=True)
-                            elif not self._quiet:
-                                print(f"[BB] Hello rx error from={peer_bd_addr}: {e}", flush=True)
+                        hm.on_receive(peer, data)
                     return
-                if pkt_type == PKT_DATA and fwd is not None:
-                    fwd.handle(peer_bd_addr, data)
+                if data[0] == PKT_DATA:
+                    fwd = holder["fwd"]
+                    if fwd is not None:
+                        fwd.handle(peer, data)
 
             transport = L2CAPTransport(
                 on_receive=on_receive,
@@ -98,38 +96,34 @@ class BBNode:
                 quiet=self._quiet,
                 allowed_peers=self._topology,
             )
-            hello_mgr = HelloManager(self._cfg, transport, quiet=self._quiet)
-            forwarder = PacketForwarder(
+            hello = HelloManager(self._cfg, transport, quiet=self._quiet)
+            fwd = PacketForwarder(
                 self._cfg,
                 transport,
-                hello_mgr,
-                topology=self._topology,
-                on_message=self._on_chat_message,
-                quiet=self._quiet,
+                hello,
+                on_message=self._dispatch_message,
+                on_log=self._dispatch_log if self.on_log else None,
             )
-            hello_holder[0] = hello_mgr
-            forwarder_holder[0] = forwarder
+            holder["hello"] = hello
+            holder["fwd"] = fwd
 
             transport.start()
-            hello_mgr.start()
+            hello.start()
+            self._connect_peers()
 
             self._transport = transport
-            self._hello_mgr = hello_mgr
-            self._forwarder = forwarder
+            self._hello_mgr = hello
+            self._forwarder = fwd
             self._started = True
 
-            if self._topology:
-                self._connect_topology_peers()
-
     def stop(self) -> None:
-        """Stop Hello manager, L2CAP transport, and pairing agent."""
         with self._lock:
             if self._hello_mgr is not None:
                 self._hello_mgr.stop()
-                self._hello_mgr = None
             if self._transport is not None:
                 self._transport.stop()
-                self._transport = None
+            self._hello_mgr = None
+            self._transport = None
             self._forwarder = None
             self._started = False
 
@@ -141,63 +135,71 @@ class BBNode:
             self._pairing_proc = None
 
     def send(self, text: str) -> None:
-        """Send a group message (dst=FF:FF:FF:FF:FF:FF) to all connected L2CAP peers."""
-        self._require_forwarder().broadcast(text)
+        """Broadcast chat message (dst = FF:FF:FF:FF:FF:FF) on all L2CAP links."""
+        self._require_forwarder().send_broadcast(text)
+
+    def send_unicast(self, text: str, dst_bd_addr: str, *, via_peer: str | None = None) -> None:
+        """Send PKT_DATA toward ``dst_bd_addr`` on L2CAP link ``via_peer`` (or first peer)."""
+        fwd = self._require_forwarder()
+        peer = (via_peer or self._pick_l2cap_peer()).upper()
+        fwd.send_unicast(text, dst_bd_addr, l2cap_peer=peer)
 
     def peers(self) -> list[str]:
-        """Active L2CAP peer BD addresses."""
         if self._transport is None:
             return []
         return self._transport.connections()
 
     def is_relay(self) -> bool:
-        """True if this node is a CDS relay (RELAY role)."""
         if self._hello_mgr is None:
             return False
+        self._hello_mgr.refresh_cds_role()
         return self._hello_mgr.is_relay
 
     @property
     def local_bd_addr(self) -> str:
         return self._require_cfg().local_bd_addr
 
-    @property
-    def config(self) -> BubbleBlueConfig:
-        return self._require_cfg()
-
     def _require_cfg(self) -> BubbleBlueConfig:
         if self._cfg is None:
-            raise RuntimeError("BBNode not started; call start() first")
+            raise RuntimeError("call start() first")
         return self._cfg
 
     def _require_forwarder(self) -> PacketForwarder:
         if self._forwarder is None:
-            raise RuntimeError("BBNode not started; call start() first")
+            raise RuntimeError("call start() first")
         return self._forwarder
 
-    def _connect_topology_peers(self) -> None:
-        if self._transport is None or not self._topology:
+    def _pick_l2cap_peer(self) -> str:
+        peers = self.peers()
+        if not peers:
+            raise RuntimeError("no L2CAP peers connected")
+        return peers[0]
+
+    def _connect_peers(self) -> None:
+        if self._transport is None:
             return
         local = self._require_cfg().local_bd_addr.upper()
-        for bd_addr in sorted(self._topology):
-            if bd_addr == local:
+        targets: set[str] = set()
+        if self._topology:
+            targets.update(self._topology)
+        remote = self._require_cfg().remote_bd_addr
+        if remote not in ("00:00:00:00:00:00", local):
+            targets.add(remote.upper())
+        for bd in sorted(targets):
+            if bd == local:
                 continue
             try:
-                self._transport.connect(bd_addr)
+                self._transport.connect(bd)
             except OSError as e:
-                if self._chat_mode:
-                    ChatLog.emit(f"[BB] connect {bd_addr} failed: {e}", err=True)
-                elif not self._quiet:
-                    print(f"[BB] connect to {bd_addr} failed: {e}", flush=True)
+                self._dispatch_log(f"[BB] connect {bd}: {e}", True)
 
-    def _on_chat_message(self, sender_bd_addr: str, text: str) -> None:
-        cb = self.on_message
-        if cb is not None:
-            cb(sender_bd_addr, text)
-            return
-        if self._chat_mode:
-            ChatLog.emit(f"[{sender_bd_addr}] {text}", force=True)
-        else:
-            print(f"[{sender_bd_addr}] {text}", flush=True)
+    def _dispatch_message(self, sender: str, text: str) -> None:
+        assert self.on_message is not None
+        self.on_message(sender, text)
+
+    def _dispatch_log(self, msg: str) -> None:
+        if self.on_log:
+            self.on_log(msg, True)
 
     @staticmethod
     def _setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
@@ -211,7 +213,6 @@ class BBNode:
             )
         except FileNotFoundError:
             return None
-
         assert proc.stdin is not None
         proc.stdin.write(
             "agent NoInputNoOutput\n"

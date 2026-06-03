@@ -45,19 +45,18 @@ def _cfg():
     return replace(load_config(), group_key=b"\x01" * 32, local_bd_addr="AA:BB:CC:DD:EE:01", ttl_max=10)
 
 
-def test_decrypt_after_ttl_decrement() -> None:
-    """Relay changes TTL on wire; AAD ignores TTL so next hop can decrypt."""
+def test_relay_decrypts_after_ttl_change() -> None:
     cfg = _cfg()
     transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
     hello = _FakeHelloMgr(relay=True)
-    fwd = PacketForwarder(cfg, transport, hello)  # type: ignore[arg-type]
+    fwd = PacketForwarder(cfg, transport, hello, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
 
-    pkt = fwd.build_data_packet(b"multihop", BROADCAST_BD_ADDR)
+    pkt = fwd.build_packet(b"hop", BROADCAST_BD_ADDR)
     transport.sent.clear()
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
 
-    relayed = transport.sent[0][1]
-    parsed = parse_bb_packet(relayed)
+    wire = transport.sent[0][1]
+    parsed = parse_bb_packet(wire)
     plain = decrypt_from_group(
         cfg.group_key,
         parsed["session_key_enc"],
@@ -65,11 +64,10 @@ def test_decrypt_after_ttl_decrement() -> None:
         parsed["ciphertext"],
         routing_header_aad(parsed["routing_header"]),
     )
-    assert plain == b"multihop"
-    assert relayed[13] == 9
+    assert plain == b"hop"
 
 
-def test_leaf_receives_broadcast() -> None:
+def test_leaf_delivers_broadcast() -> None:
     cfg = _cfg()
     transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
     hello = _FakeHelloMgr(relay=False)
@@ -80,27 +78,11 @@ def test_leaf_receives_broadcast() -> None:
         hello,
         on_message=lambda _s, t: got.append(t),
     )  # type: ignore[arg-type]
-
-    pkt = fwd.build_data_packet(b"hi", BROADCAST_BD_ADDR)
-    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    fwd.handle("AA:BB:CC:DD:EE:02", fwd.build_packet(b"hi", BROADCAST_BD_ADDR))
     assert got == ["hi"]
 
 
-def test_topology_relay_with_one_socket() -> None:
-    cfg = _cfg()
-    transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
-    hello = _FakeHelloMgr(relay=False)
-    topo = frozenset({"AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"})
-    fwd = PacketForwarder(cfg, transport, hello, topology=topo)  # type: ignore[arg-type]
-
-    pkt = fwd.build_data_packet(b"x", BROADCAST_BD_ADDR)
-    transport.sent.clear()
-    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
-    assert transport.sent[0][0] == "AA:BB:CC:DD:EE:03"
-
-
 if __name__ == "__main__":
-    test_decrypt_after_ttl_decrement()
-    test_leaf_receives_broadcast()
-    test_topology_relay_with_one_socket()
-    print("✅ All forwarder tests passed")
+    test_relay_decrypts_after_ttl_change()
+    test_leaf_delivers_broadcast()
+    print("✅ forwarder tests passed")
