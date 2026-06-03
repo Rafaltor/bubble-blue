@@ -7,6 +7,7 @@ import threading
 import time
 
 from config import PKT_DATA, PKT_HELLO, load_config, print_config
+from src.api.bb_api import BBNode
 from src.control.hello_manager import HelloManager
 from src.forwarding.forwarder import PacketForwarder
 from src.transport.discovery import discover_devices
@@ -178,6 +179,40 @@ def _run_with_transport(
     return 0
 
 
+def run_chat_mode(*, topology: frozenset[str] | None, interface: str) -> int:
+    """Interactive chat using BBNode API."""
+    node = BBNode(interface=interface, quiet=True, setup_pairing_agent=False)
+
+    def on_message(sender_bd_addr: str, text: str) -> None:
+        print(f"[{sender_bd_addr}] {text}", flush=True)
+
+    node.on_message = on_message
+
+    try:
+        node.start(topology)
+        time.sleep(2.0)
+        role = "RELAY" if node.is_relay() else "LEAF"
+        print(f"[chat] local={node.local_bd_addr} CDS role={role}", flush=True)
+        if topology:
+            print(f"[chat] topology: {', '.join(sorted(topology))}", flush=True)
+        print(f"[chat] peers: {', '.join(node.peers()) or '(none yet)'}", flush=True)
+        print("[chat] type a message and press Enter. Ctrl+C to quit.", flush=True)
+
+        for line in sys.stdin:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            try:
+                node.send(line)
+            except (OSError, RuntimeError) as e:
+                print(f"[chat] send failed: {e}", file=sys.stderr, flush=True)
+    except KeyboardInterrupt:
+        print("\n[chat] exiting.", flush=True)
+    finally:
+        node.stop()
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="BUBBLE-BLUE node (L2CAP + Hello + DATA)")
     parser.add_argument(
@@ -230,7 +265,20 @@ def main() -> int:
         default=None,
         help="Routing destination BD_ADDR for --send (final hop, may differ from --peer).",
     )
+    parser.add_argument(
+        "--chat",
+        action="store_true",
+        help="Interactive chat (stdin → send, incoming as [BD_ADDR] message).",
+    )
     args = parser.parse_args()
+
+    topology = parse_topology(args.topology)
+    if args.chat:
+        if args.scan and args.scan > 0:
+            print("[APP] --chat cannot be combined with --scan", file=sys.stderr, flush=True)
+            return 2
+        _pairing_agent = setup_ble_pairing_agent()
+        return run_chat_mode(topology=topology, interface=args.interface)
 
     _pairing_agent = setup_ble_pairing_agent()
 
@@ -268,7 +316,6 @@ def main() -> int:
         else:
             return 0
 
-    topology = parse_topology(args.topology)
     if topology:
         print(f"[APP] topology allowlist: {', '.join(sorted(topology))}", flush=True)
     if selected_peer and topology and selected_peer.upper() not in topology:
