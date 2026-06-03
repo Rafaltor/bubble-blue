@@ -90,12 +90,11 @@ class PacketForwarder:
         hello_mgr: HelloManager,
         *,
         on_message: OnMessageCallback | None = None,
-        on_deliver: OnMessageCallback | None = None,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._hello_mgr = hello_mgr
-        self._on_message = on_message or on_deliver or _default_on_message
+        self._on_message = on_message or _default_on_message
         self._bloom = PacketBloomFilter()
         self._seq_lock = threading.Lock()
         self._tx_seq = 0
@@ -209,6 +208,7 @@ class PacketForwarder:
 
     @staticmethod
     def _should_deliver(dst: str, local: str) -> bool:
+        """Deliver locally for unicast-to-self or group broadcast."""
         return dst == local or dst == BROADCAST_BD_ADDR
 
     @staticmethod
