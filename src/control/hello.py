@@ -15,6 +15,8 @@ from src.security.crypto import AES_KEY_SIZE, AES_NONCE_SIZE
 from src.security.packet import bd_addr_to_bytes, bytes_to_bd_addr
 
 ANON_ID_SIZE = 8
+X25519_PUBLIC_KEY_SIZE = 32
+_PRIVATE_HELLO_VERSION = 0x01
 
 # Public Hello prefix: type | anon_id | seq | ts_ms | n_neighbors
 _HELLO_PUBLIC_PREFIX = struct.Struct("!B8sLQB")
@@ -29,29 +31,69 @@ def compute_anon_id(group_key: bytes, bd_addr: str) -> bytes:
     return digest[:ANON_ID_SIZE]
 
 
-def _pack_private_plaintext(local_bd_addr: str, neighbor_bd_addrs: list[str]) -> bytes:
+def _pack_private_plaintext(
+    local_bd_addr: str,
+    neighbor_bd_addrs: list[str],
+    local_public_key: bytes,
+) -> bytes:
+    """
+    Private Hello plaintext (encrypted under group_key).
+
+    Layout: version (1) | local_bd (6) | n_neighbors (1) | neighbors (6*n) | x25519_pub (32).
+    """
+    if len(local_public_key) != X25519_PUBLIC_KEY_SIZE:
+        raise ValueError(
+            f"local_public_key must be {X25519_PUBLIC_KEY_SIZE} bytes "
+            f"(got {len(local_public_key)})"
+        )
     neighbors = list(neighbor_bd_addrs)
     if len(neighbors) > 255:
         raise ValueError("too many private neighbors (max 255)")
-    out = struct.pack("!6sB", bd_addr_to_bytes(local_bd_addr), len(neighbors))
+    out = struct.pack(
+        "!B6sB",
+        _PRIVATE_HELLO_VERSION,
+        bd_addr_to_bytes(local_bd_addr),
+        len(neighbors),
+    )
     for addr in neighbors:
         out += bd_addr_to_bytes(addr)
+    out += bytes(local_public_key)
     return out
 
 
 def _unpack_private_plaintext(data: bytes) -> dict[str, Any]:
-    if len(data) < 7:
+    """
+    Parse private Hello plaintext (version 0x01).
+
+    Returns bd_addr, neighbor_bd_addrs, and public_key (32-byte X25519).
+    """
+    min_len = 1 + 6 + 1 + X25519_PUBLIC_KEY_SIZE  # version + local + n=0 + pubkey
+    if len(data) < min_len:
         raise ValueError("private hello plaintext too short")
-    local_b, n = struct.unpack_from("!6sB", data, 0)
-    off = 7
-    need = off + int(n) * 6
+
+    version, local_b, n = struct.unpack_from("!B6sB", data, 0)
+    if version != _PRIVATE_HELLO_VERSION:
+        raise ValueError(f"unsupported private hello version: 0x{version:02X} (expected 0x01)")
+
+    off = 1 + 6 + 1
+    need = off + int(n) * 6 + X25519_PUBLIC_KEY_SIZE
     if len(data) < need:
-        raise ValueError("truncated private neighbor list")
+        raise ValueError("truncated private hello plaintext")
+
     neighbors: list[str] = []
     for _ in range(int(n)):
         neighbors.append(bytes_to_bd_addr(data[off : off + 6]))
         off += 6
-    return {"bd_addr": bytes_to_bd_addr(local_b), "neighbor_bd_addrs": neighbors}
+
+    public_key = data[off : off + X25519_PUBLIC_KEY_SIZE]
+    if len(public_key) != X25519_PUBLIC_KEY_SIZE:
+        raise ValueError("truncated X25519 public key in private hello")
+
+    return {
+        "bd_addr": bytes_to_bd_addr(local_b),
+        "neighbor_bd_addrs": neighbors,
+        "public_key": bytes(public_key),
+    }
 
 
 def _encrypt_private(group_key: bytes, plaintext: bytes, aad: bytes) -> bytes:
@@ -76,13 +118,15 @@ def build_hello(
     local_bd_addr: str,
     seq: int,
     known_neighbors: list[str],
+    local_public_key: bytes,
     *,
     ts_ms: int | None = None,
 ) -> bytes:
     """
     Build a BB Hello packet (public cleartext + group-encrypted private part).
 
-    known_neighbors: list of neighbor BD addresses (real addresses; anon IDs derived).
+    ``known_neighbors``: neighbor BD addresses (anon IDs derived for the public part).
+    ``local_public_key``: 32-byte static X25519 public key (included in the private part).
     """
     if not (0 <= int(seq) <= 0xFFFFFFFF):
         raise ValueError("seq must fit in uint32")
@@ -101,8 +145,8 @@ def build_hello(
     for aid in neighbor_anon_ids:
         public += aid
 
-    # Private part — real BD addresses, visible only to group members.
-    priv_plain = _pack_private_plaintext(local_bd_addr, known_neighbors)
+    # Private part — BD addresses + X25519 pubkey; visible only to group members.
+    priv_plain = _pack_private_plaintext(local_bd_addr, known_neighbors, local_public_key)
     private_enc = _encrypt_private(group_key, priv_plain, aad=public)
     if len(private_enc) > 0xFFFF:
         raise ValueError("private hello part too large")
@@ -160,7 +204,8 @@ def parse_hello_private(data: bytes, group_key: bytes) -> dict[str, Any] | None:
     """
     Decrypt Hello private part for group members.
 
-    Returns None if group_key is wrong (not a group member).
+    Returns None if ``group_key`` is wrong (not a group member).
+    On success, includes ``public_key`` (32-byte X25519) from the private plaintext.
     """
     try:
         pub = parse_hello_public(data)
@@ -189,7 +234,8 @@ if __name__ == "__main__":
     assert compute_anon_id(group_key, local) == aid_local
     print("✅ compute_anon_id: OK")
 
-    pkt = build_hello(group_key, local, seq=7, known_neighbors=[n1, n2])
+    local_pubkey = os.urandom(X25519_PUBLIC_KEY_SIZE)
+    pkt = build_hello(group_key, local, seq=7, known_neighbors=[n1, n2], local_public_key=local_pubkey)
     pub = parse_hello_public(pkt)
     assert pub["seq"] == 7
     assert len(pub["neighbor_anon_ids"]) == 2
@@ -200,6 +246,7 @@ if __name__ == "__main__":
     assert priv is not None
     assert priv["bd_addr"] == local.upper()
     assert priv["neighbor_bd_addrs"] == [n1.upper(), n2.upper()]
+    assert priv["public_key"] == local_pubkey
     print("✅ parse_hello_private (member): OK")
 
     assert parse_hello_private(pkt, wrong_key) is None

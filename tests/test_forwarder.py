@@ -11,7 +11,8 @@ if _ROOT not in sys.path:
 
 from config import load_config  # noqa: E402
 from src.forwarding.forwarder import PacketForwarder  # noqa: E402
-from src.security.crypto import decrypt_from_group  # noqa: E402
+from src.security.crypto import decrypt_with_key  # noqa: E402
+from src.security.keys import derive_packet_key  # noqa: E402
 from src.security.packet import (  # noqa: E402
     BROADCAST_BD_ADDR,
     parse_bb_packet,
@@ -19,11 +20,21 @@ from src.security.packet import (  # noqa: E402
 )
 
 
+class _FakeKeyStore:
+    def __init__(self) -> None:
+        self.local_public_key = os.urandom(32)
+
+    def get_pair_key(self, bd_addr: str) -> bytes | None:
+        _ = bd_addr
+        return b"\x02" * 32
+
+
 class _FakeHelloMgr:
     def __init__(self, *, relay: bool) -> None:
         self.is_relay = relay
         self.anon_id = b"\xab" * 8
         self.table = MagicMock()
+        self.key_store = _FakeKeyStore()
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
         _ = verbose
@@ -51,16 +62,16 @@ def test_relay_decrypts_after_ttl_change() -> None:
     hello = _FakeHelloMgr(relay=True)
     fwd = PacketForwarder(cfg, transport, hello, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
 
-    pkt = fwd.build_packet(b"hop", BROADCAST_BD_ADDR)
+    pkt = fwd.build_data_packet(b"hop", BROADCAST_BD_ADDR)
     transport.sent.clear()
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
 
     wire = transport.sent[0][1]
     parsed = parse_bb_packet(wire)
-    plain = decrypt_from_group(
-        cfg.group_key,
-        parsed["session_key_enc"],
-        parsed["nonce"],
+    ph = parsed["parsed_header"]
+    packet_key = derive_packet_key(cfg.group_key, ph["src"], ph["seq"], ph["ts_ms"])
+    plain = decrypt_with_key(
+        packet_key,
         parsed["ciphertext"],
         routing_header_aad(parsed["routing_header"]),
     )
@@ -78,7 +89,7 @@ def test_leaf_delivers_broadcast() -> None:
         hello,
         on_message=lambda _s, t: got.append(t),
     )  # type: ignore[arg-type]
-    fwd.handle("AA:BB:CC:DD:EE:02", fwd.build_packet(b"hi", BROADCAST_BD_ADDR))
+    fwd.handle("AA:BB:CC:DD:EE:02", fwd.build_data_packet(b"hi", BROADCAST_BD_ADDR))
     assert got == ["hi"]
 
 
@@ -95,15 +106,30 @@ def test_dedup_same_packet_twice() -> None:
         on_message=lambda _s, t: got.append(t),
         on_decrypt_fail=lambda s: fails.append(s),
     )  # type: ignore[arg-type]
-    pkt = fwd.build_packet(b"once", BROADCAST_BD_ADDR)
+    pkt = fwd.build_data_packet(b"once", BROADCAST_BD_ADDR)
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
     assert got == ["once"]
     assert fails == []
 
 
+def test_private_message_unknown_peer() -> None:
+    cfg = _cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
+    hello = _FakeHelloMgr(relay=False)
+    hello.key_store.get_pair_key = lambda _bd: None  # type: ignore[method-assign]
+    fwd = PacketForwarder(cfg, transport, hello, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
+
+    try:
+        fwd.build_data_packet(b"secret", "AA:BB:CC:DD:EE:02", private=True)
+        raise AssertionError("expected RuntimeError for unknown pairwise key")
+    except RuntimeError as e:
+        assert "No pairwise key" in str(e)
+
+
 if __name__ == "__main__":
     test_relay_decrypts_after_ttl_change()
     test_leaf_delivers_broadcast()
     test_dedup_same_packet_twice()
+    test_private_message_unknown_peer()
     print("✅ forwarder tests passed")

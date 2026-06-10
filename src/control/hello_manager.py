@@ -8,6 +8,7 @@ from config import BubbleBlueConfig
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
 from src.forwarding.cds import am_i_cds
+from src.security.keys import BBKeyStore
 
 if TYPE_CHECKING:
     from src.transport.l2cap import L2CAPTransport
@@ -26,9 +27,17 @@ class HelloManager:
     - Prints 1-hop / 2-hop tables every hello_interval_s
     """
 
-    def __init__(self, cfg: BubbleBlueConfig, transport: L2CAPTransport, *, quiet: bool = False) -> None:
+    def __init__(
+        self,
+        cfg: BubbleBlueConfig,
+        transport: L2CAPTransport,
+        key_store: BBKeyStore,
+        *,
+        quiet: bool = False,
+    ) -> None:
         self._cfg = cfg
         self._transport = transport
+        self._key_store = key_store
         self._quiet = quiet
         self._group_key = cfg.group_key
         self._local_bd = cfg.local_bd_addr.upper()
@@ -70,6 +79,11 @@ class HelloManager:
         """True when this node should relay PKT_DATA (CDS RELAY role)."""
         return self._is_cds
 
+    @property
+    def key_store(self) -> BBKeyStore:
+        """X25519 identity and per-peer pairwise keys (fed from Hello private parts)."""
+        return self._key_store
+
     def l2cap_peer_anon_ids(self) -> frozenset[bytes]:
         """Anon_ids for active L2CAP peers (transport.connections() only)."""
         return self._l2cap_peer_anon_ids()
@@ -80,6 +94,11 @@ class HelloManager:
         pub = parse_hello_public(data)
         priv = parse_hello_private(data, self._group_key)
         self.table.update_from_hello(pub, priv)
+        if priv is not None:
+            public_key = priv.get("public_key")
+            bd_addr = priv.get("bd_addr")
+            if public_key is not None and bd_addr is not None:
+                self._key_store.register_peer(str(bd_addr), public_key)
         # CDS uses transport.connections() only; table update must not change l2cap_peers.
         self.refresh_cds_role(verbose=not self._quiet)
 
@@ -131,7 +150,13 @@ class HelloManager:
 
         neighbors = self._known_neighbor_bd_addrs()
         seq = self._next_seq()
-        pkt = build_hello(self._group_key, self._local_bd, seq, neighbors)
+        pkt = build_hello(
+            self._group_key,
+            self._local_bd,
+            seq,
+            neighbors,
+            self._key_store.local_public_key,
+        )
 
         for peer in peers:
             try:

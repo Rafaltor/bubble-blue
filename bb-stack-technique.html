@@ -602,8 +602,8 @@
     <h2 style="color: var(--text-muted); font-weight: 400; font-size: 1.3rem;">État d'avancement technique — Stack complet BT Classic</h2>
     <div class="title-meta">
       <div class="meta-item">
-        <span class="meta-label">Boards</span>
-        <span class="meta-value">Rubik Pi 3 × 2 (BT 5.0) + Arduino UNO Q (BT 5.1)</span>
+        <span class="meta-label">Plateformes</span>
+        <span class="meta-value">Linux + BlueZ (Rubik Pi, Arduino UNO Q, …)</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">Transport</span>
@@ -615,7 +615,7 @@
       </div>
       <div class="meta-item">
         <span class="meta-label">Status</span>
-        <span class="meta-value">Phase 1A ✅ Phase 1B complète ✅ (3 boards)</span>
+        <span class="meta-value">Phase 1A ✅ · Phase 1B ✅ · chat multihop validé</span>
       </div>
     </div>
   </div>
@@ -631,11 +631,12 @@
       <div class="section-label">Arborescence repo</div>
       <div class="formula-box" style="line-height: 1.75; font-size: 0.72rem;">
         <code>bubble-blue/</code><br>
-        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— CLI + <code>--chat</code></span><br>
-        ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env secrets</span><br>
+        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— CLI <code>--chat</code> · <code>--topology</code> · <code>--scan</code></span><br>
+        ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env (<code>GROUP_KEY</code>, <code>GROUP_MEMBERS</code>)</span><br>
+        ├── <code>docs/CONFIGURATION.md</code><br>
         ├── <code>tests/</code> <span style="color: var(--text-muted);">— phase1a, forwarder, bb_api</span><br>
         └── <code>src/</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>bb_api.py</code> (<code>BBNode</code>)<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>bb_api.py</code> (<code>BBNode</code>), <code>chat_log.py</code>, <code>chat_input.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code>, <code>discovery.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code><br>
@@ -705,7 +706,9 @@
         <li><strong>Symétrique</strong> : chaque nœud = server + client</li>
         <li><strong>Multi-connexions</strong> threadées (<code>l2cap.py</code>)</li>
         <li><strong>Auto-pairing</strong> via <code>bluetoothctl</code> agent <code>NoInputNoOutput</code></li>
-        <li><strong>Allowlist</strong> <code>--topology</code> (connexions entrantes/sortantes filtrées)</li>
+        <li><strong>Allowlist + dial</strong> : <code>--topology</code>, <code>.env</code> (<code>GROUP_MEMBERS</code>)</li>
+        <li><strong>Reconnexion</strong> : boucle connect + backoff (timeout / host down)</li>
+        <li><strong>Callbacks</strong> : <code>on_peer_connected</code> / <code>on_peer_disconnected</code></li>
       </ul>
       <div class="stat-row" style="margin-bottom: 0;">
         <div class="stat-box blue">
@@ -745,9 +748,10 @@
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 1.5rem; margin-top: 0.35rem;">
       <li class="good">Forward secrecy — session key par paquet</li>
       <li class="good">Authentification — GCM tag</li>
-      <li class="good">Timestamp ±120s (runtime) · replay bitmap 256 (module, intégration à venir)</li>
-      <li class="good">Confidentialité des relais — chiffré avant forwarding</li>
-      <li class="good" style="grid-column: 1 / -1;">Révocation — exclusion du groupe (rotation clé)</li>
+      <li class="good">Timestamp ±120s sur <code>PKT_DATA</code> (<code>validate_timestamp</code>)</li>
+      <li class="warn">Anti-replay 256 — <code>replay.py</code> ✅ · pas encore dans <code>PacketForwarder</code></li>
+      <li class="good">Confidentialité des relais — forward octets chiffrés (opaque)</li>
+      <li class="warn" style="grid-column: 1 / -1;">Révocation groupe — manuelle (rotation <code>GROUP_KEY</code>), pas de protocole dédié</li>
     </ul>
   </div>
 </div>
@@ -827,99 +831,96 @@
 <!-- SLIDE 5: CDS -->
 <div class="slide" id="s5">
   <div class="slide-num">CDS — CONNECTED DOMINATING SET</div>
-  <h2>Élection locale du rôle relais</h2>
-  <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1rem;">Implémenté dans <code>src/forwarding/cds.py</code> — intégré à <code>HelloManager</code></p>
+  <h2>Rôle relais local (<code>am_i_cds</code>)</h2>
+  <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1rem;">Runtime : <code>HelloManager.is_relay</code> → <code>PacketForwarder</code> · Référence offline : <code>compute_cds()</code></p>
 
   <div class="two-col">
     <div>
-      <div class="section-label">Deux vues complémentaires</div>
-      <div class="compare-box plain" style="border-color: var(--accent); margin-bottom: 0.65rem;">
-        <div class="box-title" style="font-size: 0.8rem; color: var(--accent);"><code>compute_cds()</code> — vue globale</div>
-        <ul class="box-list">
-          <li>Graphe anonyme fusionné depuis les Hello publics</li>
-          <li>Arête <strong>u↔v</strong> seulement si <strong>mutuel</strong> (chaque nœud liste l'autre en 1-hop)</li>
-          <li>Algorithme <strong>Greedy CDS</strong> : ordre par degré décroissant, règle <code>_should_join_cds</code></li>
-          <li>Vérifie domination + connectivité du backbone (<code>_verify_cds_properties</code>)</li>
-        </ul>
-      </div>
+      <div class="section-label">Décision runtime — <code>am_i_cds()</code> ✅</div>
       <div class="compare-box plain" style="border-color: var(--green); margin-bottom: 0.65rem;">
-        <div class="box-title" style="font-size: 0.8rem; color: var(--green);"><code>am_i_cds()</code> — décision locale (runtime)</div>
         <ul class="box-list">
-          <li><strong>RELAY</strong> si ∃ paire de voisins L2CAP distincts <em>sans</em> lien direct u↔v</li>
-          <li><strong>LEAF</strong> si &lt; 2 peers L2CAP, ou toutes les paires sont directement liées</li>
-          <li>Recalculé à chaque Hello reçu / changement de connexion</li>
-          <li>Log console : <code>[CDS] I am a relay node</code> / <code>leaf node</code></li>
+          <li><strong>RELAY</strong> si ≥ 2 peers L2CAP <em>et</em> ∃ paire (u, v) sans lien Hello mutuel u↔v</li>
+          <li><strong>LEAF</strong> si &lt; 2 peers, ou mesh local complet (toutes paires liées en Hello)</li>
+          <li>Peers L2CAP = <code>transport.connections()</code> uniquement (pas la table Hello)</li>
+          <li>Adjacence u↔v = listes 1-hop Hello <strong>mutuelles</strong></li>
+          <li>Recalcul à chaque Hello / changement L2CAP · rôle visible en <code>--chat</code> au démarrage</li>
         </ul>
       </div>
-      <div class="section-label">Séparation des sources (point clé)</div>
+      <div class="section-label">Référence offline — <code>compute_cds()</code> (self-tests)</div>
+      <div class="compare-box plain" style="border-color: var(--border); margin-bottom: 0.65rem;">
+        <ul class="box-list">
+          <li>Greedy CDS sur graphe Hello fusionné (anon_ids)</li>
+          <li><strong>Non utilisé</strong> pour décider le forward à l'exécution</li>
+          <li>Sert à valider la théorie / topologies simulées dans <code>cds.py</code></li>
+        </ul>
+      </div>
+      <div class="section-label">Sources de données</div>
       <table class="table-compact">
         <thead>
-          <tr><th>Donnée</th><th>Source</th><th>Usage CDS</th></tr>
+          <tr><th>Donnée</th><th>Source</th><th>Usage</th></tr>
         </thead>
         <tbody>
           <tr>
             <td><strong>Peers L2CAP</strong></td>
             <td><code>transport.connections()</code></td>
-            <td class="cell-good">Qui est physiquement connecté à <em>moi</em></td>
+            <td class="cell-good"><code>am_i_cds</code> — qui est connecté à moi</td>
           </tr>
           <tr>
             <td><strong>Adjacence u↔v</strong></td>
             <td>Hello public (1-hop mutuel)</td>
-            <td class="cell-good">Lien direct entre deux peers L2CAP ?</td>
+            <td class="cell-good">Lien direct entre deux peers ?</td>
           </tr>
           <tr>
-            <td><strong>Table 2-hop Hello</strong></td>
-            <td><code>NeighborTable</code></td>
-            <td class="cell-neutral">Topologie globale / <code>compute_cds</code> uniquement</td>
+            <td><strong>NeighborTable</strong></td>
+            <td>Hello public + private</td>
+            <td class="cell-neutral">Résolution membres · <code>compute_cds</code> simulé</td>
           </tr>
         </tbody>
       </table>
     </div>
     <div>
-      <div class="section-label">Topologies testées (<code>cds.py</code> self-tests)</div>
+      <div class="section-label">Exemples de rôle (logique <code>am_i_cds</code>)</div>
       <table class="table-compact" style="margin-bottom: 0.75rem;">
         <thead>
-          <tr><th>Topologie</th><th>L2CAP local</th><th>Rôle</th></tr>
+          <tr><th>Topologie</th><th>Peers L2CAP locaux</th><th>Rôle</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td><strong>Chaîne A—B—C—D—E</strong></td>
-            <td>B : peers {A, C}</td>
-            <td class="cell-good">B → <strong>RELAY</strong> (A et C pas voisins directs)</td>
+            <td><strong>Chaîne A—B—C</strong></td>
+            <td>B : {A, C} — A↔C pas voisins Hello</td>
+            <td class="cell-good">B → <strong>RELAY</strong></td>
           </tr>
           <tr>
-            <td><strong>Étoile (hub H)</strong></td>
-            <td>H : peers {L1, L2}</td>
-            <td class="cell-good">H → <strong>RELAY</strong> ; feuilles → LEAF</td>
+            <td><strong>Hub central</strong></td>
+            <td>H : {L1, L2} — feuilles non liées entre elles</td>
+            <td class="cell-good">H → <strong>RELAY</strong></td>
           </tr>
           <tr>
-            <td><strong>Triangle complet X—Y—Z</strong></td>
+            <td><strong>Triangle / mesh complet</strong></td>
             <td>3 peers, tous mutuels Hello</td>
-            <td class="cell-good">tous → <strong>LEAF</strong> (mesh local)</td>
+            <td class="cell-good">tous → <strong>LEAF</strong></td>
+          </tr>
+          <tr>
+            <td><strong>2 nœuds seuls</strong></td>
+            <td>1 peer L2CAP</td>
+            <td class="cell-neutral">→ <strong>LEAF</strong></td>
           </tr>
         </tbody>
       </table>
-      <div class="section-label">Règle Greedy (rejoindre le CDS global)</div>
-      <div class="formula-box" style="font-size: 0.65rem; line-height: 1.5; margin-bottom: 0.65rem;">
-        Pour chaque candidat X (non déjà CDS) :<br>
-        1. Au moins <strong>2 voisins</strong> mutuels Hello<br>
-        2. ∃ paire de voisins <strong>(u, v)</strong> non adjacentes entre elles<br>
-        3. Aucun nœud CDS existant ne les relie déjà (pas de pont)<br>
-        → X rejoint le backbone
-      </div>
-      <div class="section-label">Intégration runtime</div>
+      <div class="section-label">Intégration <code>PacketForwarder</code></div>
       <ul class="box-list">
-        <li><code>HelloManager._l2cap_peer_anon_ids()</code> — jamais les voisins appris par Hello seuls</li>
-        <li><code>PacketForwarder</code> — <code>is_relay()</code> via <code>HelloManager.is_relay</code></li>
-        <li class="good"><strong>Hardware 3 boards</strong> (linéaire) : Arduino=<strong>RELAY</strong>, RubikQ+Rubik2=<strong>LEAF</strong></li>
+        <li><code>is_relay</code> → flood TTL vers peers ≠ ingress (octets bruts)</li>
+        <li><code>LEAF</code> → déchiffre si <code>dst</code> = local ou broadcast</li>
+        <li>Déduplication livraison <code>(src, seq)</code></li>
+        <li class="good">Validé multihop sur setup linéaire 3 nœuds (nœud central = RELAY)</li>
       </ul>
     </div>
   </div>
 
   <div class="verdict" style="margin-top: 0.85rem;">
     <div class="verdict-label">Synthèse</div>
-    Le CDS repose sur des <strong>anon_ids</strong> et des listes de voisins Hello — pas besoin de connaître les BD addresses pour décider le rôle.
-    Un nœud en mesh complet (3 boards à portée) reste <strong>LEAF</strong> : seul un relais est nécessaire quand deux peers L2CAP ne se « voient » pas mutuellement en Hello.
+    Pas de BD addresses dans la décision relais — uniquement <strong>anon_ids</strong> Hello + sockets L2CAP.
+    En mesh radio complet (tous se voient en Hello), personne ne relaie : le flood direct suffit.
   </div>
 </div>
 
@@ -938,21 +939,20 @@
         <li>TTL décrémenté à chaque saut (AAD GCM sans TTL)</li>
       </ul>
       <div class="compare-box plain" style="border-color: var(--green);">
-        <div class="box-title" style="font-size: 0.8rem; color: var(--green);">Test hardware — 3 boards (topologie linéaire)</div>
+        <div class="box-title" style="font-size: 0.8rem; color: var(--green);">Exemple labo — 3 nœuds linéaires</div>
         <ul class="box-list">
-          <li class="good"><strong>RubikQ</strong> → envoie <code>PKT_DATA</code></li>
-          <li class="good"><strong>Arduino (RELAY)</strong> → forward</li>
-          <li class="good"><strong>Rubik2</strong> → reçoit et déchiffre ✅</li>
+          <li class="good"><strong>Nœud A</strong> → envoie <code>PKT_DATA</code> broadcast</li>
+          <li class="good"><strong>Nœud B (RELAY)</strong> → forward opaque</li>
+          <li class="good"><strong>Nœud C</strong> → reçoit et déchiffre ✅</li>
         </ul>
       </div>
     </div>
     <div>
-      <div class="section-label">Test non-membre (Arduino hors groupe)</div>
+      <div class="section-label">Test non-membre (relais hors groupe)</div>
       <ul class="box-list" style="margin-bottom: 1rem;">
-        <li>Arduino : <strong>mauvaise clé de groupe</strong> → <code>InvalidTag</code> au déchiffrement</li>
-        <li class="good">Relais quand même les paquets chiffrés en <strong>RELAY</strong> ✅</li>
-        <li class="good">RubikQ ↔ Rubik2 : messages sécurisés, contenu illisible sur Arduino ✅</li>
-        <li>Arduino ne voit que des <strong>octets chiffrés opaques</strong></li>
+        <li>Relais avec <strong>mauvaise clé</strong> → <code>InvalidTag</code> à la livraison (pas au forward)</li>
+        <li class="good">Forward opaque quand même en <strong>RELAY</strong> ✅</li>
+        <li class="good">Membres du groupe : contenu illisible sur le relais non-membre ✅</li>
       </ul>
       <div class="verdict" style="margin-top: 0;">
         <div class="verdict-label">Verdict</div>
@@ -969,27 +969,33 @@
   <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
   <h2>Validation hardware — 2 et 3 boards</h2>
 
-  <div class="section-label">Sortie console — Rubik Pi (2 boards)</div>
+  <div class="section-label">Sortie console — mode <code>--chat</code> (exemple)</div>
   <div class="formula-box" style="margin-bottom: 1rem;">
-<pre style="margin: 0; white-space: pre; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.66rem; color: var(--text);">CDS role: LEAF
-1-hop: [3761aa5042bc7796, ff9404aaa9898fe4]
-2-hop: {3761aa5042bc7796: [ff9404aaa9898fe4]}
-known members (resolved):
-  anon_id=3761aa5042bc7796 bd_addr=9C:B8:B4:9F:2D:75
-  anon_id=ff9404aaa9898fe4 bd_addr=40:D9:5A:8B:69:3F</pre>
+<pre style="margin: 0; white-space: pre; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.66rem; color: var(--text);">local AA:BB:CC:DD:EE:01 · RELAY · 2 peer(s)
+dial: AA:BB:CC:DD:EE:02, AA:BB:CC:DD:EE:03
+peer connecté: AA:BB:CC:DD:EE:02
+> hello
+[AA:BB:CC:DD:EE:02] hello</pre>
   </div>
 
   <div class="two-col">
     <div>
-      <div class="section-label">Tests validés (hardware + unitaires)</div>
+      <div class="section-label">Implémenté ✅</div>
       <ul class="box-list">
-        <li class="good">CDS linéaire 3 boards : <strong>Arduino=RELAY</strong>, RubikQ+Rubik2=<strong>LEAF</strong></li>
-        <li class="good">Forwarding multihop : RubikQ → Arduino → Rubik2 ✅</li>
-        <li class="good">Relais non-membre : forward sans lecture du contenu ✅</li>
-        <li class="good">Chat mode (<code>--chat</code> / <code>BBNode</code>) : groupe 3 boards ✅</li>
-        <li class="good">Chiffrement AES-GCM · rejet intrus · GCM tag · AAD</li>
-        <li class="good">Hello anonymes · résolution anon_id → BD</li>
-        <li class="good">Auto-pairing · timestamp ±120s</li>
+        <li class="good"><code>BBNode</code> + <code>--chat</code> (prompt, notifs peer, dédup messages)</li>
+        <li class="good">Multihop linéaire 3 nœuds (nœud central RELAY)</li>
+        <li class="good">Relais non-membre : forward sans lecture du contenu</li>
+        <li class="good">AES-GCM · AAD sans TTL · rejet mauvaise clé (<code>on_decrypt_fail</code>)</li>
+        <li class="good">Hello anonymes · résolution anon_id → BD (membres)</li>
+        <li class="good">Auto-pairing · config <code>.env</code> générique (<code>docs/CONFIGURATION.md</code>)</li>
+        <li class="good">Tests unitaires : <code>forwarder</code>, <code>bb_api</code>, <code>cds</code>, <code>phase1a</code></li>
+      </ul>
+      <div class="section-label" style="margin-top: 0.75rem;">Pas encore / partiel ⚠️</div>
+      <ul class="box-list">
+        <li class="warn"><code>PKT_ACK</code> — constante seulement</li>
+        <li class="warn">Anti-replay dans le forwarder (module <code>replay.py</code> existe)</li>
+        <li class="warn">Révocation automatique de membre</li>
+        <li class="warn">BLE / Android (phases 2–5)</li>
       </ul>
     </div>
     <div>
@@ -1004,7 +1010,7 @@ known members (resolved):
           <tr><td>Taille message chat (typ.)</td><td class="cell-good">~144 bytes total</td></tr>
           <tr><td>Hello packet size</td><td>73 bytes</td></tr>
           <tr><td>Intervalle Hello</td><td>5 secondes</td></tr>
-          <tr><td>Fenêtre anti-replay</td><td>256 seq/nœud</td></tr>
+          <tr><td>Fenêtre anti-replay</td><td>256 (config) — <span class="cell-warn">non appliquée au runtime</span></td></tr>
           <tr><td>Timestamp tolerance</td><td>±120 secondes</td></tr>
           <tr><td>MTU BT Classic L2CAP</td><td>1021 bytes</td></tr>
         </tbody>
@@ -1025,8 +1031,8 @@ known members (resolved):
       <ul class="phase-items">
         <li class="good">CDS + <code>am_i_cds</code></li>
         <li class="good"><code>PacketForwarder</code></li>
-        <li class="good"><code>BBNode</code> + <code>--chat</code></li>
-        <li class="good">Test 3 boards multihop</li>
+        <li class="good"><code>BBNode</code> + chat + dédup + reconnexion L2CAP</li>
+        <li class="good">Config générique (.env / topology)</li>
       </ul>
     </div>
     <div class="roadmap-item p2">
@@ -1066,10 +1072,10 @@ known members (resolved):
   <div class="verdict" style="margin-top: 1.25rem; border-color: var(--yellow); border-left-color: var(--yellow);">
     <div class="verdict-label" style="color: var(--yellow);">Questions ouvertes</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
-      <li class="good">✅ CDS anonyme · forwarding multihop · relais non-membre</li>
+      <li class="good">✅ CDS local <code>am_i_cds</code> · multihop · relais opaque</li>
+      <li class="warn">❓ Intégrer <code>ReplayFilter</code> dans <code>PacketForwarder</code></li>
+      <li class="warn">❓ Révocation : protocole ou rotation clé manuelle ?</li>
       <li class="warn">❓ Jitter window : BT Classic ou BLE seulement ?</li>
-      <li class="warn">❓ Révocation : rotation clé ou solution C ?</li>
-      <li class="warn">❓ Intégrer replay bitmap 256 dans <code>PacketForwarder</code></li>
     </ul>
   </div>
 </div>

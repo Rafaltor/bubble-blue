@@ -5,6 +5,24 @@ import struct
 import time
 from typing import Any
 
+# =============================================================================
+# BUBBLE-BLUE wire packet (PKT_DATA payload body)
+# =============================================================================
+#
+#   [ routing_header (26 B) | ciphertext (+ 16 B GCM tag) ]
+#
+# routing_header (cleartext, relays may decrement TTL on the wire):
+#   type (1) | src (6) | dst (6) | ttl (1) | seq (4 BE) | ts_ms (8 BE)  = 26 B
+#
+# ciphertext:
+#   AES-256-GCM output from encrypt_with_key() — plaintext + 16-byte tag.
+#   No session_key_enc or nonce on the wire; the per-packet AES key is derived
+#   locally via derive_packet_key() (keys.py) from group_key or a pairwise key.
+#
+# Fixed overhead (excluding plaintext): 26 + 16 = 42 bytes
+# =============================================================================
+
+GCM_TAG_SIZE = 16
 
 # ROUTING HEADER (26 bytes, cleartext)
 # Layout:
@@ -100,7 +118,7 @@ def routing_header_aad(routing_header: bytes) -> bytes:
     return bytes(aad)
 
 
-def parse_routing_header(data: bytes) -> dict:
+def parse_routing_header(data: bytes) -> dict[str, Any]:
     """
     Unpack routing header.
     Returns dict: {type, src, dst, ttl, seq, ts_ms}
@@ -120,74 +138,52 @@ def parse_routing_header(data: bytes) -> dict:
     }
 
 
-def build_bb_packet(
-    routing_header: bytes,
-    session_key_enc: bytes,
-    nonce: bytes,
-    ciphertext: bytes,
-) -> bytes:
+def build_bb_packet(routing_header: bytes, ciphertext: bytes) -> bytes:
     """
-    Assemble complete BB packet.
-    routing_header : 18 bytes
-    session_key_enc: 60 bytes
-    nonce          : 12 bytes
-    ciphertext     : variable (payload + 16-byte tag)
+    Assemble a complete BB packet on the wire.
+
+    Layout: ``routing_header`` (26 B) || ``ciphertext`` (payload + 16 B GCM tag).
     """
     if len(routing_header) != ROUTING_HEADER_SIZE:
         raise ValueError(f"routing_header must be {ROUTING_HEADER_SIZE} bytes (got {len(routing_header)})")
-    if len(session_key_enc) != 60:
-        raise ValueError(f"session_key_enc must be 60 bytes (got {len(session_key_enc)})")
-    if len(nonce) != 12:
-        raise ValueError(f"nonce must be 12 bytes (got {len(nonce)})")
-    if len(ciphertext) < 16:
-        raise ValueError("ciphertext must include a 16-byte GCM tag (len >= 16)")
+    if len(ciphertext) < GCM_TAG_SIZE:
+        raise ValueError(f"ciphertext must include a {GCM_TAG_SIZE}-byte GCM tag (len >= {GCM_TAG_SIZE})")
 
-    # Packet layout: routing_header | session_key_enc | nonce | ciphertext(+tag)
-    return routing_header + session_key_enc + nonce + ciphertext
+    return routing_header + ciphertext
 
 
-def parse_bb_packet(data: bytes) -> dict:
+def parse_bb_packet(data: bytes) -> dict[str, Any]:
     """
-    Parse complete BB packet.
-    Returns dict:
-      routing_header : bytes (18 bytes)
-      parsed_header  : dict (type, src, dst, ttl, seq)
-      session_key_enc: bytes (60 bytes)
-      nonce          : bytes (12 bytes)
-      ciphertext     : bytes (variable)
-    Raises ValueError if packet too short or malformed.
+    Parse a complete BB packet.
+
+    Returns:
+        routing_header: 26-byte cleartext header
+        parsed_header:  dict from ``parse_routing_header``
+        ciphertext:     AES-GCM ciphertext + tag (variable length, tag included)
+
+    Raises ValueError if the packet is too short or malformed.
     """
-    min_len = ROUTING_HEADER_SIZE + 60 + 12 + 16  # must include at least tag
+    min_len = ROUTING_HEADER_SIZE + GCM_TAG_SIZE
     if len(data) < min_len:
         raise ValueError(f"packet too short: {len(data)} bytes (min {min_len})")
 
     routing_header = data[:ROUTING_HEADER_SIZE]
     parsed_header = parse_routing_header(routing_header)
+    ciphertext = data[ROUTING_HEADER_SIZE:]
 
-    off = ROUTING_HEADER_SIZE
-    session_key_enc = data[off : off + 60]
-    off += 60
-    nonce = data[off : off + 12]
-    off += 12
-    ciphertext = data[off:]
-
-    if len(session_key_enc) != 60 or len(nonce) != 12:
-        raise ValueError("malformed packet (truncated security header)")
-    if len(ciphertext) < 16:
+    if len(ciphertext) < GCM_TAG_SIZE:
         raise ValueError("malformed packet (missing GCM tag)")
 
     return {
         "routing_header": routing_header,
         "parsed_header": parsed_header,
-        "session_key_enc": session_key_enc,
-        "nonce": nonce,
         "ciphertext": ciphertext,
     }
 
 
 def packet_overhead() -> int:
-    """Returns fixed overhead in bytes: 26 + 60 + 12 = 98 bytes."""
-    return ROUTING_HEADER_SIZE + 60 + 12
+    """Fixed per-packet overhead: routing header (26 B) + GCM tag (16 B) = 42 B."""
+    return ROUTING_HEADER_SIZE + GCM_TAG_SIZE
 
 
 if __name__ == "__main__":
@@ -205,29 +201,25 @@ if __name__ == "__main__":
     assert validate_timestamp(parsed["ts_ms"], tolerance_s=120) is True
     print("✅ routing header: OK")
 
-    # Timestamp validation self-test: valid, too old, future
     now_ms = time.time_ns() // 1_000_000
     assert validate_timestamp(now_ms, tolerance_s=120) is True
     assert validate_timestamp(now_ms - 121_000, tolerance_s=120) is False
     assert validate_timestamp(now_ms + 121_000, tolerance_s=120) is False
     print("✅ timestamp validation: OK")
 
-    packet = build_bb_packet(
-        rh,
-        session_key_enc=bytes(60),
-        nonce=bytes(12),
-        ciphertext=bytes(32),
-    )
+    ciphertext = bytes(16)  # minimal: empty plaintext + tag placeholder
+    packet = build_bb_packet(rh, ciphertext)
+    assert len(packet) == ROUTING_HEADER_SIZE + len(ciphertext)
     result: dict[str, Any] = parse_bb_packet(packet)
     assert result["parsed_header"]["seq"] == 42
+    assert result["ciphertext"] == ciphertext
+    assert "session_key_enc" not in result
     print("✅ full packet serialization: OK")
 
+    assert packet_overhead() == 42
     print(f"\n📦 Packet structure:")
-    print(f"   Routing header  : {ROUTING_HEADER_SIZE} bytes (always clear)")
-    print(f"   Session key enc : 60 bytes")
-    print(f"   Nonce           : 12 bytes")
-    print(f"   Ciphertext+tag  : payload + 16 bytes")
+    print(f"   Routing header  : {ROUTING_HEADER_SIZE} bytes (cleartext)")
+    print(f"   Ciphertext+tag  : payload + {GCM_TAG_SIZE} bytes")
     print(f"   Fixed overhead  : {packet_overhead()} bytes")
     print(f"   Payload space   : {1021 - packet_overhead()} bytes (BT Classic MTU)")
     print("\n✅ All packet self-tests passed")
-

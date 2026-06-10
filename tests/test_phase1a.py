@@ -13,12 +13,14 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from config import PKT_DATA, load_config  # noqa: E402
-from src.security.crypto import decrypt_from_group, encrypt_for_group  # noqa: E402
+from src.security.crypto import decrypt_with_key, encrypt_with_key  # noqa: E402
+from src.security.keys import derive_packet_key  # noqa: E402
 from src.security.packet import (  # noqa: E402
     build_bb_packet,
     build_routing_header,
     packet_overhead,
     parse_bb_packet,
+    parse_routing_header,
     routing_header_aad,
     validate_timestamp,
 )
@@ -37,40 +39,59 @@ def _usage() -> None:
     )
 
 
+def _build_encrypted_packet(
+    group_key: bytes,
+    routing_header: bytes,
+    message: bytes,
+) -> bytes:
+    hdr = parse_routing_header(routing_header)
+    packet_key = derive_packet_key(
+        group_key,
+        hdr["src"],
+        int(hdr["seq"]),
+        int(hdr["ts_ms"]),
+    )
+    enc = encrypt_with_key(packet_key, message, routing_header_aad(routing_header))
+    return build_bb_packet(routing_header, enc["ciphertext"])
+
+
+def _decrypt_packet(group_key: bytes, data: bytes) -> bytes:
+    parsed = parse_bb_packet(data)
+    hdr = parsed["parsed_header"]
+    packet_key = derive_packet_key(
+        group_key,
+        hdr["src"],
+        int(hdr["seq"]),
+        int(hdr["ts_ms"]),
+    )
+    return decrypt_with_key(
+        packet_key,
+        parsed["ciphertext"],
+        routing_header_aad(parsed["routing_header"]),
+    )
+
+
 def run_server() -> None:
-    # 1. Load config (group_key from env)
     cfg = load_config()
     group_key = cfg.group_key
 
-    # 2. Print "[SERVER] Waiting for encrypted BB packet..."
     print("[SERVER] Waiting for encrypted BB packet...", flush=True)
 
     replay_filter = ReplayFilter()
 
-    # 4. In on_receive:
     def on_receive(peer_bd_addr: str, data: bytes) -> None:
         try:
-            # a. Parse BB packet
             parsed = parse_bb_packet(data)
             rh = parsed["routing_header"]
             hdr = parsed["parsed_header"]
 
-            # b. Print routing info: src, dst, ttl, seq
             print(
                 f"[SERVER] RX routing: src={hdr['src']} dst={hdr['dst']} ttl={hdr['ttl']} seq={hdr['seq']}",
                 flush=True,
             )
 
-            aad = routing_header_aad(rh)
-            plaintext = decrypt_from_group(
-                group_key,
-                parsed["session_key_enc"],
-                parsed["nonce"],
-                parsed["ciphertext"],
-                aad,
-            )
+            plaintext = _decrypt_packet(group_key, data)
 
-            # Post-decryption checks: timestamp + anti-replay
             ts_ms = hdr["ts_ms"]
             if not validate_timestamp(ts_ms):
                 print("❌ REJECTED: packet too old/future", flush=True)
@@ -84,24 +105,18 @@ def run_server() -> None:
 
             print(f"✅ seq={seq} accepted", flush=True)
 
-            # e. Print decrypted message
             try:
                 msg = plaintext.decode("utf-8")
             except UnicodeDecodeError:
                 msg = repr(plaintext)
             print(f"[SERVER] Decrypted message: {msg}", flush=True)
-
-            # f. Print success
             print("✅ Phase 1A SUCCESS: message decrypted and verified", flush=True)
         except InvalidTag:
             print("❌ Decryption FAILED — wrong key or tampered packet", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[SERVER] Error handling packet from {peer_bd_addr}: {e}", flush=True)
 
-    # 3. Create L2CAPTransport with on_receive callback
     transport = L2CAPTransport(on_receive=on_receive)
-
-    # 5. Start transport, wait for Ctrl+C
     transport.start()
     try:
         while True:
@@ -113,43 +128,33 @@ def run_server() -> None:
 
 
 def run_client(peer_bd_addr: str) -> None:
-    # 1. Load config
     cfg = load_config()
     group_key = cfg.group_key
 
-    # 2. Build routing_header
+    ts_ms = time.time_ns() // 1_000_000
     routing_header = build_routing_header(
         PKT_DATA,
         src=cfg.local_bd_addr,
         dst=peer_bd_addr,
         ttl=10,
         seq=1,
+        ts_ms=ts_ms,
     )
 
-    # 3. Message
     message = f"Hello BB from {cfg.node_name} — Phase 1A test".encode("utf-8")
-
-    # 4. Encrypt with encrypt_for_group(cfg.group_key, message, routing_header)
-    result = encrypt_for_group(group_key, message, routing_header_aad(routing_header))
-
-    # 5. Build complete BB packet
-    packet = build_bb_packet(
-        routing_header,
-        session_key_enc=result["session_key_enc"],
-        nonce=result["nonce"],
-        ciphertext=result["ciphertext"],
+    enc = encrypt_with_key(
+        derive_packet_key(group_key, cfg.local_bd_addr, 1, ts_ms),
+        message,
+        routing_header_aad(routing_header),
     )
+    packet = build_bb_packet(routing_header, enc["ciphertext"])
 
-    # 6. Print packet breakdown
     print("📦 Packet breakdown:", flush=True)
     print("   Routing header : 26 bytes (clear)", flush=True)
-    print("   Session key enc: 60 bytes", flush=True)
-    print("   Nonce          : 12 bytes", flush=True)
-    print(f"   Ciphertext+tag : {len(result['ciphertext'])} bytes", flush=True)
+    print(f"   Ciphertext+tag : {len(enc['ciphertext'])} bytes", flush=True)
     print(f"   Fixed overhead : {packet_overhead()} bytes", flush=True)
     print(f"   Total          : {len(packet)} bytes", flush=True)
 
-    # 7. Send via L2CAPTransport
     transport = L2CAPTransport()
     transport.start()
     try:
@@ -163,34 +168,27 @@ def run_client(peer_bd_addr: str) -> None:
     finally:
         transport.stop()
 
-    # 8. Print success
     print(f"✅ Phase 1A: encrypted packet sent to {peer_bd_addr.upper()}", flush=True)
 
 
 def run_intruder(peer_bd_addr: str) -> None:
-    """Send a well-formed BB packet encrypted with a wrong (random) group key."""
     cfg = load_config()
     wrong_key = os.urandom(32)
 
     print("[INTRUDER] Using random group key (not from .env)", flush=True)
 
+    ts_ms = time.time_ns() // 1_000_000
     routing_header = build_routing_header(
         PKT_DATA,
         src=cfg.local_bd_addr,
         dst=peer_bd_addr,
         ttl=10,
         seq=999,
+        ts_ms=ts_ms,
     )
 
     message = "INTRUDER — wrong group key test".encode("utf-8")
-    result = encrypt_for_group(wrong_key, message, routing_header_aad(routing_header))
-
-    packet = build_bb_packet(
-        routing_header,
-        session_key_enc=result["session_key_enc"],
-        nonce=result["nonce"],
-        ciphertext=result["ciphertext"],
-    )
+    packet = _build_encrypted_packet(wrong_key, routing_header, message)
 
     print(f"[INTRUDER] Sending {len(packet)}-byte packet to {peer_bd_addr.upper()}", flush=True)
 
@@ -215,27 +213,21 @@ def run_intruder(peer_bd_addr: str) -> None:
 
 
 def run_replay(peer_bd_addr: str) -> None:
-    """Send the same BB packet twice; server should accept then reject replay."""
     cfg = load_config()
     group_key = cfg.group_key
 
+    ts_ms = time.time_ns() // 1_000_000
     routing_header = build_routing_header(
         PKT_DATA,
         src=cfg.local_bd_addr,
         dst=peer_bd_addr,
         ttl=10,
         seq=42,
+        ts_ms=ts_ms,
     )
 
     message = "REPLAY test — same packet sent twice".encode("utf-8")
-    result = encrypt_for_group(group_key, message, routing_header_aad(routing_header))
-
-    packet = build_bb_packet(
-        routing_header,
-        session_key_enc=result["session_key_enc"],
-        nonce=result["nonce"],
-        ciphertext=result["ciphertext"],
-    )
+    packet = _build_encrypted_packet(group_key, routing_header, message)
 
     print(f"[REPLAY] Sending identical packet twice to {peer_bd_addr.upper()}", flush=True)
     print("[REPLAY] Expect: first accepted, second rejected as replay", flush=True)
@@ -301,4 +293,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
-

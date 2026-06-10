@@ -10,6 +10,7 @@ from collections.abc import Callable
 from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
 from src.control.hello_manager import HelloManager
 from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
+from src.security.keys import BBKeyStore
 from src.transport.l2cap import L2CAPTransport
 
 LogFn = Callable[[str, bool], None]
@@ -64,11 +65,13 @@ class BBNode:
         *,
         interface: str = "hci0",
         remote_bd_addr: str | None = None,
+        key_store: BBKeyStore | None = None,
         quiet: bool = False,
         setup_pairing_agent: bool = True,
     ) -> None:
         self._interface = interface
         self._remote_bd_addr = remote_bd_addr
+        self._key_store = key_store
         self._quiet = quiet
         self._topology: frozenset[str] | None = None
         self._pairing_proc: subprocess.Popen[str] | None = None
@@ -132,7 +135,8 @@ class BBNode:
                 on_peer_connected=self._dispatch_peer_connected,
                 on_peer_disconnected=self._dispatch_peer_disconnected,
             )
-            hello = HelloManager(self._cfg, transport, quiet=self._quiet)
+            key_store = self._key_store or BBKeyStore()
+            hello = HelloManager(self._cfg, transport, key_store, quiet=self._quiet)
             fwd = PacketForwarder(
                 self._cfg,
                 transport,
@@ -189,11 +193,18 @@ class BBNode:
         """Broadcast chat message (dst = FF:FF:FF:FF:FF:FF) on all L2CAP links."""
         self._require_forwarder().send_broadcast(text)
 
-    def send_unicast(self, text: str, dst_bd_addr: str, *, via_peer: str | None = None) -> None:
+    def send_unicast(
+        self,
+        text: str,
+        dst_bd_addr: str,
+        *,
+        via_peer: str | None = None,
+        private: bool = False,
+    ) -> None:
         """Send PKT_DATA toward ``dst_bd_addr`` on L2CAP link ``via_peer`` (or first peer)."""
         fwd = self._require_forwarder()
         peer = (via_peer or self._pick_l2cap_peer()).upper()
-        fwd.send_unicast(text, dst_bd_addr, l2cap_peer=peer)
+        fwd.send_unicast(text, dst_bd_addr, l2cap_peer=peer, private=private)
 
     def peers(self) -> list[str]:
         if self._transport is None:

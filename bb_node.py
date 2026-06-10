@@ -10,6 +10,7 @@ from config import load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
+from src.security.keys import BBKeyStore
 from src.transport.discovery import discover_devices
 
 
@@ -40,10 +41,15 @@ def run_chat(
     topology: frozenset[str] | None,
     interface: str,
     peer: str | None = None,
+    *,
+    private: bool = False,
+    dst: str | None = None,
 ) -> int:
+    key_store = BBKeyStore()
     node = BBNode(
         interface=interface,
         remote_bd_addr=peer,
+        key_store=key_store,
         quiet=True,
         setup_pairing_agent=False,
     )
@@ -83,7 +89,17 @@ def run_chat(
                     ChatLog.interrupt("aucun peer connecté — message non envoyé", err=True)
                     continue
                 try:
-                    node.send(line)
+                    if private:
+                        target = (dst or peer or "").upper()
+                        if not target or target == "00:00:00:00:00:00":
+                            ChatLog.interrupt(
+                                "message privé — préciser --peer ou --dst",
+                                err=True,
+                            )
+                            continue
+                        node.send_unicast(line, target, via_peer=peer, private=True)
+                    else:
+                        node.send(line)
                 except (OSError, RuntimeError) as e:
                     ChatLog.interrupt(str(e), err=True)
     except KeyboardInterrupt:
@@ -97,9 +113,11 @@ def run_listen(args: argparse.Namespace, topology: frozenset[str] | None) -> int
     verbose = not (topology or args.peer or args.send)
     setup_ble_pairing_agent(quiet=not verbose)
 
+    key_store = BBKeyStore()
     node = BBNode(
         interface=args.interface,
         remote_bd_addr=args.peer,
+        key_store=key_store,
         quiet=not verbose,
         setup_pairing_agent=False,
     )
@@ -114,7 +132,7 @@ def run_listen(args: argparse.Namespace, topology: frozenset[str] | None) -> int
         if not dst or dst == "00:00:00:00:00:00":
             print("[APP] --send needs --dst or --peer", file=sys.stderr)
             return 2
-        node.send_unicast(args.send, dst, via_peer=args.peer)
+        node.send_unicast(args.send, dst, via_peer=args.peer, private=args.private)
         print("[APP] sent, Ctrl+C to stop", flush=True)
 
     try:
@@ -144,6 +162,11 @@ def main() -> int:
     )
     parser.add_argument("--send", default=None)
     parser.add_argument("--dst", default=None)
+    parser.add_argument(
+        "--private",
+        action="store_true",
+        help="Send as private (pairwise-encrypted) message",
+    )
     parser.add_argument("--chat", action="store_true")
     args = parser.parse_args()
 
@@ -154,7 +177,13 @@ def main() -> int:
         if args.scan:
             print("[APP] --chat incompatible with --scan", file=sys.stderr)
             return 2
-        return run_chat(topology, args.interface, args.peer)
+        return run_chat(
+            topology,
+            args.interface,
+            args.peer,
+            private=args.private,
+            dst=args.dst,
+        )
 
     if args.scan and args.scan > 0:
         devices = discover_devices(timeout_s=args.scan)

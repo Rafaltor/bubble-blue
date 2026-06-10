@@ -13,6 +13,9 @@ AES_TAG_SIZE = 16      # bytes (GCM tag size)
 SESSION_KEY_SIZE = 32  # bytes (AES-256 session key)
 ENC_SESSION_KEY_SIZE = 60  # nonce(12) + ciphertext(32) + tag(16)
 
+# Per-packet keys from derive_packet_key() are unique — fixed zero nonce is safe.
+_ZERO_NONCE = bytes(AES_NONCE_SIZE)
+
 
 def generate_session_key() -> bytes:
     """Generate a random 32-byte session key using os.urandom."""
@@ -119,6 +122,39 @@ def decrypt(session_key: bytes, nonce: bytes, ciphertext_with_tag: bytes, aad: b
     return decrypt_payload(session_key, nonce, ciphertext_with_tag, aad)
 
 
+def encrypt_with_key(packet_key: bytes, plaintext: bytes, aad: bytes) -> dict[str, bytes]:
+    """
+    Encrypt payload with a per-packet AES-256-GCM key (derived externally).
+
+    Uses a fixed zero nonce — safe because ``packet_key`` is unique per packet
+    (``derive_packet_key()`` mixes seq + ts_ms).
+
+    Returns ``{"ciphertext": bytes}`` (ciphertext + 16-byte GCM tag; no nonce on wire).
+    """
+    if len(packet_key) != AES_KEY_SIZE:
+        raise ValueError(f"packet_key must be {AES_KEY_SIZE} bytes (got {len(packet_key)})")
+
+    aesgcm = AESGCM(packet_key)
+    ciphertext_with_tag = aesgcm.encrypt(_ZERO_NONCE, plaintext, aad)
+    return {"ciphertext": ciphertext_with_tag}
+
+
+def decrypt_with_key(packet_key: bytes, ciphertext: bytes, aad: bytes) -> bytes:
+    """
+    Decrypt and verify payload encrypted with ``encrypt_with_key``.
+
+    Raises ``InvalidTag`` if the key is wrong or the packet was tampered.
+    """
+    if len(packet_key) != AES_KEY_SIZE:
+        raise ValueError(f"packet_key must be {AES_KEY_SIZE} bytes (got {len(packet_key)})")
+    if len(ciphertext) < AES_TAG_SIZE:
+        raise ValueError("ciphertext is too short (missing tag)")
+
+    aesgcm = AESGCM(packet_key)
+    return aesgcm.decrypt(_ZERO_NONCE, ciphertext, aad)
+
+
+# Deprecated: session-key wrapping — migrate to encrypt_with_key + derive_packet_key (keys.py).
 def encrypt_for_group(group_key: bytes, plaintext: bytes, aad: bytes) -> dict:
     """
     Full BB encryption (Solution B — shared group key).
@@ -149,6 +185,7 @@ def encrypt_for_group(group_key: bytes, plaintext: bytes, aad: bytes) -> dict:
     }
 
 
+# Deprecated: session-key wrapping — migrate to decrypt_with_key + derive_packet_key (keys.py).
 def decrypt_from_group(
     group_key: bytes,
     session_key_enc: bytes,
@@ -179,7 +216,38 @@ if __name__ == "__main__":
     message = b"Hello BB Phase 1A"
     aad = b"routing_header_placeholder"
 
-    # Test encrypt/decrypt
+    # New API: per-packet key passed in (normally from derive_packet_key).
+    packet_key = os.urandom(32)
+    enc = encrypt_with_key(packet_key, message, aad)
+    assert decrypt_with_key(packet_key, enc["ciphertext"], aad) == message
+    print("✅ encrypt_with_key / decrypt_with_key: OK")
+
+    try:
+        decrypt_with_key(os.urandom(32), enc["ciphertext"], aad)
+        print("❌ wrong packet key should have failed!")
+    except InvalidTag:
+        print("✅ wrong packet key rejected: OK")
+
+    tampered = bytearray(enc["ciphertext"])
+    tampered[0] ^= 0xFF
+    try:
+        decrypt_with_key(packet_key, bytes(tampered), aad)
+        print("❌ tampered payload should have failed!")
+    except InvalidTag:
+        print("✅ tampered payload rejected: OK")
+
+    try:
+        decrypt_with_key(packet_key, enc["ciphertext"], b"wrong_routing_header")
+        print("❌ tampered AAD should have failed!")
+    except InvalidTag:
+        print("✅ tampered routing header rejected: OK")
+
+    print(f"\n📦 New wire overhead (no session key / nonce): ciphertext+tag only")
+    print(f"   ciphertext+tag  : {len(enc['ciphertext'])} bytes")
+    print(f"   message         : {len(message)} bytes")
+    print(f"   tag overhead    : 16 bytes")
+
+    # Deprecated API still works (migration compat).
     result: dict[str, Any] = encrypt_for_group(group_key, message, aad)
     recovered = decrypt_from_group(
         group_key,
@@ -189,55 +257,7 @@ if __name__ == "__main__":
         aad,
     )
     assert recovered == message
-    print("✅ encrypt/decrypt: OK")
+    print("✅ deprecated encrypt_for_group / decrypt_from_group: OK")
 
-    # Test wrong key is rejected
-    wrong_key = os.urandom(32)
-    try:
-        decrypt_from_group(
-            wrong_key,
-            result["session_key_enc"],
-            result["nonce"],
-            result["ciphertext"],
-            aad,
-        )
-        print("❌ wrong key should have failed!")
-    except Exception:
-        print("✅ wrong group key rejected: OK")
-
-    # Test tampered payload is rejected
-    tampered = bytearray(result["ciphertext"])
-    tampered[0] ^= 0xFF
-    try:
-        decrypt_from_group(
-            group_key,
-            result["session_key_enc"],
-            result["nonce"],
-            bytes(tampered),
-            aad,
-        )
-        print("❌ tampered payload should have failed!")
-    except Exception:
-        print("✅ tampered payload rejected: OK")
-
-    # Test tampered AAD is rejected
-    try:
-        decrypt_from_group(
-            group_key,
-            result["session_key_enc"],
-            result["nonce"],
-            result["ciphertext"],
-            b"wrong_routing_header",
-        )
-        print("❌ tampered AAD should have failed!")
-    except Exception:
-        print("✅ tampered routing header rejected: OK")
-
-    print(f"\n📦 Overhead analysis:")
-    print(f"   session_key_enc : {len(result['session_key_enc'])} bytes")
-    print(f"   nonce           : {len(result['nonce'])} bytes")
-    print(f"   ciphertext+tag  : {len(result['ciphertext'])} bytes")
-    print(f"   message         : {len(message)} bytes")
-    print(f"   total overhead  : {len(result['session_key_enc']) + len(result['nonce']) + 16} bytes")
     print("\n✅ All crypto self-tests passed")
 
