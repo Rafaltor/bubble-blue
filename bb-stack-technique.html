@@ -503,6 +503,109 @@
   }
   .formula-box code { font-size: 0.66rem; color: var(--accent); }
 
+  /* CRYPTO DIAGRAM SLIDE */
+  .slide.crypto-slide { padding: 2rem 3rem; }
+  .slide.crypto-slide h2 { font-size: 1.55rem; margin-bottom: 0.65rem; }
+  .slide.crypto-slide h3 { margin-bottom: 0.85rem; }
+
+  .crypto-dual-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .crypto-diagram-panel {
+    background: linear-gradient(180deg, #0f1729 0%, #111827 100%);
+    border: 1px solid #2a3548;
+    border-radius: 10px;
+    padding: 0.75rem 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-height: 0;
+  }
+
+  .crypto-diagram-panel.group { border-top: 3px solid #3b82f6; }
+  .crypto-diagram-panel.private { border-top: 3px solid #eab308; }
+
+  .crypto-diagram-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid #2a3548;
+  }
+  .crypto-diagram-panel.group .crypto-diagram-title { color: #93c5fd; }
+  .crypto-diagram-panel.private .crypto-diagram-title { color: #fcd34d; }
+
+  .crypto-diagram-panel svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    flex-shrink: 0;
+  }
+
+  .crypto-anno-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    margin: 0;
+    padding: 0;
+  }
+
+  .crypto-anno-list li {
+    font-family: 'Consolas', 'IBM Plex Mono', monospace;
+    font-size: 0.56rem;
+    color: #94a3b8;
+    line-height: 1.4;
+    padding-left: 0.6rem;
+    position: relative;
+  }
+
+  .crypto-anno-list li::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    color: #3b82f6;
+    font-size: 0.5rem;
+    top: 0.15rem;
+  }
+  .crypto-diagram-panel.private .crypto-anno-list li::before { color: #eab308; }
+
+  .crypto-anno-list li strong,
+  .crypto-anno-list code {
+    color: #e2e8f0;
+    font-weight: 500;
+  }
+
+  .crypto-compare-table {
+    margin-bottom: 0;
+    font-size: 0.67rem;
+  }
+  .crypto-compare-table th {
+    background: #111827;
+    color: #93c5fd;
+    border-color: #2a3548;
+    padding: 0.4rem 0.55rem;
+  }
+  .crypto-compare-table td {
+    padding: 0.38rem 0.55rem;
+    vertical-align: middle;
+  }
+  .crypto-compare-table td:first-child {
+    color: var(--text-muted);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .crypto-compare-table code {
+    font-family: 'Consolas', 'IBM Plex Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--accent);
+  }
+
   /* UNICAST CALC */
   .calc-row {
     display: flex;
@@ -615,7 +718,7 @@
       </div>
       <div class="meta-item">
         <span class="meta-label">Status</span>
-        <span class="meta-value">Phase 1A ✅ · Phase 1B ✅ · chat multihop validé</span>
+        <span class="meta-value">Phase 1A ✅ · Phase 1B ✅ · HKDF + multihop validé</span>
       </div>
     </div>
   </div>
@@ -638,7 +741,7 @@
         └── <code>src/</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>bb_api.py</code> (<code>BBNode</code>), <code>chat_log.py</code>, <code>chat_input.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code>, <code>discovery.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>keys.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code><br>
         &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → <code>cds.py</code>, <code>forwarder.py</code>
       </div>
@@ -660,7 +763,7 @@
         </div>
         <div class="arch-layer">
           <span class="arch-layer-name">Security</span>
-          <span class="arch-layer-tech"><code>crypto.py</code> + <code>replay.py</code></span>
+          <span class="arch-layer-tech"><code>keys.py</code> (HKDF + X25519) · <code>crypto.py</code> · <code>replay.py</code></span>
         </div>
         <div class="arch-layer">
           <span class="arch-layer-name">Packet Format</span>
@@ -687,7 +790,7 @@
       <div class="box-title" style="font-size: 0.85rem;"><code>PKT_DATA</code></div>
       <ul class="box-list">
         <li class="good">→ <code>PacketForwarder</code> (RELAY : forward brut · LEAF : livrer)</li>
-        <li class="good">→ <code>crypto</code> si destinataire (AAD sans TTL)</li>
+        <li class="good">→ <code>derive_packet_key</code> + decrypt si destinataire (AAD sans TTL)</li>
         <li class="good">→ <code>bb_node</code> / callback <code>on_message</code></li>
       </ul>
     </div>
@@ -697,67 +800,230 @@
 <!-- SLIDE 3: TRANSPORT & SÉCURITÉ -->
 <div class="slide" id="s3">
   <div class="slide-num">TRANSPORT &amp; SÉCURITÉ</div>
-  <h2>BT Classic L2CAP + AES-256-GCM</h2>
+  <h2>BT Classic L2CAP + dérivation clé par paquet</h2>
 
   <div class="two-col">
     <div>
       <div class="section-label">Transport L2CAP</div>
-      <ul class="box-list" style="margin-bottom: 1.25rem;">
+      <ul class="box-list" style="margin-bottom: 1rem;">
         <li><strong>Symétrique</strong> : chaque nœud = server + client</li>
         <li><strong>Multi-connexions</strong> threadées (<code>l2cap.py</code>)</li>
         <li><strong>Auto-pairing</strong> via <code>bluetoothctl</code> agent <code>NoInputNoOutput</code></li>
-        <li><strong>Allowlist + dial</strong> : <code>--topology</code>, <code>.env</code> (<code>GROUP_MEMBERS</code>)</li>
-        <li><strong>Reconnexion</strong> : boucle connect + backoff (timeout / host down)</li>
-        <li><strong>Callbacks</strong> : <code>on_peer_connected</code> / <code>on_peer_disconnected</code></li>
+        <li><strong>Allowlist</strong> <code>--topology</code> · reconnexion avec backoff</li>
       </ul>
-      <div class="stat-row" style="margin-bottom: 0;">
-        <div class="stat-box blue">
-          <span class="stat-label">PSM</span>
-          <span class="stat-value" style="font-size: 1.1rem;">0x1001</span>
-          <span class="stat-context"><code>config.py</code></span>
-        </div>
-        <div class="stat-box green">
-          <span class="stat-label">MTU</span>
-          <span class="stat-value" style="font-size: 1.1rem;">1021 B</span>
-          <span class="stat-context">BT Classic L2CAP</span>
-        </div>
+      <div class="section-label">Deux modes de chiffrement (<code>keys.py</code>)</div>
+      <div class="compare-box plain" style="border-color: var(--accent); margin-bottom: 0.5rem; padding: 0.85rem;">
+        <div class="box-title" style="font-size: 0.75rem;">Groupe — broadcast / chat (<code>FF:FF:…</code>)</div>
+        <ul class="box-list">
+          <li>Base : <code>group_key</code> (PSK <code>.env</code>)</li>
+          <li><code>packet_key = HKDF(group_key, info=src‖seq‖ts)</code></li>
+        </ul>
+      </div>
+      <div class="compare-box plain" style="border-color: var(--yellow); padding: 0.85rem;">
+        <div class="box-title" style="font-size: 0.75rem;">Privé — <code>--private</code> unicast</div>
+        <ul class="box-list">
+          <li>Base : clé pairwise ECDH X25519 (jamais sur le fil)</li>
+          <li>Pubkeys échangées via Hello private (membres seulement)</li>
+          <li>Même <code>derive_packet_key(base, src, seq, ts)</code></li>
+        </ul>
       </div>
     </div>
     <div>
-      <div class="section-label">Sécurité AES-256-GCM — Solution B</div>
+      <div class="section-label">Format paquet <code>PKT_DATA</code> (nouveau — ex-Solution B retirée du fil)</div>
       <table class="table-compact">
         <thead>
           <tr><th>Champ</th><th>Taille</th><th>Description</th></tr>
         </thead>
         <tbody>
           <tr><td>Routing header</td><td>26 B</td><td class="cell-neutral">Clair — src, dst, TTL, seq, ts</td></tr>
-          <tr><td>Session key enc</td><td>60 B</td><td class="cell-warn">Chiffré clé groupe</td></tr>
-          <tr><td>Nonce</td><td>12 B</td><td class="cell-neutral">Aléatoire par paquet</td></tr>
-          <tr><td>Payload</td><td>variable</td><td class="cell-warn">Chiffré session key</td></tr>
-          <tr><td>GCM Tag</td><td>16 B</td><td class="cell-good">Intégrité + auth</td></tr>
-          <tr style="background: rgba(0, 82, 204, 0.06);"><td><strong>Overhead fixe</strong></td><td><strong>98 B</strong></td><td>26 + 60 + 12</td></tr>
-          <tr style="background: rgba(30, 126, 52, 0.08);"><td><strong>Payload dispo</strong></td><td class="cell-good"><strong>923 B</strong></td><td>MTU 1021 − 98</td></tr>
-          <tr><td>AAD multihop</td><td colspan="2" class="cell-good"><code>routing_header_aad()</code> — TTL forcé à 0 (relai sans casser GCM)</td></tr>
+          <tr><td>Ciphertext + GCM tag</td><td>var + 16 B</td><td class="cell-warn">AES-256-GCM (<code>encrypt_with_key</code>)</td></tr>
+          <tr style="background: rgba(0, 82, 204, 0.06);"><td><strong>Overhead fixe</strong></td><td><strong>42 B</strong></td><td>26 + 16 (plus de session_key_enc / nonce fil)</td></tr>
+          <tr style="background: rgba(30, 126, 52, 0.08);"><td><strong>Payload dispo</strong></td><td class="cell-good"><strong>979 B</strong></td><td>MTU 1021 − 42</td></tr>
+          <tr><td>Clé dérivée</td><td colspan="2" class="cell-neutral">Nonce GCM = 0 — OK car <code>packet_key</code> unique par (base, src, seq, ts)</td></tr>
+          <tr><td>AAD multihop</td><td colspan="2" class="cell-good"><code>routing_header_aad()</code> — TTL = 0 dans l'AAD</td></tr>
         </tbody>
       </table>
+      <div class="formula-box" style="font-size: 0.62rem; margin-top: 0.65rem; margin-bottom: 0;">
+        <code>derive_packet_key</code> : HKDF-SHA256(base_key, info = BD src (6 B) ‖ seq (BE) ‖ ts_ms (BE))
+      </div>
     </div>
   </div>
 
   <div class="verdict" style="margin-top: 1rem;">
-    <div class="verdict-label">Propriétés de sécurité</div>
+    <div class="verdict-label">Audit sécurité — état actuel</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem 1.5rem; margin-top: 0.35rem;">
-      <li class="good">Forward secrecy — session key par paquet</li>
-      <li class="good">Authentification — GCM tag</li>
-      <li class="good">Timestamp ±120s sur <code>PKT_DATA</code> (<code>validate_timestamp</code>)</li>
-      <li class="warn">Anti-replay 256 — <code>replay.py</code> ✅ · pas encore dans <code>PacketForwarder</code></li>
-      <li class="good">Confidentialité des relais — forward octets chiffrés (opaque)</li>
-      <li class="warn" style="grid-column: 1 / -1;">Révocation groupe — manuelle (rotation <code>GROUP_KEY</code>), pas de protocole dédié</li>
+      <li class="good">Clé unique par paquet (HKDF) — relais voient octets opaques</li>
+      <li class="good">Authentification GCM + AAD header (sauf TTL mutable)</li>
+      <li class="good">Timestamp ±120s dans <code>PacketForwarder</code></li>
+      <li class="good">Pairwise X25519 pour messages privés (<code>BBKeyStore</code>)</li>
+      <li class="good">Identité X25519 stable via <code>from_group_key</code> (HKDF PSK + BD addr)</li>
+      <li class="warn" style="grid-column: 1 / -1;">Révocation groupe — rotation manuelle <code>GROUP_KEY</code> · pas de <code>PKT_ACK</code></li>
     </ul>
   </div>
 </div>
 
-<!-- SLIDE 4: HELLO MESSAGES -->
-<div class="slide" id="s4">
+<!-- SLIDE 4: MODÈLE CRYPTOGRAPHIQUE -->
+<div class="slide crypto-slide" id="s4">
+  <div class="slide-num">03.5 — MODÈLE CRYPTOGRAPHIQUE</div>
+  <h2>Modèle Cryptographique — Groupe &amp; Privé</h2>
+  <h3>Même format paquet (42 B overhead) · deux bases de dérivation distinctes</h3>
+
+  <div class="crypto-dual-grid">
+    <!-- LEFT: Groupe -->
+    <div class="crypto-diagram-panel group">
+      <div class="crypto-diagram-title">Message de Groupe</div>
+      <svg viewBox="0 0 420 168" xmlns="http://www.w3.org/2000/svg" aria-label="Diagramme message de groupe">
+        <defs>
+          <marker id="arr-g" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#60a5fa"/>
+          </marker>
+          <linearGradient id="node-g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#1e3a5f"/>
+            <stop offset="100%" stop-color="#172554"/>
+          </linearGradient>
+          <linearGradient id="box-g" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#1d4ed8"/>
+            <stop offset="100%" stop-color="#2563eb"/>
+          </linearGradient>
+        </defs>
+        <!-- Node A -->
+        <circle cx="36" cy="84" r="22" fill="url(#node-g)" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="36" y="88" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="13" font-weight="700">A</text>
+        <!-- HKDF encrypt -->
+        <rect x="78" y="58" width="72" height="52" rx="6" fill="url(#box-g)" stroke="#60a5fa" stroke-width="1"/>
+        <text x="114" y="78" text-anchor="middle" fill="#dbeafe" font-family="Consolas,monospace" font-size="8.5" font-weight="600">HKDF</text>
+        <text x="114" y="92" text-anchor="middle" fill="#bfdbfe" font-family="Consolas,monospace" font-size="7">group_key</text>
+        <text x="114" y="103" text-anchor="middle" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="6.5">+ src‖seq‖ts</text>
+        <!-- Packet -->
+        <rect x="172" y="62" width="54" height="44" rx="5" fill="#0f172a" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4 2"/>
+        <text x="199" y="82" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="600">📦</text>
+        <text x="199" y="97" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="7">42 B OH</text>
+        <!-- Relay R -->
+        <circle cx="278" cy="84" r="24" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="278" y="80" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="11" font-weight="700">R</text>
+        <text x="278" y="94" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">relais</text>
+        <!-- Nodes B & C -->
+        <circle cx="372" cy="52" r="20" fill="url(#node-g)" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="372" y="56" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="700">B</text>
+        <circle cx="372" cy="116" r="20" fill="url(#node-g)" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="372" y="120" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="700">C</text>
+        <!-- Arrows -->
+        <line x1="58" y1="84" x2="76" y2="84" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="150" y1="84" x2="170" y2="84" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="226" y1="84" x2="252" y2="84" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="302" y1="74" x2="350" y2="56" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="302" y1="94" x2="350" y2="112" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <!-- Relay label -->
+        <rect x="238" y="128" width="144" height="22" rx="4" fill="#1e293b" stroke="#475569"/>
+        <text x="310" y="142" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="7.5" font-weight="600">forward opaque — pas de dérivation</text>
+        <!-- Broadcast dst -->
+        <text x="199" y="48" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="7">dst = FF:FF:FF:FF:FF:FF</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li><strong>base_key</strong> = <code>group_key</code> (partagée)</li>
+        <li><code>packet_key</code> = HKDF(<code>group_key</code>, src ‖ seq ‖ ts_ms)</li>
+        <li><strong>overhead</strong> = 42 B</li>
+        <li>Relais : forward opaque — pas de dérivation</li>
+      </ul>
+    </div>
+
+    <!-- RIGHT: Privé -->
+    <div class="crypto-diagram-panel private">
+      <div class="crypto-diagram-title">Message Privé</div>
+      <svg viewBox="0 0 420 168" xmlns="http://www.w3.org/2000/svg" aria-label="Diagramme message privé">
+        <defs>
+          <marker id="arr-p" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#fbbf24"/>
+          </marker>
+          <linearGradient id="node-p" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#422006"/>
+            <stop offset="100%" stop-color="#1c1917"/>
+          </linearGradient>
+          <linearGradient id="box-p" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#b45309"/>
+            <stop offset="100%" stop-color="#d97706"/>
+          </linearGradient>
+        </defs>
+        <!-- Node A -->
+        <circle cx="36" cy="84" r="22" fill="url(#node-p)" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="36" y="88" text-anchor="middle" fill="#fef3c7" font-family="IBM Plex Sans,sans-serif" font-size="13" font-weight="700">A</text>
+        <!-- ECDH + HKDF -->
+        <rect x="72" y="54" width="84" height="60" rx="6" fill="url(#box-p)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="114" y="72" text-anchor="middle" fill="#fef9c3" font-family="Consolas,monospace" font-size="8" font-weight="600">ECDH X25519</text>
+        <text x="114" y="86" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="7">+ HKDF</text>
+        <text x="114" y="100" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="6.5">K_pair → packet_key</text>
+        <!-- Packet -->
+        <rect x="178" y="62" width="54" height="44" rx="5" fill="#0f172a" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4 2"/>
+        <text x="205" y="82" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="600">📦</text>
+        <text x="205" y="97" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="7">42 B OH</text>
+        <!-- Relay C (cannot read) -->
+        <circle cx="278" cy="84" r="24" fill="#1e293b" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="278" y="80" text-anchor="middle" fill="#fca5a5" font-family="IBM Plex Sans,sans-serif" font-size="11" font-weight="700">C</text>
+        <text x="278" y="94" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">relais</text>
+        <text x="278" y="118" text-anchor="middle" fill="#f87171" font-family="IBM Plex Sans,sans-serif" font-size="7" font-weight="600">🔒 illisible</text>
+        <!-- Node B only -->
+        <circle cx="372" cy="84" r="22" fill="url(#node-p)" stroke="#22c55e" stroke-width="2"/>
+        <text x="372" y="88" text-anchor="middle" fill="#fef3c7" font-family="IBM Plex Sans,sans-serif" font-size="13" font-weight="700">B</text>
+        <text x="372" y="118" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="7" font-weight="600">✓ déchiffre</text>
+        <!-- Arrows -->
+        <line x1="58" y1="84" x2="70" y2="84" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arr-p)"/>
+        <line x1="156" y1="84" x2="176" y2="84" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arr-p)"/>
+        <line x1="232" y1="84" x2="252" y2="84" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr-p)"/>
+        <line x1="302" y1="84" x2="348" y2="84" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arr-p)"/>
+        <!-- Unicast dst -->
+        <text x="205" y="48" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="7">dst = BD_ADDR(B)</text>
+        <!-- Side node C label -->
+        <text x="36" y="148" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="7">pub_B via Hello privé (chiffré groupe)</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li><strong>K_pair</strong> = HKDF(X25519(<code>priv_A</code>, <code>pub_B</code>))</li>
+        <li><code>packet_key</code> = HKDF(<code>K_pair</code>, src ‖ seq ‖ ts_ms)</li>
+        <li><code>pub_B</code> distribué via Hello privé (chiffré groupe)</li>
+        <li><strong>overhead</strong> = 42 B (identique)</li>
+      </ul>
+    </div>
+  </div>
+
+  <table class="table-compact crypto-compare-table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Groupe</th>
+        <th>Privé</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Clé de base</td>
+        <td><code>group_key</code></td>
+        <td><code>K_pair</code> = ECDH(A,B)</td>
+      </tr>
+      <tr>
+        <td>Lisible par</td>
+        <td class="cell-good">Tous membres</td>
+        <td class="cell-warn">A et B seulement</td>
+      </tr>
+      <tr>
+        <td>Relais voit</td>
+        <td class="cell-neutral">Ciphertext opaque</td>
+        <td class="cell-neutral">Ciphertext opaque</td>
+      </tr>
+      <tr>
+        <td>Overhead</td>
+        <td><strong>42 B</strong></td>
+        <td><strong>42 B</strong></td>
+      </tr>
+      <tr>
+        <td>Distribution clé</td>
+        <td>Config partagée (<code>.env</code>)</td>
+        <td>Hello privé (+32 B pubkey)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- SLIDE 5: HELLO MESSAGES -->
+<div class="slide" id="s5">
   <div class="slide-num">HELLO MESSAGES</div>
   <h2>Topologie anonyme — Deux parties</h2>
   <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1.25rem;">Seuls les membres connaissent la vraie identité des nœuds</p>
@@ -776,15 +1042,15 @@
       <div class="compare-box plain" style="border-color: var(--yellow); margin-bottom: 0.75rem;">
         <div class="box-title" style="font-size: 0.8rem; color: var(--yellow);">PRIVATE <span style="font-weight: 400; color: var(--text-muted);">— AES-GCM, membres seulement</span></div>
         <ul class="box-list">
-          <li>vraie BD address</li>
-          <li>vrais voisins BD addresses</li>
+          <li>vraie BD address + voisins BD</li>
+          <li><strong>clé publique X25519</strong> (32 B) — échange ECDH pour messages privés</li>
         </ul>
       </div>
       <div class="stat-row" style="margin-bottom: 0;">
         <div class="stat-box blue">
           <span class="stat-label">Hello packet size</span>
-          <span class="stat-value" style="font-size: 1.1rem;">73 B</span>
-          <span class="stat-context">ex. 1 voisin (<code>hello.py</code>)</span>
+          <span class="stat-value" style="font-size: 1.1rem;">~106 B</span>
+          <span class="stat-context">ex. 1 voisin + pubkey X25519</span>
         </div>
         <div class="stat-box green">
           <span class="stat-label">Intervalle</span>
@@ -828,8 +1094,8 @@
   </div>
 </div>
 
-<!-- SLIDE 5: CDS -->
-<div class="slide" id="s5">
+<!-- SLIDE 6: CDS -->
+<div class="slide" id="s6">
   <div class="slide-num">CDS — CONNECTED DOMINATING SET</div>
   <h2>Rôle relais local (<code>am_i_cds</code>)</h2>
   <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1rem;">Runtime : <code>HelloManager.is_relay</code> → <code>PacketForwarder</code> · Référence offline : <code>compute_cds()</code></p>
@@ -924,8 +1190,8 @@
   </div>
 </div>
 
-<!-- SLIDE 6: FORWARDING -->
-<div class="slide" id="s6">
+<!-- SLIDE 7: FORWARDING -->
+<div class="slide" id="s7">
   <div class="slide-num">FORWARDING</div>
   <h2>Forwarding &amp; test non-membre</h2>
 
@@ -933,10 +1199,11 @@
     <div>
       <div class="section-label">Forwarding multihop (<code>forwarder.py</code>)</div>
       <ul class="box-list" style="margin-bottom: 1rem;">
-        <li><strong>RELAY</strong> → forward des octets chiffrés bruts vers tous les peers sauf ingress</li>
-        <li><strong>LEAF</strong> → déchiffre et livre uniquement si <code>dst</code> = local ou broadcast</li>
-        <li>Déduplication <code>(src, seq)</code> — cache en mémoire</li>
-        <li>TTL décrémenté à chaque saut (AAD GCM sans TTL)</li>
+        <li><strong>RELAY</strong> → forward octets bruts (sans dériver la clé)</li>
+        <li><strong>LEAF / destinataire</strong> → <code>derive_packet_key</code> puis decrypt</li>
+        <li>Broadcast : base = <code>group_key</code> · privé (<code>--private</code>) : base = ECDH pairwise</li>
+        <li>Déduplication livraison/relai <code>(src, seq)</code> — pas encore fenêtre 256</li>
+        <li>TTL décrémenté sur le fil · AAD avec TTL=0</li>
       </ul>
       <div class="compare-box plain" style="border-color: var(--green);">
         <div class="box-title" style="font-size: 0.8rem; color: var(--green);">Exemple labo — 3 nœuds linéaires</div>
@@ -964,8 +1231,8 @@
   </div>
 </div>
 
-<!-- SLIDE 7: RÉSULTATS -->
-<div class="slide" id="s7">
+<!-- SLIDE 8: RÉSULTATS -->
+<div class="slide" id="s8">
   <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
   <h2>Validation hardware — 2 et 3 boards</h2>
 
@@ -982,11 +1249,11 @@ peer connecté: AA:BB:CC:DD:EE:02
     <div>
       <div class="section-label">Implémenté ✅</div>
       <ul class="box-list">
-        <li class="good"><code>BBNode</code> + <code>--chat</code> (prompt, notifs peer, dédup messages)</li>
-        <li class="good">Multihop linéaire 3 nœuds (nœud central RELAY)</li>
-        <li class="good">Relais non-membre : forward sans lecture du contenu</li>
-        <li class="good">AES-GCM · AAD sans TTL · rejet mauvaise clé (<code>on_decrypt_fail</code>)</li>
-        <li class="good">Hello anonymes · résolution anon_id → BD (membres)</li>
+        <li class="good">HKDF par paquet + messages privés X25519 (<code>--private</code>)</li>
+        <li class="good">Multihop linéaire 3 boards : Arduino=RELAY, RubikQ+Rubik2=LEAF</li>
+        <li class="good">Forwarding RubikQ → Arduino → Rubik2 ✅</li>
+        <li class="good">Relais non-membre (mauvaise clé) : forward opaque ✅</li>
+        <li class="good">Chat groupe 3 boards (<code>--chat</code>) ✅</li>
         <li class="good">Auto-pairing · config <code>.env</code> générique (<code>docs/CONFIGURATION.md</code>)</li>
         <li class="good">Tests unitaires : <code>forwarder</code>, <code>bb_api</code>, <code>cds</code>, <code>phase1a</code></li>
       </ul>
@@ -1005,10 +1272,10 @@ peer connecté: AA:BB:CC:DD:EE:02
           <tr><th>Métrique</th><th>Valeur</th></tr>
         </thead>
         <tbody>
-          <tr><td>Overhead fixe paquet</td><td>98 bytes</td></tr>
-          <tr><td>Payload disponible</td><td class="cell-good">923 bytes</td></tr>
-          <tr><td>Taille message chat (typ.)</td><td class="cell-good">~144 bytes total</td></tr>
-          <tr><td>Hello packet size</td><td>73 bytes</td></tr>
+          <tr><td>Overhead fixe paquet</td><td class="cell-good">42 bytes</td></tr>
+          <tr><td>Payload disponible</td><td class="cell-good">979 bytes</td></tr>
+          <tr><td>Taille message chat (typ.)</td><td class="cell-good">~88 bytes total</td></tr>
+          <tr><td>Hello packet size</td><td>~106 bytes (1 voisin + X25519)</td></tr>
           <tr><td>Intervalle Hello</td><td>5 secondes</td></tr>
           <tr><td>Fenêtre anti-replay</td><td>256 (config) — <span class="cell-warn">non appliquée au runtime</span></td></tr>
           <tr><td>Timestamp tolerance</td><td>±120 secondes</td></tr>
@@ -1019,8 +1286,8 @@ peer connecté: AA:BB:CC:DD:EE:02
   </div>
 </div>
 
-<!-- SLIDE 8: ROADMAP -->
-<div class="slide" id="s8">
+<!-- SLIDE 9: ROADMAP -->
+<div class="slide" id="s9">
   <div class="slide-num">PROCHAINES ÉTAPES</div>
   <h2>Phase 1B terminée → BLE &amp; mesures</h2>
 
@@ -1030,8 +1297,8 @@ peer connecté: AA:BB:CC:DD:EE:02
       <div class="phase-title">Stack BT Classic</div>
       <ul class="phase-items">
         <li class="good">CDS + <code>am_i_cds</code></li>
-        <li class="good"><code>PacketForwarder</code></li>
-        <li class="good"><code>BBNode</code> + chat + dédup + reconnexion L2CAP</li>
+        <li class="good">HKDF par paquet + X25519 (<code>keys.py</code>)</li>
+        <li class="good"><code>PacketForwarder</code> + chat + multihop 3 boards</li>
         <li class="good">Config générique (.env / topology)</li>
       </ul>
     </div>
@@ -1074,6 +1341,7 @@ peer connecté: AA:BB:CC:DD:EE:02
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
       <li class="good">✅ CDS local <code>am_i_cds</code> · multihop · relais opaque</li>
       <li class="warn">❓ Intégrer <code>ReplayFilter</code> dans <code>PacketForwarder</code></li>
+      <li class="good">✅ Identité X25519 stable (<code>BBKeyStore.from_group_key</code>)</li>
       <li class="warn">❓ Révocation : protocole ou rotation clé manuelle ?</li>
       <li class="warn">❓ Jitter window : BT Classic ou BLE seulement ?</li>
     </ul>
@@ -1085,17 +1353,18 @@ peer connecté: AA:BB:CC:DD:EE:02
   <button onclick="goTo(1)" class="active" id="btn1">Titre</button>
   <button onclick="goTo(2)" id="btn2">Architecture</button>
   <button onclick="goTo(3)" id="btn3">Transport &amp; Sécu</button>
-  <button onclick="goTo(4)" id="btn4">Hello</button>
-  <button onclick="goTo(5)" id="btn5">CDS</button>
-  <button onclick="goTo(6)" id="btn6">Forwarding</button>
-  <button onclick="goTo(7)" id="btn7">Résultats</button>
-  <button onclick="goTo(8)" id="btn8">Roadmap</button>
-  <span id="slide-counter">1 / 8</span>
+  <button onclick="goTo(4)" id="btn4">Modèle crypto</button>
+  <button onclick="goTo(5)" id="btn5">Hello</button>
+  <button onclick="goTo(6)" id="btn6">CDS</button>
+  <button onclick="goTo(7)" id="btn7">Forwarding</button>
+  <button onclick="goTo(8)" id="btn8">Résultats</button>
+  <button onclick="goTo(9)" id="btn9">Roadmap</button>
+  <span id="slide-counter">1 / 9</span>
 </div>
 
 <script>
   let current = 1;
-  const total = 8;
+  const total = 9;
   let wheelLock = false;
 
   function goTo(n) {

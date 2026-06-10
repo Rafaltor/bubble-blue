@@ -9,6 +9,7 @@ from cryptography.exceptions import InvalidTag
 from config import PKT_DATA, BubbleBlueConfig
 from src.security.crypto import decrypt_with_key, encrypt_with_key
 from src.security.keys import derive_packet_key
+from src.security.replay import ReplayFilter
 from src.security.packet import (
     ROUTING_HEADER_SIZE,
     BROADCAST_BD_ADDR,
@@ -29,7 +30,6 @@ LogCallback = Callable[[str], None]
 OnDecryptFailCallback = Callable[[str], None]
 
 _TTL_OFFSET = 13
-_MAX_SEEN_PACKETS = 4096
 
 
 class PacketForwarder:
@@ -55,9 +55,9 @@ class PacketForwarder:
         self._on_log = on_log
         self._on_decrypt_fail = on_decrypt_fail
         self._forwarded: set[tuple[str, int]] = set()
-        self._delivered: set[tuple[str, int]] = set()
+        self._replay: dict[str, ReplayFilter] = {}
+        self._replay_lock = threading.RLock()
         self._fwd_lock = threading.RLock()
-        self._deliver_lock = threading.RLock()
         self._seq_lock = threading.Lock()
         self._tx_seq = 0
 
@@ -187,22 +187,30 @@ class PacketForwarder:
         if self._for_us(dst, local):
             self._try_deliver(ingress, data, hdr)
 
-    def _mark_deliver_once(self, key: tuple[str, int]) -> bool:
-        """Return True if this (src, seq) should be processed; False if duplicate."""
-        with self._deliver_lock:
-            if key in self._delivered:
-                return False
-            self._delivered.add(key)
-            if len(self._delivered) > _MAX_SEEN_PACKETS:
-                drop = len(self._delivered) - _MAX_SEEN_PACKETS // 2
-                for old in list(self._delivered)[:drop]:
-                    self._delivered.discard(old)
+    def _check_replay(self, src: str, seq: int, ts_ms: int) -> bool:
+        """
+        Sliding-window anti-replay for local delivery (per sender).
+
+        Timestamp tolerance is enforced in ``handle()`` before delivery;
+        ``ts_ms`` is accepted here for API symmetry with the packet header.
+        """
+        _ = ts_ms
+        src_u = src.upper()
+        with self._replay_lock:
+            rf = self._replay.get(src_u)
+            if rf is None:
+                rf = ReplayFilter()
+                self._replay[src_u] = rf
+        if rf.check_and_update(src_u, seq):
             return True
+        self._log(f"[FWD] replay dropped src={src_u} seq={seq}")
+        return False
 
     def _try_deliver(self, ingress_peer: str, data: bytes, hdr: dict[str, Any]) -> None:
         src = hdr["src"].upper()
         seq = int(hdr["seq"])
-        if not self._mark_deliver_once((src, seq)):
+        ts_ms = int(hdr["ts_ms"])
+        if not self._check_replay(src, seq, ts_ms):
             return
 
         local = self._cfg.local_bd_addr.upper()

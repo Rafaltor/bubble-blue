@@ -10,7 +10,6 @@ from config import load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
-from src.security.keys import BBKeyStore
 from src.transport.discovery import discover_devices
 
 
@@ -45,11 +44,9 @@ def run_chat(
     private: bool = False,
     dst: str | None = None,
 ) -> int:
-    key_store = BBKeyStore()
     node = BBNode(
         interface=interface,
         remote_bd_addr=peer,
-        key_store=key_store,
         quiet=True,
         setup_pairing_agent=False,
     )
@@ -113,11 +110,9 @@ def run_listen(args: argparse.Namespace, topology: frozenset[str] | None) -> int
     verbose = not (topology or args.peer or args.send)
     setup_ble_pairing_agent(quiet=not verbose)
 
-    key_store = BBKeyStore()
     node = BBNode(
         interface=args.interface,
         remote_bd_addr=args.peer,
-        key_store=key_store,
         quiet=not verbose,
         setup_pairing_agent=False,
     )

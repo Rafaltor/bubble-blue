@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import struct
+from pathlib import Path
 from typing import Final
 
 from cryptography.hazmat.primitives import hashes
@@ -13,7 +15,6 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 try:
     from .packet import bd_addr_to_bytes
 except ImportError:  # pragma: no cover — direct script execution
-    import os
     import sys
 
     _root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -23,6 +24,8 @@ except ImportError:  # pragma: no cover — direct script execution
 
 _X25519_KEY_SIZE: Final = 32
 _PAIRWISE_HKDF_SALT: Final = b"bubble-blue-v1"
+_IDENTITY_HKDF_SALT: Final = b"bb-identity-v1"
+_IDENTITY_HKDF_INFO_PREFIX: Final = b"bubble-blue-x25519-identity:"
 _DERIVED_KEY_SIZE: Final = 32
 
 
@@ -41,6 +44,37 @@ def _hkdf_sha256(
         info=info,
     )
     return hkdf.derive(ikm)
+
+
+def _load_or_create_file_private_key(path: Path) -> X25519PrivateKey:
+    """Load 32-byte raw X25519 private key from ``path``, or create and persist it."""
+    if path.exists():
+        raw = path.read_bytes()
+        if len(raw) != _X25519_KEY_SIZE:
+            raise ValueError(
+                f"identity file {path} must be {_X25519_KEY_SIZE} bytes (got {len(raw)})"
+            )
+        return X25519PrivateKey.from_private_bytes(raw)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    private_key = X25519PrivateKey.generate()
+    raw = private_key.private_bytes_raw()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(raw)
+    return private_key
+
+
+def _derive_identity_private_key(group_key: bytes, local_bd_addr: str) -> bytes:
+    if len(group_key) != _DERIVED_KEY_SIZE:
+        raise ValueError(f"group_key must be {_DERIVED_KEY_SIZE} bytes (got {len(group_key)})")
+    addr = local_bd_addr.strip().upper()
+    return _hkdf_sha256(
+        group_key,
+        salt=_IDENTITY_HKDF_SALT,
+        info=_IDENTITY_HKDF_INFO_PREFIX + addr.encode("ascii"),
+        length=_X25519_KEY_SIZE,
+    )
 
 
 def _derive_pairwise_key(private_key: X25519PrivateKey, peer_public_key: bytes) -> bytes:
@@ -72,13 +106,57 @@ def derive_packet_key(base_key: bytes, src: str, seq: int, ts_ms: int) -> bytes:
 
 class BBKeyStore:
     """
-    In-memory X25519 identity and per-peer pairwise keys for private messaging.
+    X25519 identity and per-peer pairwise keys for private messaging.
 
     Static ECDH secrets are derived locally; no key material is placed in data packets.
+
+    Two ways to obtain a **stable** identity across reboots:
+
+    **Strategy A — file persistence** (``persist_path=...``):
+        Load a 32-byte raw X25519 private key from disk, or generate and write it
+        (mode ``0o600``). Useful when you want identity independent of group key rotation.
+
+    **Strategy B — deterministic from group key** (``from_group_key(...)``, recommended):
+        ``HKDF-SHA256(group_key, salt=bb-identity-v1,
+        info=b"bubble-blue-x25519-identity:" + local_bd_addr)``.
+        Same ``group_key`` + BD address always yields the same key pair.
+        No file I/O — ideal for embedded nodes. If ``group_key`` rotates, the identity
+        rotates too (peers must re-learn the new public key via Hello).
+
+    **Ephemeral** (``BBKeyStore()`` with no ``persist_path``):
+        Fresh random key each process start — private messages break after restart.
     """
 
-    def __init__(self) -> None:
-        self._private_key = X25519PrivateKey.generate()
+    def __init__(self, *, persist_path: str | Path | None = None) -> None:
+        if persist_path is not None:
+            self._private_key = _load_or_create_file_private_key(Path(persist_path))
+        else:
+            self._private_key = X25519PrivateKey.generate()
+        self._init_peer_state()
+
+    @classmethod
+    def from_group_key(
+        cls,
+        group_key: bytes,
+        local_bd_addr: str,
+        **kwargs: object,
+    ) -> BBKeyStore:
+        """
+        Deterministic identity derived from the group pre-shared key and local BD address.
+
+        ``kwargs`` is reserved for forward compatibility (ignored today).
+
+        Caveat: rotating ``group_key`` changes this node's X25519 identity; peers must
+        receive a fresh Hello to learn the new ``public_key``.
+        """
+        _ = kwargs
+        inst = cls.__new__(cls)
+        priv_bytes = _derive_identity_private_key(group_key, local_bd_addr)
+        inst._private_key = X25519PrivateKey.from_private_bytes(priv_bytes)
+        inst._init_peer_state()
+        return inst
+
+    def _init_peer_state(self) -> None:
         self._local_public_key = self._private_key.public_key().public_bytes_raw()
         self._peer_public_keys: dict[str, bytes] = {}
         self._pair_key_cache: dict[str, bytes] = {}
@@ -97,7 +175,6 @@ class BBKeyStore:
         addr = bd_addr.strip().upper()
         if len(public_key) != _X25519_KEY_SIZE:
             raise ValueError(f"public_key must be {_X25519_KEY_SIZE} bytes (got {len(public_key)})")
-        # Validate before storing.
         X25519PublicKey.from_public_bytes(public_key)
 
         prev = self._peer_public_keys.get(addr)
@@ -131,10 +208,15 @@ class BBKeyStore:
 
 
 if __name__ == "__main__":
-    store_a = BBKeyStore()
-    store_b = BBKeyStore()
-    addr_b = "AA:BB:CC:DD:EE:02"
+    import tempfile
+
+    group_key = b"\x01" * 32
     addr_a = "AA:BB:CC:DD:EE:01"
+    addr_b = "AA:BB:CC:DD:EE:02"
+
+    store_a = BBKeyStore.from_group_key(group_key, addr_a)
+    store_b = BBKeyStore.from_group_key(group_key, addr_b)
+    assert BBKeyStore.from_group_key(group_key, addr_a).local_public_key == store_a.local_public_key
 
     store_a.register_peer(addr_b, store_b.local_public_key)
     store_b.register_peer(addr_a, store_a.local_public_key)
@@ -147,4 +229,13 @@ if __name__ == "__main__":
     pkt_key = derive_packet_key(key_ab, addr_a, seq=1, ts_ms=1_700_000_000_000)
     assert len(pkt_key) == 32
     assert pkt_key != key_ab
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "identity.key"
+        s1 = BBKeyStore(persist_path=path)
+        pub1 = s1.local_public_key
+        s2 = BBKeyStore(persist_path=path)
+        assert s2.local_public_key == pub1
+        assert path.stat().st_mode & 0o777 == 0o600
+
     print("✅ keys.py self-test passed")
