@@ -32,6 +32,44 @@ OnDecryptFailCallback = Callable[[str], None]
 _TTL_OFFSET = 13
 
 
+class _ForwardCache:
+    """
+    Bounded deduplication cache for relay forwarding.
+    Evicts entries older than ttl_s seconds.
+    Key = (src: str, seq: int)
+    """
+
+    def __init__(self, ttl_s: float = 240.0, max_size: int = 4096) -> None:
+        self._ttl_s = ttl_s
+        self._max_size = max_size
+        self._entries: dict[tuple[str, int], float] = {}
+        self._lock = threading.Lock()
+
+    def _evict(self) -> None:
+        now = time.monotonic()
+        stale = [k for k, ts in self._entries.items() if (now - ts) > self._ttl_s]
+        for key in stale:
+            del self._entries[key]
+        if len(self._entries) > self._max_size:
+            drop_n = self._max_size // 4
+            oldest = sorted(self._entries.items(), key=lambda item: item[1])[:drop_n]
+            for key, _ in oldest:
+                del self._entries[key]
+
+    def seen(self, src: str, seq: int) -> bool:
+        """Return True if already forwarded (duplicate). Also evicts stale entries."""
+        key = (src.upper(), int(seq))
+        with self._lock:
+            self._evict()
+            return key in self._entries
+
+    def mark(self, src: str, seq: int) -> None:
+        """Record this (src, seq) as forwarded."""
+        key = (src.upper(), int(seq))
+        with self._lock:
+            self._entries[key] = time.monotonic()
+
+
 class PacketForwarder:
     """
     PKT_DATA plane: CDS relays flood opaque packets (TTL decremented on wire);
@@ -54,8 +92,9 @@ class PacketForwarder:
         self._on_message = on_message
         self._on_log = on_log
         self._on_decrypt_fail = on_decrypt_fail
-        self._forwarded: set[tuple[str, int]] = set()
+        self._fwd_cache = _ForwardCache()
         self._replay: dict[str, ReplayFilter] = {}
+        self._relay_replay: dict[str, ReplayFilter] = {}
         self._replay_lock = threading.RLock()
         self._fwd_lock = threading.RLock()
         self._seq_lock = threading.Lock()
@@ -170,13 +209,13 @@ class PacketForwarder:
         local: str,
     ) -> None:
         ttl = int(hdr["ttl"])
+        ts_ms = int(hdr["ts_ms"])
         if dst != local and ttl > 0:
             new_ttl = ttl - 1
-            if new_ttl > 0:
-                key = (src, seq)
+            if new_ttl > 0 and self._check_relay_ingress(src, seq, ts_ms):
                 with self._fwd_lock:
-                    if key not in self._forwarded:
-                        self._forwarded.add(key)
+                    if not self._fwd_cache.seen(src, seq):
+                        self._fwd_cache.mark(src, seq)
                         wire = _decrement_ttl(data, new_ttl)
                         for peer in self._other_peers(exclude=ingress):
                             try:
@@ -186,6 +225,27 @@ class PacketForwarder:
 
         if self._for_us(dst, local):
             self._try_deliver(ingress, data, hdr)
+
+    def _check_relay_ingress(self, src: str, seq: int, ts_ms: int) -> bool:
+        """
+        Sliding-window anti-replay on the relay path (ingress before forward).
+
+        Separate from delivery replay state: the same packet may be delivered
+        locally and forwarded without either path treating the other as a replay.
+        """
+        _ = ts_ms
+        src_u = src.upper()
+        # Lock ordering: PacketForwarder._replay_lock, then ReplayFilter._lock
+        # (inside check_and_update). Never acquire _replay_lock from ReplayFilter.
+        with self._replay_lock:
+            rf = self._relay_replay.get(src_u)
+            if rf is None:
+                rf = ReplayFilter()
+                self._relay_replay[src_u] = rf
+            if rf.check_and_update(src_u, seq):
+                return True
+        self._log(f"[FWD] relay-replay dropped src={src_u} seq={seq}")
+        return False
 
     def _check_replay(self, src: str, seq: int, ts_ms: int) -> bool:
         """
@@ -201,8 +261,8 @@ class PacketForwarder:
             if rf is None:
                 rf = ReplayFilter()
                 self._replay[src_u] = rf
-        if rf.check_and_update(src_u, seq):
-            return True
+            if rf.check_and_update(src_u, seq):
+                return True
         self._log(f"[FWD] replay dropped src={src_u} seq={seq}")
         return False
 

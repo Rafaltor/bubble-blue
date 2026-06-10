@@ -40,6 +40,7 @@ This layer is responsible for maintaining neighborhood state and distributing th
 
 - Payload protection using **AES** (exact mode/keying parameters depend on the implementation configuration).
 - Designed to keep cryptographic material out of the repository via local configuration files (see `.gitignore`).
+- Legacy crypto API (`encrypt_for_group`) moved to `src/security/legacy.py`.
 
 ## Hardware requirements
 

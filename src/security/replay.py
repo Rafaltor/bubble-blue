@@ -33,6 +33,10 @@ class ReplayFilter:
     - Accept out-of-order packets if they fall within the window and not seen yet
 
     Thread-safe: intended to be called from multiple receiver threads.
+
+    When called under an external lock (e.g. ``PacketForwarder._replay_lock``),
+    acquire the external lock first, then this filter's internal lock is taken
+    inside ``check_and_update`` — never call back into the forwarder from here.
     """
 
     def __init__(self, *, window_size: int = WINDOW_SIZE) -> None:

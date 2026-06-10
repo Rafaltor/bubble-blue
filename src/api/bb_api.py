@@ -205,9 +205,24 @@ class BBNode:
         private: bool = False,
     ) -> None:
         """Send PKT_DATA toward ``dst_bd_addr`` on L2CAP link ``via_peer`` (or first peer)."""
-        fwd = self._require_forwarder()
         peer = (via_peer or self._pick_l2cap_peer()).upper()
-        fwd.send_unicast(text, dst_bd_addr, l2cap_peer=peer, private=private)
+        self.send_data(text, dst_bd_addr, via_peer=peer, private=private)
+
+    def send_data(
+        self,
+        text: str | bytes,
+        dst_bd_addr: str,
+        *,
+        via_peer: str,
+        private: bool = False,
+    ) -> None:
+        """Send PKT_DATA to ``dst_bd_addr`` on the given L2CAP peer."""
+        self._require_forwarder().send_data(
+            text,
+            dst_bd_addr,
+            private=private,
+            l2cap_peer=via_peer.upper(),
+        )
 
     def peers(self) -> list[str]:
         if self._transport is None:

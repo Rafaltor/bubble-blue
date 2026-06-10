@@ -857,6 +857,8 @@
       <li class="good">Timestamp ±120s dans <code>PacketForwarder</code></li>
       <li class="good">Pairwise X25519 pour messages privés (<code>BBKeyStore</code>)</li>
       <li class="good">Identité X25519 stable via <code>from_group_key</code> (HKDF PSK + BD addr)</li>
+      <li class="good">Anti-replay relay + livraison — 2× <code>ReplayFilter</code> (fenêtre 256)</li>
+      <li class="good">Cache relay borné — <code>_ForwardCache</code> (TTL 240 s, max 4096)</li>
       <li class="warn" style="grid-column: 1 / -1;">Révocation groupe — rotation manuelle <code>GROUP_KEY</code> · pas de <code>PKT_ACK</code></li>
     </ul>
   </div>
@@ -1202,7 +1204,8 @@
         <li><strong>RELAY</strong> → forward octets bruts (sans dériver la clé)</li>
         <li><strong>LEAF / destinataire</strong> → <code>derive_packet_key</code> puis decrypt</li>
         <li>Broadcast : base = <code>group_key</code> · privé (<code>--private</code>) : base = ECDH pairwise</li>
-        <li>Déduplication livraison/relai <code>(src, seq)</code> — pas encore fenêtre 256</li>
+        <li>Anti-replay relay (<code>_check_relay_ingress</code>) + livraison (<code>_check_replay</code>)</li>
+        <li>Cache relay borné <code>_ForwardCache</code> (TTL 240 s, max 4096)</li>
         <li>TTL décrémenté sur le fil · AAD avec TTL=0</li>
       </ul>
       <div class="compare-box plain" style="border-color: var(--green);">
@@ -1260,7 +1263,7 @@ peer connecté: AA:BB:CC:DD:EE:02
       <div class="section-label" style="margin-top: 0.75rem;">Pas encore / partiel ⚠️</div>
       <ul class="box-list">
         <li class="warn"><code>PKT_ACK</code> — constante seulement</li>
-        <li class="warn">Anti-replay dans le forwarder (module <code>replay.py</code> existe)</li>
+        <li class="good">Anti-replay relay + livraison · tests pairwise (<code>test_private_pairwise.py</code>)</li>
         <li class="warn">Révocation automatique de membre</li>
         <li class="warn">BLE / Android (phases 2–5)</li>
       </ul>
@@ -1277,7 +1280,7 @@ peer connecté: AA:BB:CC:DD:EE:02
           <tr><td>Taille message chat (typ.)</td><td class="cell-good">~88 bytes total</td></tr>
           <tr><td>Hello packet size</td><td>~106 bytes (1 voisin + X25519)</td></tr>
           <tr><td>Intervalle Hello</td><td>5 secondes</td></tr>
-          <tr><td>Fenêtre anti-replay</td><td>256 (config) — <span class="cell-warn">non appliquée au runtime</span></td></tr>
+          <tr><td>Fenêtre anti-replay</td><td class="cell-good">256 — relay + livraison (<code>ReplayFilter</code>)</td></tr>
           <tr><td>Timestamp tolerance</td><td>±120 secondes</td></tr>
           <tr><td>MTU BT Classic L2CAP</td><td>1021 bytes</td></tr>
         </tbody>
@@ -1340,8 +1343,7 @@ peer connecté: AA:BB:CC:DD:EE:02
     <div class="verdict-label" style="color: var(--yellow);">Questions ouvertes</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
       <li class="good">✅ CDS local <code>am_i_cds</code> · multihop · relais opaque</li>
-      <li class="warn">❓ Intégrer <code>ReplayFilter</code> dans <code>PacketForwarder</code></li>
-      <li class="good">✅ Identité X25519 stable (<code>BBKeyStore.from_group_key</code>)</li>
+      <li class="good">✅ Anti-replay relay + livraison · cache relay borné · identité X25519 stable</li>
       <li class="warn">❓ Révocation : protocole ou rotation clé manuelle ?</li>
       <li class="warn">❓ Jitter window : BT Classic ou BLE seulement ?</li>
     </ul>

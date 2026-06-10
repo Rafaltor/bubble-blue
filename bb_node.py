@@ -6,10 +6,11 @@ import subprocess
 import sys
 import time
 
-from config import load_config, print_config
+from config import BubbleBlueConfig, load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
+from src.security.keys import BBKeyStore
 from src.transport.discovery import discover_devices
 
 
@@ -36,6 +37,23 @@ def setup_ble_pairing_agent(*, quiet: bool = False) -> None:
     proc.stdin.flush()
 
 
+def _identity_key_store(cfg: BubbleBlueConfig) -> BBKeyStore:
+    return BBKeyStore.from_group_key(cfg.group_key, cfg.local_bd_addr)
+
+
+def _log_x25519_identity(cfg: BubbleBlueConfig) -> None:
+    pub_hex = _identity_key_store(cfg).local_public_key.hex()
+    print(f"[APP] X25519 identity: {pub_hex[:16]}… (full: {pub_hex})", flush=True)
+
+
+def show_identity(*, interface: str, peer: str | None) -> int:
+    cfg = load_config(interface=interface, remote_bd_addr=peer)
+    pub_hex = _identity_key_store(cfg).local_public_key.hex()
+    print(f"BD_ADDR: {cfg.local_bd_addr.upper()}", flush=True)
+    print(f"X25519 public key: {pub_hex}", flush=True)
+    return 0
+
+
 def run_chat(
     topology: frozenset[str] | None,
     interface: str,
@@ -44,6 +62,9 @@ def run_chat(
     private: bool = False,
     dst: str | None = None,
 ) -> int:
+    cfg = load_config(interface=interface, remote_bd_addr=peer)
+    _log_x25519_identity(cfg)
+
     node = BBNode(
         interface=interface,
         remote_bd_addr=peer,
@@ -94,7 +115,8 @@ def run_chat(
                                 err=True,
                             )
                             continue
-                        node.send_unicast(line, target, via_peer=peer, private=True)
+                        l2cap_peer = (peer or node.peers()[0]).upper()
+                        node.send_data(line, target, via_peer=l2cap_peer, private=True)
                     else:
                         node.send(line)
                 except (OSError, RuntimeError) as e:
@@ -106,9 +128,12 @@ def run_chat(
     return 0
 
 
-def run_listen(args: argparse.Namespace, topology: frozenset[str] | None) -> int:
+def _run_with_transport(args: argparse.Namespace, topology: frozenset[str] | None) -> int:
     verbose = not (topology or args.peer or args.send)
     setup_ble_pairing_agent(quiet=not verbose)
+
+    cfg = load_config(interface=args.interface, remote_bd_addr=args.peer)
+    _log_x25519_identity(cfg)
 
     node = BBNode(
         interface=args.interface,
@@ -118,7 +143,7 @@ def run_listen(args: argparse.Namespace, topology: frozenset[str] | None) -> int
     )
     node.on_message = lambda s, t: print(f"[{s}] {t}", flush=True)
     if verbose:
-        print_config(load_config(interface=args.interface, remote_bd_addr=args.peer))
+        print_config(cfg)
 
     node.start(topology)
 
@@ -127,7 +152,15 @@ def run_listen(args: argparse.Namespace, topology: frozenset[str] | None) -> int
         if not dst or dst == "00:00:00:00:00:00":
             print("[APP] --send needs --dst or --peer", file=sys.stderr)
             return 2
-        node.send_unicast(args.send, dst, via_peer=args.peer, private=args.private)
+        if not args.peer:
+            print("[APP] --send needs --peer (L2CAP link)", file=sys.stderr)
+            return 2
+        node.send_data(
+            args.send,
+            dst,
+            via_peer=args.peer,
+            private=args.private,
+        )
         print("[APP] sent, Ctrl+C to stop", flush=True)
 
     try:
@@ -160,10 +193,22 @@ def main() -> int:
     parser.add_argument(
         "--private",
         action="store_true",
-        help="Send as private (pairwise-encrypted) message",
+        default=False,
+        help=(
+            "Encrypt as private pairwise message (requires X25519 key exchange "
+            "via Hello). Destination must have been seen in a Hello before sending."
+        ),
+    )
+    parser.add_argument(
+        "--show-identity",
+        action="store_true",
+        help="Print full X25519 public key hex + BD address, then exit",
     )
     parser.add_argument("--chat", action="store_true")
     args = parser.parse_args()
+
+    if args.show_identity:
+        return show_identity(interface=args.interface, peer=args.peer)
 
     topology = merge_topology(args.topology)
     peer = args.peer
@@ -200,7 +245,7 @@ def main() -> int:
         print("[APP] --peer not in --topology", file=sys.stderr)
         return 2
 
-    return run_listen(args, topology)
+    return _run_with_transport(args, topology)
 
 
 if __name__ == "__main__":
