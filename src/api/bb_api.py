@@ -253,6 +253,29 @@ class BBNode:
     def local_bd_addr(self) -> str:
         return self._require_cfg().local_bd_addr
 
+    def resolved_member_addresses(self) -> list[str]:
+        if self._hello_mgr is None:
+            return []
+        return [str(m["bd_addr"]).upper() for m in self._hello_mgr.get_resolved_members()]
+
+    def has_pairwise_key(self, bd_addr: str) -> bool:
+        if self._hello_mgr is None:
+            return False
+        return self._hello_mgr.key_store.get_pair_key(bd_addr.upper()) is not None
+
+    def route_l2cap_peer(self, dst_bd_addr: str) -> str:
+        """Pick an L2CAP link to reach ``dst_bd_addr`` (direct neighbor or multihop relay)."""
+        dst = dst_bd_addr.upper()
+        local = self.local_bd_addr.upper()
+        if dst == local:
+            raise RuntimeError("cannot send to yourself")
+        peers = self.peers()
+        if not peers:
+            raise RuntimeError("no L2CAP peers connected")
+        if dst in peers:
+            return dst
+        return peers[0].upper()
+
     def _require_cfg(self) -> BubbleBlueConfig:
         if self._cfg is None:
             raise RuntimeError("call start() first")

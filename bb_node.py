@@ -8,6 +8,12 @@ import time
 
 from config import BubbleBlueConfig, config_warnings, load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
+from src.api.chat_commands import (
+    CHAT_HELP,
+    load_chat_aliases,
+    parse_chat_command,
+    resolve_chat_target,
+)
 from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
 from src.security.keys import BBKeyStore
@@ -117,30 +123,86 @@ def run_chat(
             ChatLog.interrupt(
                 "aucun peer — --topology ADDR ou BUBBLE_BLUE_GROUP_MEMBERS dans .env"
             )
+        ChatLog.interrupt("tape /help pour les commandes (/private …)")
+        aliases = load_chat_aliases()
         while True:
             try:
                 line = read_chat_line("> ")
             except KeyboardInterrupt:
                 break
-            if line:
-                if not node.peers():
-                    ChatLog.interrupt("aucun peer connecté — message non envoyé", err=True)
+            if not line:
+                continue
+
+            cmd = parse_chat_command(line)
+            if cmd is not None:
+                if cmd.kind == "help":
+                    ChatLog.interrupt(CHAT_HELP)
                     continue
-                try:
-                    if private:
-                        target = (dst or peer or "").upper()
-                        if not target or target == "00:00:00:00:00:00":
-                            ChatLog.interrupt(
-                                "message privé — préciser --peer ou --dst",
-                                err=True,
-                            )
-                            continue
-                        l2cap_peer = (peer or node.peers()[0]).upper()
-                        node.send_data(line, target, via_peer=l2cap_peer, private=True)
+                if cmd.kind == "members":
+                    known = node.resolved_member_addresses()
+                    if known:
+                        ChatLog.interrupt("membres: " + ", ".join(sorted(known)))
                     else:
-                        node.send(line)
-                except (OSError, RuntimeError) as e:
-                    ChatLog.interrupt(str(e), err=True)
+                        ChatLog.interrupt(
+                            "aucun membre résolu — attendre Hello (~5 s)",
+                            err=True,
+                        )
+                    continue
+                if cmd.kind == "private":
+                    if not cmd.target or not cmd.message:
+                        ChatLog.interrupt(
+                            'usage: /private <cible> <message>  ex: /private rubikQ "salut"',
+                            err=True,
+                        )
+                        continue
+                    dst = resolve_chat_target(
+                        cmd.target,
+                        aliases=aliases,
+                        group_members=cfg.group_members,
+                        resolved_members=node.resolved_member_addresses(),
+                        local_bd_addr=node.local_bd_addr,
+                    )
+                    if dst is None:
+                        ChatLog.interrupt(
+                            f"cible inconnue: {cmd.target!r} — /members ou BUBBLE_BLUE_CHAT_ALIASES",
+                            err=True,
+                        )
+                        continue
+                    if not node.peers():
+                        ChatLog.interrupt("aucun peer connecté — message non envoyé", err=True)
+                        continue
+                    if not node.has_pairwise_key(dst):
+                        ChatLog.interrupt(
+                            f"pas de clé pairwise pour {dst} — attendre Hello privé (~5 s)",
+                            err=True,
+                        )
+                        continue
+                    try:
+                        via = node.route_l2cap_peer(dst)
+                        node.send_data(cmd.message, dst, via_peer=via, private=True)
+                        ChatLog.interrupt(f"→ privé [{dst}] {cmd.message}")
+                    except (OSError, RuntimeError) as e:
+                        ChatLog.interrupt(str(e), err=True)
+                    continue
+
+            if not node.peers():
+                ChatLog.interrupt("aucun peer connecté — message non envoyé", err=True)
+                continue
+            try:
+                if private:
+                    target = (dst or peer or "").upper()
+                    if not target or target == "00:00:00:00:00:00":
+                        ChatLog.interrupt(
+                            "message privé — préciser --peer ou --dst",
+                            err=True,
+                        )
+                        continue
+                    l2cap_peer = (peer or node.peers()[0]).upper()
+                    node.send_data(line, target, via_peer=l2cap_peer, private=True)
+                else:
+                    node.send(line)
+            except (OSError, RuntimeError) as e:
+                ChatLog.interrupt(str(e), err=True)
     except KeyboardInterrupt:
         pass
     finally:
