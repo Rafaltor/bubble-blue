@@ -147,6 +147,15 @@ class L2CAPTransport:
 
     def connect(self, bd_addr: str) -> None:
         bd_addr = bd_addr.upper()
+        local = self._cfg.local_bd_addr.upper()
+        if bd_addr == local:
+            _tlog_always(
+                self._node,
+                f"L2CAP connect to self ignored (local={local}) — "
+                "check BUBBLE_BLUE_LOCAL_BD_ADDR / GROUP_MEMBERS on this board",
+            )
+            return
+
         if not self._peer_allowed(bd_addr):
             _tlog_always(
                 self._node,
@@ -239,7 +248,9 @@ class L2CAPTransport:
             if not self._peer_allowed(peer_bd_addr):
                 _tlog_always(
                     self._node,
-                    f"L2CAP accept rejected (not in topology) peer={peer_bd_addr}",
+                    f"L2CAP accept rejected (not in topology) peer={peer_bd_addr} — "
+                    "run python3 config.py on each board and fix GROUP_MEMBERS, "
+                    "or use bb_node.py --chat (accepts any L2CAP peer)",
                 )
                 try:
                     client_sock.close()

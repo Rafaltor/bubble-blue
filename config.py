@@ -105,10 +105,15 @@ def _normalize_bd_addr(addr: str, *, label: str) -> str | None:
 
 def _load_group_members(*, local_bd_addr: str | None = None) -> list[str]:
     """Peers to dial / allowlist from BUBBLE_BLUE_GROUP_MEMBERS (excludes local)."""
+    return _parse_group_members_env(exclude_local=local_bd_addr)
+
+
+def _parse_group_members_env(*, exclude_local: str | None = None) -> list[str]:
+    """Parse BUBBLE_BLUE_GROUP_MEMBERS; optionally skip the local BD_ADDR (for outbound dial)."""
     raw = os.environ.get("BUBBLE_BLUE_GROUP_MEMBERS", "")
     if not raw:
         return []
-    local = (local_bd_addr or "").upper()
+    local = (exclude_local or "").upper()
     out: list[str] = []
     seen: set[str] = set()
     for part in raw.split(","):
@@ -118,6 +123,63 @@ def _load_group_members(*, local_bd_addr: str | None = None) -> list[str]:
         seen.add(bd)
         out.append(bd)
     return out
+
+
+def get_hciconfig_bd_addr(interface: str | None = None) -> str:
+    """BD_ADDR from the controller only (ignores BUBBLE_BLUE_LOCAL_BD_ADDR override)."""
+    iface = interface or _DEFAULT_INTERFACE
+    try:
+        proc = subprocess.run(
+            ["hciconfig", iface],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        raise RuntimeError("`hciconfig` not found. Install BlueZ tools and ensure it is in PATH.") from e
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        raise RuntimeError(f"`hciconfig {iface}` failed{': ' + stderr if stderr else ''}.") from e
+
+    m = _BD_ADDR_RE.search(proc.stdout or "")
+    if not m:
+        out = (proc.stdout or "").strip()
+        raise RuntimeError(f"Could not parse BD Address from `hciconfig {iface}` output.\n{out}")
+    return m.group(1).upper()
+
+
+def config_warnings(*, interface: str | None = None) -> list[str]:
+    """Human-readable warnings about common .env mistakes (copy-paste across boards)."""
+    warnings: list[str] = []
+    override = os.environ.get("BUBBLE_BLUE_LOCAL_BD_ADDR", "").strip()
+    if override:
+        try:
+            hci = get_hciconfig_bd_addr(interface)
+            norm = _normalize_bd_addr(override, label="BUBBLE_BLUE_LOCAL_BD_ADDR")
+            if norm and norm != hci:
+                warnings.append(
+                    f"BUBBLE_BLUE_LOCAL_BD_ADDR={norm} but hciconfig reports {hci} — "
+                    "remove the override or set it to this board's real address"
+                )
+        except RuntimeError:
+            pass
+
+    try:
+        local = get_local_bd_addr(interface=interface)
+    except RuntimeError:
+        local = ""
+
+    raw_members = os.environ.get("BUBBLE_BLUE_GROUP_MEMBERS", "")
+    for part in raw_members.split(","):
+        bd = _normalize_bd_addr(part, label="BUBBLE_BLUE_GROUP_MEMBERS entry")
+        if bd and local and bd == local:
+            warnings.append(
+                f"GROUP_MEMBERS lists this board's own address ({bd}) — "
+                "list only the *other* boards (run python3 config.py on each)"
+            )
+            break
+
+    return warnings
 
 
 def get_local_bd_addr(interface: str | None = None) -> str:

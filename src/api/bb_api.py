@@ -93,7 +93,12 @@ class BBNode:
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
 
-    def start(self, topology: str | frozenset[str] | set[str] | None = None) -> None:
+    def start(
+        self,
+        topology: str | frozenset[str] | set[str] | None = None,
+        *,
+        l2cap_accept_all: bool = False,
+    ) -> None:
         if self.on_message is None:
             raise RuntimeError("set BBNode.on_message before start()")
 
@@ -107,7 +112,12 @@ class BBNode:
                 remote_bd_addr=self._remote_bd_addr,
             )
             allowlist = self._connect_targets()
-            allowed_peers = frozenset(allowlist) if allowlist else None
+            if l2cap_accept_all:
+                allowed_peers = None
+            elif allowlist:
+                allowed_peers = frozenset(allowlist)
+            else:
+                allowed_peers = None
 
             holder: dict[str, HelloManager | PacketForwarder | None] = {
                 "hello": None,
@@ -286,6 +296,8 @@ class BBNode:
         now = time.monotonic()
         local = self._require_cfg().local_bd_addr.upper()
         for bd in sorted(self._connect_targets()):
+            if bd == local:
+                continue
             if bd in self._transport.connections():
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)

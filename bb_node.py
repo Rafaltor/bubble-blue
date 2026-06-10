@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from config import BubbleBlueConfig, load_config, print_config
+from config import BubbleBlueConfig, config_warnings, load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
@@ -54,6 +54,25 @@ def show_identity(*, interface: str, peer: str | None) -> int:
     return 0
 
 
+def _print_mesh_hints(cfg: BubbleBlueConfig, *, interface: str) -> None:
+    print(f"[APP] local BD_ADDR: {cfg.local_bd_addr}", flush=True)
+    if cfg.group_members:
+        print(f"[APP] outbound dial list: {', '.join(cfg.group_members)}", flush=True)
+    else:
+        print(
+            "[APP] WARNING: BUBBLE_BLUE_GROUP_MEMBERS empty — "
+            "set other boards' addresses or use --topology",
+            flush=True,
+        )
+    for msg in config_warnings(interface=interface):
+        print(f"[APP] WARNING: {msg}", flush=True)
+    print(
+        "[APP] chat: accepting any incoming L2CAP peer "
+        "(crypto still requires the shared GROUP_KEY)",
+        flush=True,
+    )
+
+
 def run_chat(
     topology: frozenset[str] | None,
     interface: str,
@@ -63,6 +82,7 @@ def run_chat(
     dst: str | None = None,
 ) -> int:
     cfg = load_config(interface=interface, remote_bd_addr=peer)
+    _print_mesh_hints(cfg, interface=interface)
     _log_x25519_identity(cfg)
 
     node = BBNode(
@@ -81,7 +101,7 @@ def run_chat(
 
     setup_ble_pairing_agent(quiet=True)
     try:
-        node.start(topology)
+        node.start(topology, l2cap_accept_all=True)
         time.sleep(1.0)
         targets = node.connect_targets()
         for _ in range(12):
