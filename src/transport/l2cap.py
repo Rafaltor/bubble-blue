@@ -38,6 +38,15 @@ def _expected_socket_close(err: OSError, *, stopping: bool, replaced: bool) -> b
     )
 
 
+def _should_initiate_connect(local_bd_addr: str, remote_bd_addr: str) -> bool:
+    """
+    Symmetric mesh tie-breaker: only the lexicographically lower BD_ADDR
+    initiates outbound L2CAP. The higher address waits for inbound accept().
+    Prevents dual-socket races that flap connect/disconnect on every pair.
+    """
+    return local_bd_addr.upper() < remote_bd_addr.upper()
+
+
 @dataclass(frozen=True)
 class PeerConn:
     bd_addr: str
@@ -145,6 +154,9 @@ class L2CAPTransport:
             )
             return
 
+        if not _should_initiate_connect(self._cfg.local_bd_addr, bd_addr):
+            return
+
         is_new = False
         with self._lock:
             existing = self._conns.get(bd_addr)
@@ -184,15 +196,23 @@ class L2CAPTransport:
             ok = bool(peer and peer.sock.fileno() != -1)
 
         if not ok:
-            self.connect(bd_addr)
+            if _should_initiate_connect(self._cfg.local_bd_addr, bd_addr):
+                self.connect(bd_addr)
             with self._lock:
                 peer = self._conns.get(bd_addr)
 
-        if not peer:
+        if not peer or peer.sock.fileno() == -1:
             raise RuntimeError(f"Could not establish L2CAP connection to {bd_addr}")
 
         payload = bytes(data)
-        peer.sock.sendall(payload)
+        try:
+            peer.sock.sendall(payload)
+        except OSError:
+            with self._lock:
+                cur = self._conns.get(bd_addr)
+                if cur is peer:
+                    self._conns.pop(bd_addr, None)
+            raise
         _tlog(
             self._node,
             f"L2CAP tx src={self._cfg.local_bd_addr} dst={bd_addr} bytes={len(payload)}",
@@ -229,13 +249,19 @@ class L2CAPTransport:
 
             with self._lock:
                 old = self._conns.get(peer_bd_addr)
-                was_live = bool(old and old.sock.fileno() != -1)
-                if old:
+                if old and old.sock.fileno() != -1:
                     try:
-                        old.sock.close()
+                        client_sock.close()
                     except OSError:
                         pass
+                    _tlog(
+                        self._node,
+                        f"L2CAP duplicate accept ignored peer={peer_bd_addr}",
+                        quiet=self._quiet,
+                    )
+                    continue
 
+                was_live = False
                 t = threading.Thread(
                     target=self._recv_loop,
                     args=(peer_bd_addr, client_sock),

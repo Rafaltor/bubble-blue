@@ -141,11 +141,6 @@ class HelloManager:
     def _send_hellos(self) -> None:
         peers = list(self._transport.connections())
         if not peers:
-            peers = [b for b in self._cfg.group_members if b != self._local_bd]
-            if not peers and self._cfg.remote_bd_addr not in ("00:00:00:00:00:00",):
-                peers = [self._cfg.remote_bd_addr.upper()]
-
-        if not peers:
             return
 
         neighbors = self._known_neighbor_bd_addrs()
@@ -161,7 +156,7 @@ class HelloManager:
         for peer in peers:
             try:
                 self._transport.send(peer, pkt)
-            except OSError as e:
+            except (OSError, RuntimeError) as e:
                 if not self._quiet:
                     print(f"[APP] Hello send failed peer={peer}: {e}", flush=True)
 

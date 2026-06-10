@@ -284,6 +284,7 @@ class BBNode:
         if self._transport is None:
             return
         now = time.monotonic()
+        local = self._require_cfg().local_bd_addr.upper()
         for bd in sorted(self._connect_targets()):
             if bd in self._transport.connections():
                 self._connect_last_err.pop(bd, None)
@@ -291,6 +292,8 @@ class BBNode:
                 self._connect_streak.pop(bd, None)
                 continue
             if now < self._connect_backoff_until.get(bd, 0.0):
+                continue
+            if local >= bd:
                 continue
             try:
                 self._transport.connect(bd)
@@ -307,6 +310,8 @@ class BBNode:
             errno.ECONNREFUSED,
             errno.ENETUNREACH,
             errno.ETIMEDOUT,
+            errno.ECONNABORTED,
+            errno.ECONNRESET,
         ):
             return
         key = f"{e.errno}"

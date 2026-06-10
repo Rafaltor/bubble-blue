@@ -606,6 +606,67 @@
     color: var(--accent);
   }
 
+  /* ARCHITECTURE DIAGRAM SLIDE */
+  .slide.arch-slide { padding: 2rem 3rem; }
+  .slide.arch-slide h2 { font-size: 1.55rem; margin-bottom: 0.3rem; }
+  .slide.arch-slide .arch-subtitle {
+    font-family: var(--sans);
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-bottom: 0.75rem;
+  }
+  .slide.arch-slide .crypto-diagram-panel {
+    padding: 0.55rem 0.75rem;
+    gap: 0.35rem;
+  }
+  .slide.arch-slide .crypto-anno-list {
+    font-size: 0.62rem;
+  }
+
+  .arch-diagram-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.85rem;
+  }
+  .arch-diagram-grid .span-full { grid-column: 1 / -1; }
+
+  .crypto-diagram-panel.stack { border-top: 3px solid #6366f1; }
+  .crypto-diagram-panel.stack .crypto-diagram-title { color: #a5b4fc; }
+  .crypto-diagram-panel.stack .crypto-anno-list li::before { color: #818cf8; }
+
+  .crypto-diagram-panel.hello { border-top: 3px solid #22c55e; }
+  .crypto-diagram-panel.hello .crypto-diagram-title { color: #86efac; }
+  .crypto-diagram-panel.hello .crypto-anno-list li::before { color: #22c55e; }
+
+  .crypto-diagram-panel.data { border-top: 3px solid #0ea5e9; }
+  .crypto-diagram-panel.data .crypto-diagram-title { color: #7dd3fc; }
+  .crypto-diagram-panel.data .crypto-anno-list li::before { color: #38bdf8; }
+
+  .crypto-diagram-panel.node { border-top: 3px solid #64748b; }
+  .crypto-diagram-panel.node .crypto-diagram-title { color: #cbd5e1; }
+  .crypto-diagram-panel.node .crypto-anno-list li::before { color: #94a3b8; }
+
+  .slide.hello-slide { padding: 2rem 3rem; }
+  .slide.hello-slide h2 { font-size: 1.55rem; margin-bottom: 0.3rem; }
+  .slide.cds-slide { padding: 2rem 3rem; }
+  .slide.cds-slide h2 { font-size: 1.55rem; margin-bottom: 0.3rem; }
+
+  .crypto-diagram-panel.hello-pkt { border-top: 3px solid #3b82f6; }
+  .crypto-diagram-panel.hello-pkt .crypto-diagram-title { color: #93c5fd; }
+  .crypto-diagram-panel.hello-pkt .crypto-anno-list li::before { color: #60a5fa; }
+
+  .crypto-diagram-panel.hello-vis { border-top: 3px solid #22c55e; }
+  .crypto-diagram-panel.hello-vis .crypto-diagram-title { color: #86efac; }
+  .crypto-diagram-panel.hello-vis .crypto-anno-list li::before { color: #4ade80; }
+
+  .crypto-diagram-panel.cds-chain { border-top: 3px solid #f59e0b; }
+  .crypto-diagram-panel.cds-chain .crypto-diagram-title { color: #fcd34d; }
+  .crypto-diagram-panel.cds-chain .crypto-anno-list li::before { color: #fbbf24; }
+
+  .crypto-diagram-panel.cds-mesh { border-top: 3px solid #22c55e; }
+  .crypto-diagram-panel.cds-mesh .crypto-diagram-title { color: #86efac; }
+  .crypto-diagram-panel.cds-mesh .crypto-anno-list li::before { color: #4ade80; }
+
   /* UNICAST CALC */
   .calc-row {
     display: flex;
@@ -724,81 +785,245 @@
   </div>
 </div>
 
-<!-- SLIDE 2: ARCHITECTURE -->
-<div class="slide" id="s2">
-  <div class="slide-num">ARCHITECTURE</div>
-  <h2>Stack BB — Structure implémentée</h2>
+<!-- SLIDE 2: ARCHITECTURE — COUCHES -->
+<div class="slide arch-slide" id="s2">
+  <div class="slide-num">ARCHITECTURE — 1/3</div>
+  <h2>Stack BB — Couches logicielles</h2>
+  <p class="arch-subtitle">Arborescence repo · pipeline top → bottom</p>
 
-  <div class="two-col">
+  <div class="two-col" style="gap: 1.25rem; align-items: start;">
     <div>
       <div class="section-label">Arborescence repo</div>
       <div class="formula-box" style="line-height: 1.75; font-size: 0.72rem;">
         <code>bubble-blue/</code><br>
-        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— CLI <code>--chat</code> · <code>--topology</code> · <code>--scan</code></span><br>
-        ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env (<code>GROUP_KEY</code>, <code>GROUP_MEMBERS</code>)</span><br>
-        ├── <code>docs/CONFIGURATION.md</code><br>
-        ├── <code>tests/</code> <span style="color: var(--text-muted);">— phase1a, forwarder, bb_api</span><br>
+        ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— CLI</span><br>
+        ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env</span><br>
+        ├── <code>tests/</code> <span style="color: var(--text-muted);">— forwarder · bb_api · pairwise</span><br>
         └── <code>src/</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>bb_api.py</code> (<code>BBNode</code>), <code>chat_log.py</code>, <code>chat_input.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code>, <code>discovery.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → <code>crypto.py</code>, <code>keys.py</code>, <code>packet.py</code>, <code>replay.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → <code>hello.py</code>, <code>neighbors.py</code>, <code>hello_manager.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → <code>cds.py</code>, <code>forwarder.py</code>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>BBNode</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → keys · crypto · replay<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → hello · neighbors<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → cds · forwarder
       </div>
-    </div>
-    <div>
-      <div class="section-label">Couches (top → bottom)</div>
-      <div class="arch-stack seq pipeline">
-        <div class="arch-layer highlight">
-          <span class="arch-layer-name">Application</span>
-          <span class="arch-layer-tech"><code>bb_node.py</code> · <code>BBNode</code> (<code>bb_api.py</code>)</span>
-        </div>
-        <div class="arch-layer highlight">
-          <span class="arch-layer-name">Forwarding</span>
-          <span class="arch-layer-tech"><code>forwarder.py</code> + <code>cds.py</code> (<code>am_i_cds</code>)</span>
-        </div>
-        <div class="arch-layer">
-          <span class="arch-layer-name">Control</span>
-          <span class="arch-layer-tech"><code>hello_manager.py</code> → <code>hello.py</code> → <code>neighbors.py</code></span>
-        </div>
-        <div class="arch-layer">
-          <span class="arch-layer-name">Security</span>
-          <span class="arch-layer-tech"><code>keys.py</code> (HKDF + X25519) · <code>crypto.py</code> · <code>replay.py</code></span>
-        </div>
-        <div class="arch-layer">
-          <span class="arch-layer-name">Packet Format</span>
-          <span class="arch-layer-tech"><code>packet.py</code></span>
-        </div>
-        <div class="arch-layer">
-          <span class="arch-layer-name">Transport</span>
-          <span class="arch-layer-tech"><code>l2cap.py</code></span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="section-label" style="margin-top: 1.25rem;">Routage des paquets</div>
-  <div class="compare-grid compare-2" style="margin-top: 0.5rem;">
-    <div class="compare-box winner plain" style="border-color: var(--accent);">
-      <div class="box-title" style="font-size: 0.85rem;"><code>PKT_HELLO</code></div>
-      <ul class="box-list">
-        <li class="good">→ <code>HelloManager</code></li>
-        <li class="good">→ <code>NeighborTable</code> (<code>neighbors.py</code>)</li>
+      <ul class="crypto-anno-list" style="margin-top: 0.85rem;">
+        <li><strong>Entrée</strong> : <code>bb_node.py --chat</code></li>
+        <li><strong>Config</strong> : <code>GROUP_KEY</code> · <code>GROUP_MEMBERS</code> dans <code>.env</code></li>
       </ul>
     </div>
-    <div class="compare-box winner plain" style="border-color: var(--green);">
-      <div class="box-title" style="font-size: 0.85rem;"><code>PKT_DATA</code></div>
-      <ul class="box-list">
-        <li class="good">→ <code>PacketForwarder</code> (RELAY : forward brut · LEAF : livrer)</li>
-        <li class="good">→ <code>derive_packet_key</code> + decrypt si destinataire (AAD sans TTL)</li>
-        <li class="good">→ <code>bb_node</code> / callback <code>on_message</code></li>
+    <div class="crypto-diagram-panel stack" style="margin: 0;">
+      <div class="crypto-diagram-title">Couches du stack (top → bottom)</div>
+      <svg viewBox="0 0 520 118" xmlns="http://www.w3.org/2000/svg" aria-label="Diagramme couches stack BB">
+        <defs>
+          <marker id="arr-stack" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#818cf8"/>
+          </marker>
+          <linearGradient id="layer-app" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#312e81"/><stop offset="100%" stop-color="#4338ca"/></linearGradient>
+          <linearGradient id="layer-fwd" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#1e3a5f"/><stop offset="100%" stop-color="#1d4ed8"/></linearGradient>
+          <linearGradient id="layer-ctl" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#14532d"/><stop offset="100%" stop-color="#15803d"/></linearGradient>
+          <linearGradient id="layer-sec" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#713f12"/><stop offset="100%" stop-color="#b45309"/></linearGradient>
+          <linearGradient id="layer-pkt" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#334155"/><stop offset="100%" stop-color="#475569"/></linearGradient>
+          <linearGradient id="layer-tr" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#0c4a6e"/><stop offset="100%" stop-color="#0369a1"/></linearGradient>
+        </defs>
+        <rect x="8" y="6" width="504" height="18" rx="4" fill="url(#layer-app)" stroke="#6366f1" stroke-width="1"/>
+        <text x="20" y="18" fill="#e0e7ff" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Application</text>
+        <text x="110" y="18" fill="#c7d2fe" font-family="Consolas,monospace" font-size="7">bb_node.py · BBNode · --chat</text>
+        <line x1="260" y1="24" x2="260" y2="30" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arr-stack)"/>
+        <rect x="8" y="30" width="504" height="18" rx="4" fill="url(#layer-fwd)" stroke="#3b82f6" stroke-width="1"/>
+        <text x="20" y="42" fill="#dbeafe" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Forwarding</text>
+        <text x="110" y="42" fill="#bfdbfe" font-family="Consolas,monospace" font-size="7">forwarder.py · cds.py</text>
+        <line x1="260" y1="48" x2="260" y2="54" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arr-stack)"/>
+        <rect x="8" y="54" width="504" height="18" rx="4" fill="url(#layer-ctl)" stroke="#22c55e" stroke-width="1"/>
+        <text x="20" y="66" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Control</text>
+        <text x="110" y="66" fill="#bbf7d0" font-family="Consolas,monospace" font-size="7">hello_manager → neighbors · BBKeyStore</text>
+        <line x1="260" y1="72" x2="260" y2="78" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arr-stack)"/>
+        <rect x="8" y="78" width="246" height="18" rx="4" fill="url(#layer-sec)" stroke="#f59e0b" stroke-width="1"/>
+        <text x="20" y="90" fill="#fef3c7" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Security</text>
+        <text x="90" y="90" fill="#fde68a" font-family="Consolas,monospace" font-size="7">keys · crypto · replay</text>
+        <rect x="266" y="78" width="246" height="18" rx="4" fill="url(#layer-pkt)" stroke="#64748b" stroke-width="1"/>
+        <text x="278" y="90" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Packet</text>
+        <text x="330" y="90" fill="#cbd5e1" font-family="Consolas,monospace" font-size="7">header 26 B · AAD sans TTL</text>
+        <line x1="260" y1="96" x2="260" y2="102" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arr-stack)"/>
+        <rect x="8" y="102" width="504" height="18" rx="4" fill="url(#layer-tr)" stroke="#0ea5e9" stroke-width="1"/>
+        <text x="20" y="114" fill="#e0f2fe" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Transport</text>
+        <text x="110" y="114" fill="#bae6fd" font-family="Consolas,monospace" font-size="7">l2cap.py · PSM 0x1001 · BlueZ</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>Chaque couche ne connaît que la couche <strong>inférieure</strong> (sauf callbacks montants)</li>
+        <li>Deux types de paquets : <code>PKT_HELLO</code> (control) · <code>PKT_DATA</code> (forwarding)</li>
       </ul>
     </div>
   </div>
 </div>
 
-<!-- SLIDE 3: TRANSPORT & SÉCURITÉ -->
-<div class="slide" id="s3">
+<!-- SLIDE 3: ARCHITECTURE — TRANSPORT L2CAP -->
+<div class="slide arch-slide" id="s3">
+  <div class="slide-num">ARCHITECTURE — 2/3</div>
+  <h2>Transport — Nœud symétrique L2CAP</h2>
+  <p class="arch-subtitle">Chaque board écoute et initie des connexions · topologie physique multihop</p>
+
+  <div class="arch-diagram-grid">
+    <div class="crypto-diagram-panel node span-full">
+      <div class="crypto-diagram-title">Nœud symétrique — connexions L2CAP</div>
+      <svg viewBox="0 0 880 120" xmlns="http://www.w3.org/2000/svg" aria-label="Diagramme nœud L2CAP symétrique">
+        <defs>
+          <marker id="arr-node" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#38bdf8"/>
+          </marker>
+        </defs>
+        <rect x="340" y="12" width="200" height="80" rx="8" fill="#0f172a" stroke="#0ea5e9" stroke-width="2"/>
+        <text x="440" y="36" text-anchor="middle" fill="#7dd3fc" font-family="IBM Plex Sans,sans-serif" font-size="11" font-weight="700">NŒUD BB</text>
+        <text x="440" y="52" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="8">L2CAP server + client</text>
+        <text x="440" y="66" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="7">listen PSM 0x1001 · connect()</text>
+        <text x="440" y="80" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="7">1 thread rx par peer</text>
+        <rect x="40" y="28" width="130" height="48" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+        <text x="105" y="48" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="600">L2CAP Server</text>
+        <text x="105" y="64" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="7">accept inbound</text>
+        <rect x="710" y="28" width="130" height="48" rx="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+        <text x="775" y="48" text-anchor="middle" fill="#e2e8f0" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="600">L2CAP Client</text>
+        <text x="775" y="64" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="7">dial peers</text>
+        <circle cx="105" cy="100" r="16" fill="#172554" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="105" y="105" text-anchor="middle" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">P1</text>
+        <circle cx="775" cy="100" r="16" fill="#172554" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="775" y="105" text-anchor="middle" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">P2</text>
+        <line x1="170" y1="52" x2="338" y2="52" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-node)"/>
+        <line x1="540" y1="52" x2="708" y2="52" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-node)"/>
+        <text x="255" y="44" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="7">rx thread / peer</text>
+        <text x="625" y="44" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="7">--topology allowlist</text>
+      </svg>
+      <ul class="crypto-anno-list" style="flex-direction: row; flex-wrap: wrap; gap: 0.35rem 1.5rem;">
+        <li>Auto-pairing <code>NoInputNoOutput</code></li>
+        <li>Reconnexion avec backoff</li>
+        <li>Callbacks <code>on_peer_up</code> / <code>on_peer_down</code></li>
+      </ul>
+    </div>
+
+    <div class="crypto-diagram-panel node span-full">
+      <div class="crypto-diagram-title">Topologie multihop validée (3 boards)</div>
+      <svg viewBox="0 0 880 100" xmlns="http://www.w3.org/2000/svg" aria-label="Topologie multihop 3 boards">
+        <defs>
+          <marker id="arr-topo" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#60a5fa"/>
+          </marker>
+        </defs>
+        <circle cx="120" cy="50" r="36" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="120" y="46" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">RubikQ</text>
+        <text x="120" y="60" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="7">LEAF</text>
+        <circle cx="440" cy="50" r="36" fill="#422006" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 3"/>
+        <text x="440" y="46" text-anchor="middle" fill="#fef3c7" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Arduino</text>
+        <text x="440" y="60" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="7">RELAY (CDS)</text>
+        <circle cx="760" cy="50" r="36" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="760" y="46" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Rubik2</text>
+        <text x="760" y="60" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="7">LEAF</text>
+        <line x1="156" y1="50" x2="402" y2="50" stroke="#60a5fa" stroke-width="2" marker-end="url(#arr-topo)"/>
+        <line x1="478" y1="50" x2="724" y2="50" stroke="#60a5fa" stroke-width="2" marker-end="url(#arr-topo)"/>
+        <text x="280" y="38" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="7">L2CAP link</text>
+        <text x="600" y="38" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="7">L2CAP link</text>
+        <text x="440" y="88" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="8">Relais forward paquets opaques — pas membre du groupe chiffré</text>
+      </svg>
+      <ul class="crypto-anno-list" style="flex-direction: row; flex-wrap: wrap; gap: 0.35rem 1.5rem;">
+        <li>Chat groupe RubikQ ↔ Rubik2 via relais Arduino</li>
+        <li>Hello public visible · DATA chiffré end-to-end pour membres</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: ARCHITECTURE — ROUTAGE -->
+<div class="slide arch-slide" id="s4">
+  <div class="slide-num">ARCHITECTURE — 3/3</div>
+  <h2>Routage des paquets</h2>
+  <p class="arch-subtitle">Deux chemins distincts selon le type de paquet reçu sur L2CAP</p>
+
+  <div class="crypto-dual-grid">
+    <div class="crypto-diagram-panel hello">
+      <div class="crypto-diagram-title">Flux PKT_HELLO (0x01)</div>
+      <svg viewBox="0 0 420 168" xmlns="http://www.w3.org/2000/svg" aria-label="Diagramme flux Hello">
+        <defs>
+          <marker id="arr-hello" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#4ade80"/>
+          </marker>
+        </defs>
+        <circle cx="32" cy="44" r="20" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="32" y="49" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="11" font-weight="700">P</text>
+        <rect x="68" y="26" width="76" height="36" rx="5" fill="#0c4a6e" stroke="#0ea5e9" stroke-width="1"/>
+        <text x="106" y="42" text-anchor="middle" fill="#bae6fd" font-family="Consolas,monospace" font-size="7.5" font-weight="600">l2cap.py</text>
+        <text x="106" y="54" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">on_receive</text>
+        <rect x="168" y="26" width="76" height="36" rx="5" fill="#1e293b" stroke="#64748b" stroke-width="1"/>
+        <text x="206" y="42" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="7.5" font-weight="600">bb_node</text>
+        <text x="206" y="54" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">type=0x01</text>
+        <rect x="268" y="20" width="92" height="48" rx="5" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="314" y="38" text-anchor="middle" fill="#bbf7d0" font-family="Consolas,monospace" font-size="7.5" font-weight="600">HelloManager</text>
+        <text x="314" y="50" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="6.5">parse public+private</text>
+        <text x="314" y="62" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">TX every 5 s</text>
+        <line x1="52" y1="44" x2="66" y2="44" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr-hello)"/>
+        <line x1="144" y1="44" x2="166" y2="44" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr-hello)"/>
+        <line x1="244" y1="44" x2="266" y2="44" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr-hello)"/>
+        <rect x="36" y="96" width="118" height="32" rx="4" fill="#1e293b" stroke="#3b82f6" stroke-width="1"/>
+        <text x="95" y="110" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="7">NeighborTable</text>
+        <text x="95" y="122" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">1-hop · 2-hop · anon_id</text>
+        <rect x="168" y="96" width="108" height="32" rx="4" fill="#1e293b" stroke="#f59e0b" stroke-width="1"/>
+        <text x="222" y="110" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="7">BBKeyStore</text>
+        <text x="222" y="122" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">pubkey X25519</text>
+        <rect x="290" y="96" width="108" height="32" rx="4" fill="#1e293b" stroke="#22c55e" stroke-width="1"/>
+        <text x="344" y="110" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="7">cds.py</text>
+        <text x="344" y="122" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">RELAY / LEAF</text>
+        <line x1="314" y1="68" x2="314" y2="80" stroke="#4ade80" stroke-width="1.2"/>
+        <line x1="314" y1="80" x2="95" y2="94" stroke="#4ade80" stroke-width="1" marker-end="url(#arr-hello)"/>
+        <line x1="314" y1="80" x2="222" y2="94" stroke="#4ade80" stroke-width="1" marker-end="url(#arr-hello)"/>
+        <line x1="314" y1="80" x2="344" y2="94" stroke="#4ade80" stroke-width="1" marker-end="url(#arr-hello)"/>
+        <rect x="36" y="142" width="362" height="22" rx="4" fill="#0f172a" stroke="#334155"/>
+        <text x="217" y="156" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">PUBLIC clair + PRIVATE chiffré (BD addr, X25519)</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>Topologie <strong>anonyme</strong> pour relais CDS non-membres</li>
+        <li>Membres résolvent <code>anon_id → BD address</code></li>
+      </ul>
+    </div>
+
+    <div class="crypto-diagram-panel data">
+      <div class="crypto-diagram-title">Flux PKT_DATA (0x02)</div>
+      <svg viewBox="0 0 420 168" xmlns="http://www.w3.org/2000/svg" aria-label="Diagramme flux DATA">
+        <defs>
+          <marker id="arr-data" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#38bdf8"/>
+          </marker>
+        </defs>
+        <circle cx="32" cy="44" r="20" fill="#0c4a6e" stroke="#0ea5e9" stroke-width="1.5"/>
+        <text x="32" y="49" text-anchor="middle" fill="#e0f2fe" font-family="IBM Plex Sans,sans-serif" font-size="11" font-weight="700">P</text>
+        <rect x="68" y="26" width="76" height="36" rx="5" fill="#0c4a6e" stroke="#0ea5e9" stroke-width="1"/>
+        <text x="106" y="48" text-anchor="middle" fill="#bae6fd" font-family="Consolas,monospace" font-size="7.5">l2cap.py</text>
+        <rect x="168" y="26" width="96" height="36" rx="5" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="216" y="42" text-anchor="middle" fill="#dbeafe" font-family="Consolas,monospace" font-size="7.5" font-weight="600">PacketForwarder</text>
+        <text x="216" y="54" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">.handle()</text>
+        <rect x="290" y="26" width="84" height="36" rx="5" fill="#14532d" stroke="#22c55e" stroke-width="1"/>
+        <text x="332" y="42" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="7">am_i_cds</text>
+        <text x="332" y="54" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">Hello + L2CAP</text>
+        <line x1="52" y1="44" x2="66" y2="44" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-data)"/>
+        <line x1="144" y1="44" x2="166" y2="44" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#arr-data)"/>
+        <line x1="264" y1="44" x2="288" y2="44" stroke="#64748b" stroke-width="1" stroke-dasharray="3 2"/>
+        <rect x="36" y="96" width="140" height="40" rx="5" fill="#422006" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 2"/>
+        <text x="106" y="114" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">RELAY</text>
+        <text x="106" y="128" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">forward opaque · TTL--</text>
+        <rect x="258" y="96" width="140" height="40" rx="5" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="328" y="114" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">DESTINATAIRE</text>
+        <text x="328" y="128" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">HKDF + decrypt · on_message</text>
+        <line x1="216" y1="62" x2="216" y2="78" stroke="#38bdf8" stroke-width="1.2"/>
+        <line x1="216" y1="78" x2="106" y2="94" stroke="#fbbf24" stroke-width="1.2" marker-end="url(#arr-data)"/>
+        <line x1="216" y1="78" x2="328" y2="94" stroke="#4ade80" stroke-width="1.2" marker-end="url(#arr-data)"/>
+        <rect x="36" y="148" width="362" height="22" rx="4" fill="#0f172a" stroke="#334155"/>
+        <text x="217" y="162" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">keys.py · crypto.py · replay.py · 42 B OH · _ForwardCache</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>Relais : <strong>pas de decrypt</strong> — octets opaques</li>
+        <li>Anti-replay relay + livraison · décision via <code>am_i_cds()</code></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: TRANSPORT & SÉCURITÉ -->
+<div class="slide" id="s5">
   <div class="slide-num">TRANSPORT &amp; SÉCURITÉ</div>
   <h2>BT Classic L2CAP + dérivation clé par paquet</h2>
 
@@ -864,8 +1089,8 @@
   </div>
 </div>
 
-<!-- SLIDE 4: MODÈLE CRYPTOGRAPHIQUE -->
-<div class="slide crypto-slide" id="s4">
+<!-- SLIDE 6: MODÈLE CRYPTOGRAPHIQUE -->
+<div class="slide crypto-slide" id="s6">
   <div class="slide-num">03.5 — MODÈLE CRYPTOGRAPHIQUE</div>
   <h2>Modèle Cryptographique — Groupe &amp; Privé</h2>
   <h3>Même format paquet (42 B overhead) · deux bases de dérivation distinctes</h3>
@@ -1024,176 +1249,229 @@
   </table>
 </div>
 
-<!-- SLIDE 5: HELLO MESSAGES -->
-<div class="slide" id="s5">
+<!-- SLIDE 7: HELLO MESSAGES -->
+<div class="slide hello-slide" id="s7">
   <div class="slide-num">HELLO MESSAGES</div>
   <h2>Topologie anonyme — Deux parties</h2>
-  <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1.25rem;">Seuls les membres connaissent la vraie identité des nœuds</p>
+  <p class="arch-subtitle">Seuls les membres connaissent la vraie identité · relais CDS voient le graphe anonyme</p>
 
-  <div class="two-col">
-    <div>
-      <div class="section-label">Design deux parties</div>
-      <div class="compare-box plain" style="border-color: var(--accent); margin-bottom: 0.75rem;">
-        <div class="box-title" style="font-size: 0.8rem; color: var(--accent);">PUBLIC <span style="font-weight: 400; color: var(--text-muted);">— clair, tout nœud CDS</span></div>
-        <ul class="box-list">
-          <li><code>anon_id</code> = HMAC-SHA256(<code>group_key</code>, <code>bd_addr</code>)[:8]</li>
-          <li><code>seq</code>, <code>timestamp</code></li>
-          <li>liste des voisins par <code>anon_id</code></li>
-        </ul>
-      </div>
-      <div class="compare-box plain" style="border-color: var(--yellow); margin-bottom: 0.75rem;">
-        <div class="box-title" style="font-size: 0.8rem; color: var(--yellow);">PRIVATE <span style="font-weight: 400; color: var(--text-muted);">— AES-GCM, membres seulement</span></div>
-        <ul class="box-list">
-          <li>vraie BD address + voisins BD</li>
-          <li><strong>clé publique X25519</strong> (32 B) — échange ECDH pour messages privés</li>
-        </ul>
-      </div>
-      <div class="stat-row" style="margin-bottom: 0;">
-        <div class="stat-box blue">
-          <span class="stat-label">Hello packet size</span>
-          <span class="stat-value" style="font-size: 1.1rem;">~106 B</span>
-          <span class="stat-context">ex. 1 voisin + pubkey X25519</span>
-        </div>
-        <div class="stat-box green">
-          <span class="stat-label">Intervalle</span>
-          <span class="stat-value" style="font-size: 1.1rem;">5 s</span>
-          <span class="stat-context"><code>hello_interval_s</code></span>
-        </div>
-      </div>
+  <div class="crypto-dual-grid">
+    <div class="crypto-diagram-panel hello-pkt">
+      <div class="crypto-diagram-title">Structure paquet PKT_HELLO</div>
+      <svg viewBox="0 0 420 175" xmlns="http://www.w3.org/2000/svg" aria-label="Structure paquet Hello">
+        <defs>
+          <marker id="arr-hpkt" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#60a5fa"/>
+          </marker>
+        </defs>
+        <!-- PUBLIC block -->
+        <rect x="12" y="14" width="396" height="52" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="24" y="30" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">PUBLIC — clair (tout nœud CDS)</text>
+        <rect x="24" y="36" width="48" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="48" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">0x01</text>
+        <rect x="78" y="36" width="56" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="106" y="50" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="6.5">anon_id</text>
+        <rect x="140" y="36" width="36" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="158" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">seq</text>
+        <rect x="182" y="36" width="44" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="204" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">ts_ms</text>
+        <rect x="232" y="36" width="24" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="244" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">n</text>
+        <rect x="262" y="36" width="134" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="329" y="50" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="6.5">voisins anon_id × n</text>
+        <!-- Arrow down -->
+        <line x1="210" y1="66" x2="210" y2="78" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr-hpkt)"/>
+        <!-- PRIVATE block -->
+        <rect x="12" y="78" width="396" height="58" rx="6" fill="#422006" stroke="#eab308" stroke-width="1.5"/>
+        <text x="24" y="94" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">PRIVATE — AES-256-GCM (membres seulement)</text>
+        <rect x="24" y="100" width="36" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="42" y="114" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">len</text>
+        <rect x="66" y="100" width="330" height="22" rx="3" fill="#0f172a" stroke="#713f12" stroke-dasharray="3 2"/>
+        <text x="231" y="114" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="6.5">BD addr · voisins BD · pubkey X25519 (32 B)</text>
+        <!-- anon_id formula -->
+        <rect x="12" y="148" width="396" height="24" rx="4" fill="#0f172a" stroke="#334155"/>
+        <text x="210" y="164" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">anon_id = HMAC-SHA256(group_key, bd_addr)[:8]</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>Public = AAD du chiffrement private</li>
+        <li>Taille typique : <strong>~106 B</strong> (1 voisin + X25519) · TX <strong>5 s</strong></li>
+      </ul>
     </div>
-    <div>
-      <div class="section-label">Ce que chaque nœud voit</div>
-      <table class="table-compact">
-        <thead>
-          <tr><th>Profil</th><th>Voit</th><th>Peut</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Relais CDS non-membre</strong></td>
-            <td class="cell-neutral">A77F ↔ B3C2 ↔ F91A</td>
-            <td class="cell-good">construire CDS ✅<br><span class="cell-good">ne voit pas qui est qui ✅</span></td>
-          </tr>
-          <tr>
-            <td><strong>Membre du groupe</strong></td>
-            <td class="cell-good">anon_ids + vraies BD addresses</td>
-            <td class="cell-good">CDS + identifier les membres ✅</td>
-          </tr>
-          <tr>
-            <td><strong>Attaquant extérieur</strong></td>
-            <td class="cell-bad">paquets chiffrés opaques</td>
-            <td class="cell-good">rien ✅</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 
-  <div class="verdict" style="margin-top: 1rem;">
-    <div class="verdict-label">Synthèse</div>
-    La topologie reste opaque pour les non-membres.
-    Les relais CDS font leur travail sans connaître
-    l'identité des nœuds qu'ils servent.
-  </div>
-</div>
-
-<!-- SLIDE 6: CDS -->
-<div class="slide" id="s6">
-  <div class="slide-num">CDS — CONNECTED DOMINATING SET</div>
-  <h2>Rôle relais local (<code>am_i_cds</code>)</h2>
-  <p class="subtitle" style="margin-top: -0.5rem; margin-bottom: 1rem;">Runtime : <code>HelloManager.is_relay</code> → <code>PacketForwarder</code> · Référence offline : <code>compute_cds()</code></p>
-
-  <div class="two-col">
-    <div>
-      <div class="section-label">Décision runtime — <code>am_i_cds()</code> ✅</div>
-      <div class="compare-box plain" style="border-color: var(--green); margin-bottom: 0.65rem;">
-        <ul class="box-list">
-          <li><strong>RELAY</strong> si ≥ 2 peers L2CAP <em>et</em> ∃ paire (u, v) sans lien Hello mutuel u↔v</li>
-          <li><strong>LEAF</strong> si &lt; 2 peers, ou mesh local complet (toutes paires liées en Hello)</li>
-          <li>Peers L2CAP = <code>transport.connections()</code> uniquement (pas la table Hello)</li>
-          <li>Adjacence u↔v = listes 1-hop Hello <strong>mutuelles</strong></li>
-          <li>Recalcul à chaque Hello / changement L2CAP · rôle visible en <code>--chat</code> au démarrage</li>
-        </ul>
-      </div>
-      <div class="section-label">Référence offline — <code>compute_cds()</code> (self-tests)</div>
-      <div class="compare-box plain" style="border-color: var(--border); margin-bottom: 0.65rem;">
-        <ul class="box-list">
-          <li>Greedy CDS sur graphe Hello fusionné (anon_ids)</li>
-          <li><strong>Non utilisé</strong> pour décider le forward à l'exécution</li>
-          <li>Sert à valider la théorie / topologies simulées dans <code>cds.py</code></li>
-        </ul>
-      </div>
-      <div class="section-label">Sources de données</div>
-      <table class="table-compact">
-        <thead>
-          <tr><th>Donnée</th><th>Source</th><th>Usage</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Peers L2CAP</strong></td>
-            <td><code>transport.connections()</code></td>
-            <td class="cell-good"><code>am_i_cds</code> — qui est connecté à moi</td>
-          </tr>
-          <tr>
-            <td><strong>Adjacence u↔v</strong></td>
-            <td>Hello public (1-hop mutuel)</td>
-            <td class="cell-good">Lien direct entre deux peers ?</td>
-          </tr>
-          <tr>
-            <td><strong>NeighborTable</strong></td>
-            <td>Hello public + private</td>
-            <td class="cell-neutral">Résolution membres · <code>compute_cds</code> simulé</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div>
-      <div class="section-label">Exemples de rôle (logique <code>am_i_cds</code>)</div>
-      <table class="table-compact" style="margin-bottom: 0.75rem;">
-        <thead>
-          <tr><th>Topologie</th><th>Peers L2CAP locaux</th><th>Rôle</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Chaîne A—B—C</strong></td>
-            <td>B : {A, C} — A↔C pas voisins Hello</td>
-            <td class="cell-good">B → <strong>RELAY</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Hub central</strong></td>
-            <td>H : {L1, L2} — feuilles non liées entre elles</td>
-            <td class="cell-good">H → <strong>RELAY</strong></td>
-          </tr>
-          <tr>
-            <td><strong>Triangle / mesh complet</strong></td>
-            <td>3 peers, tous mutuels Hello</td>
-            <td class="cell-good">tous → <strong>LEAF</strong></td>
-          </tr>
-          <tr>
-            <td><strong>2 nœuds seuls</strong></td>
-            <td>1 peer L2CAP</td>
-            <td class="cell-neutral">→ <strong>LEAF</strong></td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="section-label">Intégration <code>PacketForwarder</code></div>
-      <ul class="box-list">
-        <li><code>is_relay</code> → flood TTL vers peers ≠ ingress (octets bruts)</li>
-        <li><code>LEAF</code> → déchiffre si <code>dst</code> = local ou broadcast</li>
-        <li>Déduplication livraison <code>(src, seq)</code></li>
-        <li class="good">Validé multihop sur setup linéaire 3 nœuds (nœud central = RELAY)</li>
+    <div class="crypto-diagram-panel hello-vis">
+      <div class="crypto-diagram-title">Ce que chaque profil voit</div>
+      <svg viewBox="0 0 420 175" xmlns="http://www.w3.org/2000/svg" aria-label="Visibilité Hello par profil">
+        <!-- Relais non-membre -->
+        <rect x="8" y="12" width="128" height="130" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 2"/>
+        <text x="72" y="28" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="7.5" font-weight="700">Relais CDS</text>
+        <text x="72" y="40" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">non-membre</text>
+        <circle cx="40" cy="72" r="14" fill="#172554" stroke="#3b82f6"/>
+        <text x="40" y="76" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="7">A77F</text>
+        <circle cx="104" cy="72" r="14" fill="#172554" stroke="#3b82f6"/>
+        <text x="104" y="76" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="7">B3C2</text>
+        <circle cx="72" cy="108" r="14" fill="#172554" stroke="#3b82f6"/>
+        <text x="72" y="112" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="7">F91A</text>
+        <line x1="52" y1="72" x2="88" y2="72" stroke="#64748b" stroke-width="1"/>
+        <line x1="48" y1="82" x2="66" y2="96" stroke="#64748b" stroke-width="1"/>
+        <line x1="96" y1="82" x2="78" y2="96" stroke="#64748b" stroke-width="1"/>
+        <text x="72" y="132" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="6">CDS ✅ · identité ❌</text>
+        <!-- Membre -->
+        <rect x="146" y="12" width="128" height="130" rx="6" fill="#1e293b" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="210" y="28" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="7.5" font-weight="700">Membre</text>
+        <text x="210" y="40" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">group_key</text>
+        <circle cx="178" cy="72" r="14" fill="#14532d" stroke="#22c55e"/>
+        <text x="178" y="68" text-anchor="middle" fill="#bbf7d0" font-family="Consolas,monospace" font-size="5.5">A77F</text>
+        <text x="178" y="78" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="5">AA:BB…</text>
+        <circle cx="242" cy="72" r="14" fill="#14532d" stroke="#22c55e"/>
+        <text x="242" y="68" text-anchor="middle" fill="#bbf7d0" font-family="Consolas,monospace" font-size="5.5">B3C2</text>
+        <text x="242" y="78" text-anchor="middle" fill="#64748b" font-family="Consolas,monospace" font-size="5">CC:DD…</text>
+        <rect x="162" y="98" width="96" height="28" rx="4" fill="#0f172a" stroke="#f59e0b"/>
+        <text x="210" y="110" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="6">+ X25519 pub</text>
+        <text x="210" y="120" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="5.5">ECDH pairwise</text>
+        <text x="210" y="132" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="6">CDS ✅ · identité ✅</text>
+        <!-- Attaquant -->
+        <rect x="284" y="12" width="128" height="130" rx="6" fill="#1e293b" stroke="#ef4444" stroke-width="1.5"/>
+        <text x="348" y="28" text-anchor="middle" fill="#fca5a5" font-family="IBM Plex Sans,sans-serif" font-size="7.5" font-weight="700">Attaquant</text>
+        <text x="348" y="40" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">extérieur</text>
+        <rect x="304" y="58" width="88" height="44" rx="4" fill="#0f172a" stroke="#475569" stroke-dasharray="4 2"/>
+        <text x="348" y="78" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="14">🔒</text>
+        <text x="348" y="96" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">paquets opaques</text>
+        <text x="348" y="132" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="6">rien ✅</text>
+        <!-- Broadcast cycle -->
+        <rect x="8" y="152" width="404" height="20" rx="4" fill="#0f172a" stroke="#334155"/>
+        <text x="210" y="165" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">HelloManager · broadcast 5 s · NeighborTable 1-hop / 2-hop</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>Relais construit le CDS sans connaître les BD addresses</li>
+        <li>Membres décryptent le private → résolution <code>anon_id → BD</code></li>
       </ul>
     </div>
   </div>
 
   <div class="verdict" style="margin-top: 0.85rem;">
     <div class="verdict-label">Synthèse</div>
-    Pas de BD addresses dans la décision relais — uniquement <strong>anon_ids</strong> Hello + sockets L2CAP.
-    En mesh radio complet (tous se voient en Hello), personne ne relaie : le flood direct suffit.
+    La topologie reste opaque pour les non-membres.
+    Les relais CDS font leur travail sans connaître l'identité des nœuds qu'ils servent.
   </div>
 </div>
 
-<!-- SLIDE 7: FORWARDING -->
-<div class="slide" id="s7">
+<!-- SLIDE 8: CDS -->
+<div class="slide cds-slide" id="s8">
+  <div class="slide-num">CDS — CONNECTED DOMINATING SET</div>
+  <h2>Rôle relais local (<code>am_i_cds</code>)</h2>
+  <p class="arch-subtitle">Runtime : <code>HelloManager.is_relay</code> → <code>PacketForwarder</code> · Référence offline : <code>compute_cds()</code></p>
+
+  <div class="crypto-dual-grid">
+    <div class="crypto-diagram-panel cds-chain">
+      <div class="crypto-diagram-title">Chaîne A — B — C → B = RELAY</div>
+      <svg viewBox="0 0 420 185" xmlns="http://www.w3.org/2000/svg" aria-label="Topologie chaîne CDS relay">
+        <defs>
+          <marker id="arr-cds" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#fbbf24"/>
+          </marker>
+        </defs>
+        <!-- L2CAP layer label -->
+        <text x="210" y="16" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="7" font-weight="600">Peers L2CAP locaux de B : {A, C}</text>
+        <!-- Nodes -->
+        <circle cx="70" cy="58" r="28" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="70" y="54" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">A</text>
+        <text x="70" y="66" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6.5">LEAF</text>
+        <circle cx="210" cy="58" r="32" fill="#422006" stroke="#f59e0b" stroke-width="2.5"/>
+        <text x="210" y="52" text-anchor="middle" fill="#fef3c7" font-family="IBM Plex Sans,sans-serif" font-size="11" font-weight="700">B</text>
+        <text x="210" y="66" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="7" font-weight="700">RELAY</text>
+        <circle cx="350" cy="58" r="28" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="350" y="54" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">C</text>
+        <text x="350" y="66" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6.5">LEAF</text>
+        <!-- L2CAP links (solid blue) -->
+        <line x1="98" y1="58" x2="176" y2="58" stroke="#38bdf8" stroke-width="2.5"/>
+        <line x1="244" y1="58" x2="322" y2="58" stroke="#38bdf8" stroke-width="2.5"/>
+        <text x="137" y="48" text-anchor="middle" fill="#38bdf8" font-family="IBM Plex Sans,sans-serif" font-size="6">L2CAP</text>
+        <text x="283" y="48" text-anchor="middle" fill="#38bdf8" font-family="IBM Plex Sans,sans-serif" font-size="6">L2CAP</text>
+        <!-- Hello mutual links -->
+        <text x="210" y="96" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="7" font-weight="600">Adjacence Hello mutuelle (1-hop)</text>
+        <line x1="98" y1="108" x2="176" y2="108" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="137" y="104" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6">A ↔ B ✅</text>
+        <line x1="244" y1="108" x2="322" y2="108" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="283" y="104" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6">B ↔ C ✅</text>
+        <!-- Missing A-C link -->
+        <line x1="98" y1="128" x2="322" y2="128" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="210" y="124" text-anchor="middle" fill="#f87171" font-family="Consolas,monospace" font-size="7" font-weight="600">A ↔ C ❌ pas voisins Hello</text>
+        <!-- Decision -->
+        <rect x="24" y="142" width="372" height="36" rx="5" fill="#422006" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="210" y="158" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">∃ paire (A,C) sans lien Hello mutuel → am_i_cds(B) = TRUE</text>
+        <text x="210" y="172" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">B forward PKT_DATA opaque vers A ou C</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>Validé labo : RubikQ — Arduino — Rubik2</li>
+        <li>Peers L2CAP = <code>transport.connections()</code> uniquement</li>
+      </ul>
+    </div>
+
+    <div class="crypto-diagram-panel cds-mesh">
+      <div class="crypto-diagram-title">Mesh complet → tous LEAF</div>
+      <svg viewBox="0 0 420 185" xmlns="http://www.w3.org/2000/svg" aria-label="Topologie mesh complet LEAF">
+        <!-- Triangle nodes -->
+        <circle cx="210" cy="52" r="26" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="210" y="48" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">A</text>
+        <text x="210" y="60" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6.5">LEAF</text>
+        <circle cx="100" cy="120" r="26" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="100" y="116" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">B</text>
+        <text x="100" y="128" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6.5">LEAF</text>
+        <circle cx="320" cy="120" r="26" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="320" y="116" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">C</text>
+        <text x="320" y="128" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6.5">LEAF</text>
+        <!-- All links green -->
+        <line x1="188" y1="68" x2="118" y2="102" stroke="#22c55e" stroke-width="2"/>
+        <line x1="232" y1="68" x2="302" y2="102" stroke="#22c55e" stroke-width="2"/>
+        <line x1="126" y1="120" x2="294" y2="120" stroke="#22c55e" stroke-width="2"/>
+        <text x="145" y="88" fill="#86efac" font-family="Consolas,monospace" font-size="6">A↔B</text>
+        <text x="275" y="88" fill="#86efac" font-family="Consolas,monospace" font-size="6">A↔C</text>
+        <text x="210" y="114" fill="#86efac" font-family="Consolas,monospace" font-size="6">B↔C</text>
+        <!-- Decision flow -->
+        <rect x="24" y="148" width="372" height="32" rx="5" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="210" y="164" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Toutes paires liées Hello → am_i_cds = FALSE</text>
+        <text x="210" y="176" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">flood direct suffit · pas de relais local</text>
+        <!-- am_i_cds flowchart mini -->
+        <rect x="24" y="14" width="372" height="28" rx="4" fill="#0f172a" stroke="#334155"/>
+        <text x="210" y="32" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">≥2 peers L2CAP ? → ∀ paires (u,v) : u↔v Hello mutuel ?</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li>&lt; 2 peers L2CAP → toujours <strong>LEAF</strong></li>
+        <li>Recalcul à chaque Hello / changement L2CAP</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="arch-diagram-grid" style="margin-top: 0.85rem;">
+    <div class="crypto-diagram-panel stack span-full" style="padding: 0.55rem 0.75rem;">
+      <div class="crypto-diagram-title">Décision runtime vs référence offline</div>
+      <svg viewBox="0 0 880 72" xmlns="http://www.w3.org/2000/svg" aria-label="Runtime vs offline CDS">
+        <defs>
+          <marker id="arr-cds2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <polygon points="0 0, 7 3.5, 0 7" fill="#818cf8"/>
+          </marker>
+        </defs>
+        <rect x="8" y="8" width="400" height="56" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="208" y="26" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">am_i_cds() — RUNTIME ✅</text>
+        <text x="208" y="42" text-anchor="middle" fill="#bbf7d0" font-family="Consolas,monospace" font-size="7">vue locale · L2CAP peers + Hello mutuel</text>
+        <text x="208" y="56" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">→ PacketForwarder RELAY / LEAF</text>
+        <rect x="472" y="8" width="400" height="56" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="1"/>
+        <text x="672" y="26" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">compute_cds() — OFFLINE</text>
+        <text x="672" y="42" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="7">greedy CDS · graphe Hello fusionné</text>
+        <text x="672" y="56" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">self-tests · pas utilisé au forward</text>
+        <line x1="408" y1="36" x2="470" y2="36" stroke="#64748b" stroke-width="1" stroke-dasharray="4 2"/>
+        <text x="439" y="32" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="5.5">≠</text>
+      </svg>
+      <ul class="crypto-anno-list" style="flex-direction: row; flex-wrap: wrap; gap: 0.35rem 1.5rem;">
+        <li>Pas de BD addresses dans la décision — <strong>anon_ids</strong> uniquement</li>
+        <li><code>is_relay</code> → flood TTL · dédup <code>(src, seq)</code> · cache relay borné</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9: FORWARDING -->
+<div class="slide" id="s9">
   <div class="slide-num">FORWARDING</div>
   <h2>Forwarding &amp; test non-membre</h2>
 
@@ -1234,8 +1512,8 @@
   </div>
 </div>
 
-<!-- SLIDE 8: RÉSULTATS -->
-<div class="slide" id="s8">
+<!-- SLIDE 10: RÉSULTATS -->
+<div class="slide" id="s10">
   <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
   <h2>Validation hardware — 2 et 3 boards</h2>
 
@@ -1289,8 +1567,8 @@ peer connecté: AA:BB:CC:DD:EE:02
   </div>
 </div>
 
-<!-- SLIDE 9: ROADMAP -->
-<div class="slide" id="s9">
+<!-- SLIDE 11: ROADMAP -->
+<div class="slide" id="s11">
   <div class="slide-num">PROCHAINES ÉTAPES</div>
   <h2>Phase 1B terminée → BLE &amp; mesures</h2>
 
@@ -1353,20 +1631,22 @@ peer connecté: AA:BB:CC:DD:EE:02
 <!-- NAVIGATION -->
 <div id="nav">
   <button onclick="goTo(1)" class="active" id="btn1">Titre</button>
-  <button onclick="goTo(2)" id="btn2">Architecture</button>
-  <button onclick="goTo(3)" id="btn3">Transport &amp; Sécu</button>
-  <button onclick="goTo(4)" id="btn4">Modèle crypto</button>
-  <button onclick="goTo(5)" id="btn5">Hello</button>
-  <button onclick="goTo(6)" id="btn6">CDS</button>
-  <button onclick="goTo(7)" id="btn7">Forwarding</button>
-  <button onclick="goTo(8)" id="btn8">Résultats</button>
-  <button onclick="goTo(9)" id="btn9">Roadmap</button>
-  <span id="slide-counter">1 / 9</span>
+  <button onclick="goTo(2)" id="btn2">Stack</button>
+  <button onclick="goTo(3)" id="btn3">L2CAP</button>
+  <button onclick="goTo(4)" id="btn4">Routage</button>
+  <button onclick="goTo(5)" id="btn5">Transport &amp; Sécu</button>
+  <button onclick="goTo(6)" id="btn6">Modèle crypto</button>
+  <button onclick="goTo(7)" id="btn7">Hello</button>
+  <button onclick="goTo(8)" id="btn8">CDS</button>
+  <button onclick="goTo(9)" id="btn9">Forwarding</button>
+  <button onclick="goTo(10)" id="btn10">Résultats</button>
+  <button onclick="goTo(11)" id="btn11">Roadmap</button>
+  <span id="slide-counter">1 / 11</span>
 </div>
 
 <script>
   let current = 1;
-  const total = 9;
+  const total = 11;
   let wheelLock = false;
 
   function goTo(n) {
