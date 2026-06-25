@@ -34,6 +34,8 @@ class NeighborTable:
         self._lock = threading.RLock()
         self._1hop: dict[bytes, _Hop1Entry] = {}
         self._2hop: dict[bytes, set[bytes]] = {}
+        # sender anon_id -> set of anon_ids it advertised as its elected MPRs.
+        self._mpr: dict[bytes, set[bytes]] = {}
         self._resolved: dict[bytes, _ResolvedMember] = {}
 
     def update_from_hello(
@@ -57,6 +59,8 @@ class NeighborTable:
         ts_ms = int(parsed_public["ts_ms"])
         seq = int(parsed_public["seq"])
         neighbor_aids = [bytes(a) for a in parsed_public["neighbor_anon_ids"]]
+        # Backward-compatible: tolerate a public dict without the MPR key / None.
+        mpr_aids = {bytes(a) for a in (parsed_public.get("mpr_anon_ids") or [])}
 
         bd_sender: str | None = None
         neighbor_bd: dict[bytes, str] = {}
@@ -77,6 +81,9 @@ class NeighborTable:
 
             # Sender is 1-hop (we received their Hello directly).
             self._upsert_1hop(sender_aid, bd_addr=bd_sender, last_seen_ms=ts_ms, seq=seq)
+
+            # Store the MPR set this sender advertised (for MPR-CDS election).
+            self._mpr[sender_aid] = set(mpr_aids)
 
             # Sender's advertised neighbors are 2-hop via this relay.
             relay_set = self._2hop.setdefault(sender_aid, set())
@@ -114,6 +121,11 @@ class NeighborTable:
         with self._lock:
             return {relay: set(targets) for relay, targets in self._2hop.items()}
 
+    def get_mpr(self) -> dict[bytes, set[bytes]]:
+        """Return MPR map: sender anon_id -> set of anon_ids it elected as MPRs."""
+        with self._lock:
+            return {sender: set(mprs) for sender, mprs in self._mpr.items()}
+
     def get_resolved_members(self) -> list[dict[str, Any]]:
         """Return group members whose anon_id has been resolved to a real BD address."""
         with self._lock:
@@ -148,6 +160,7 @@ class NeighborTable:
             for aid in stale:
                 self._1hop.pop(aid, None)
                 self._2hop.pop(aid, None)
+                self._mpr.pop(aid, None)
 
             stale_resolved = [
                 aid
@@ -201,12 +214,17 @@ if __name__ == "__main__":
     aid_b = compute_anon_id(group_key, addr_b)
     aid_c = compute_anon_id(group_key, addr_c)
 
+    local_pubkey = b"\x00" * 32  # dummy X25519 key for deterministic self-test
+
     table_a = NeighborTable()
     table_b = NeighborTable()
     table_c = NeighborTable()
 
     # A receives Hello from B (B sees neighbors A, C)
-    pkt_b = build_hello(group_key, addr_b, seq=1, known_neighbors=[addr_a, addr_c], ts_ms=1_000)
+    pkt_b = build_hello(
+        group_key, addr_b, seq=1, known_neighbors=[addr_a, addr_c],
+        local_public_key=local_pubkey, ts_ms=1_000,
+    )
     pub_b = parse_hello_public(pkt_b)
     priv_b = parse_hello_private(pkt_b, group_key)
     assert priv_b is not None
@@ -226,7 +244,10 @@ if __name__ == "__main__":
     print("✅ node A learned B + 2-hop via B: OK")
 
     # B receives Hello from A (A sees neighbor B)
-    pkt_a = build_hello(group_key, addr_a, seq=2, known_neighbors=[addr_b], ts_ms=2_000)
+    pkt_a = build_hello(
+        group_key, addr_a, seq=2, known_neighbors=[addr_b],
+        local_public_key=local_pubkey, ts_ms=2_000,
+    )
     pub_a = parse_hello_public(pkt_a)
     priv_a = parse_hello_private(pkt_a, group_key)
     assert priv_a is not None
@@ -239,7 +260,10 @@ if __name__ == "__main__":
     print("✅ node B learned A + 2-hop via A: OK")
 
     # C receives Hello from B
-    pkt_b2 = build_hello(group_key, addr_b, seq=3, known_neighbors=[addr_a, addr_c], ts_ms=3_000)
+    pkt_b2 = build_hello(
+        group_key, addr_b, seq=3, known_neighbors=[addr_a, addr_c],
+        local_public_key=local_pubkey, ts_ms=3_000,
+    )
     pub_b2 = parse_hello_public(pkt_b2)
     priv_b2 = parse_hello_private(pkt_b2, group_key)
     assert priv_b2 is not None
@@ -260,6 +284,32 @@ if __name__ == "__main__":
     assert obs_hop[aid_b]["bd_addr"] is None
     assert observer.get_resolved_members() == []
     print("✅ public-only hello update: OK")
+
+    # MPR advertised in a Hello is stored per sender and readable via get_mpr().
+    table_mpr = NeighborTable()
+    pkt_mpr = build_hello(
+        group_key, addr_b, seq=4, known_neighbors=[addr_a, addr_c],
+        local_public_key=local_pubkey, mpr_anon_ids=[aid_a], ts_ms=4_000,
+    )
+    pub_mpr = parse_hello_public(pkt_mpr)
+    priv_mpr = parse_hello_private(pkt_mpr, group_key)
+    assert priv_mpr is not None
+    table_mpr.update_from_hello(pub_mpr, priv_mpr)
+    assert table_mpr.get_mpr()[aid_b] == {aid_a}
+    print("✅ get_mpr stores advertised MPR set: OK")
+
+    # Backward-compat: a public dict without the mpr_anon_ids key → empty set.
+    legacy_pub = dict(pub_mpr)
+    legacy_pub.pop("mpr_anon_ids")
+    table_legacy = NeighborTable()
+    table_legacy.update_from_hello(legacy_pub, None)
+    assert table_legacy.get_mpr()[aid_b] == set()
+    print("✅ get_mpr backward-compat (no mpr key): OK")
+
+    # expire() removes the MPR entry along with 1-hop / 2-hop.
+    table_mpr.expire(timeout_ms=500)
+    assert table_mpr.get_mpr() == {}
+    print("✅ expire removes MPR entries: OK")
 
     # Expire stale entries on A (timeout 500ms, ts was 1000, now >> 1500)
     table_a.expire(timeout_ms=500)

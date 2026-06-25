@@ -22,6 +22,16 @@ _PRIVATE_HELLO_VERSION_EPOCH = 0x02
 # Public Hello prefix: type | anon_id | seq | ts_ms | n_neighbors
 _HELLO_PUBLIC_PREFIX = struct.Struct("!B8sLQB")
 
+# Public layout (all cleartext), in order:
+#   _HELLO_PUBLIC_PREFIX
+#   n_neighbors × anon_id (8B each)
+#   n_mpr (uint8) | n_mpr × anon_id (8B each)   ← MPR block (elected multipoint relays)
+#   "!H" private_part_len
+#   private_part (encrypted)
+# The MPR block is always present; a Hello with no elected MPR has n_mpr = 0.
+# The whole public part (MPR block included) is the AAD of the private part, so
+# tampering with the MPR list invalidates the private AES-GCM tag.
+
 
 def compute_anon_id(group_key: bytes, bd_addr: str) -> bytes:
     """Return 8-byte anonymous ID: HMAC-SHA256(group_key, bd_addr)[:8]."""
@@ -139,6 +149,7 @@ def build_hello(
     ts_ms: int | None = None,
     epoch: int = 0,
     anon_id_key: bytes | None = None,
+    mpr_anon_ids: list[bytes] | None = None,
 ) -> bytes:
     """
     Build a BB Hello packet (public cleartext + group-encrypted private part).
@@ -146,6 +157,9 @@ def build_hello(
     ``group_key``: current epoch group key (encrypts the private part).
     ``anon_id_key``: bootstrap PSK for stable ``anon_id`` (defaults to ``group_key``).
     ``epoch``: monotonic group epoch advertised in the private part (gossip trigger).
+    ``mpr_anon_ids``: anon_ids (8B each) elected as multipoint relays, advertised
+        in cleartext in the public MPR block. Must be a subset of the advertised
+        neighbor anon_ids. Defaults to None → n_mpr = 0.
     """
     if not (0 <= int(seq) <= 0xFFFFFFFF):
         raise ValueError("seq must fit in uint32")
@@ -160,10 +174,25 @@ def build_hello(
     if n_pub > 255:
         raise ValueError("too many public neighbors (max 255)")
 
+    mpr_ids = [bytes(m) for m in (mpr_anon_ids or [])]
+    if len(mpr_ids) > 255:
+        raise ValueError("too many MPR anon_ids (max 255)")
+    neighbor_set = set(neighbor_anon_ids)
+    for m in mpr_ids:
+        if len(m) != ANON_ID_SIZE:
+            raise ValueError(f"mpr anon_id must be {ANON_ID_SIZE} bytes (got {len(m)})")
+        if m not in neighbor_set:
+            raise ValueError("mpr anon_id must be a subset of advertised neighbors")
+
     # Public (cleartext) part — usable by any node for CDS construction.
     public = _HELLO_PUBLIC_PREFIX.pack(PKT_HELLO, anon_id, int(seq), int(ts_ms), n_pub)
     for aid in neighbor_anon_ids:
         public += aid
+
+    # MPR block (cleartext): n_mpr | n_mpr × anon_id. Always present (n_mpr = 0 if none).
+    public += struct.pack("!B", len(mpr_ids))
+    for m in mpr_ids:
+        public += m
 
     # Private part — BD addresses + X25519 pubkey; visible only to group members.
     priv_plain = _pack_private_plaintext(
@@ -181,11 +210,12 @@ def parse_hello_public(data: bytes) -> dict[str, Any]:
     Parse Hello public fields (no group key required).
 
     Returns dict with:
-      type, anon_id, seq, ts_ms, neighbor_anon_ids,
+      type, anon_id, seq, ts_ms, neighbor_anon_ids, mpr_anon_ids,
       private_part_len, private_part, public_aad
     """
     min_prefix = _HELLO_PUBLIC_PREFIX.size  # 22 bytes
-    if len(data) < min_prefix + 2:
+    # prefix + n_mpr byte + private_part_len (2) is the smallest valid packet.
+    if len(data) < min_prefix + 1 + 2:
         raise ValueError("hello packet too short")
 
     pkt_type, anon_id, seq, ts_ms, n_pub = _HELLO_PUBLIC_PREFIX.unpack_from(data, 0)
@@ -194,12 +224,25 @@ def parse_hello_public(data: bytes) -> dict[str, Any]:
 
     off = min_prefix
     need_neighbors = off + int(n_pub) * ANON_ID_SIZE
-    if len(data) < need_neighbors + 2:
+    # +1 for the n_mpr byte that follows the neighbor list.
+    if len(data) < need_neighbors + 1:
         raise ValueError("truncated hello public neighbor list")
 
     neighbor_anon_ids: list[bytes] = []
     for _ in range(int(n_pub)):
         neighbor_anon_ids.append(data[off : off + ANON_ID_SIZE])
+        off += ANON_ID_SIZE
+
+    # MPR block: n_mpr (uint8) | n_mpr × anon_id (8B).
+    n_mpr, = struct.unpack_from("!B", data, off)
+    off += 1
+    need_mpr = off + int(n_mpr) * ANON_ID_SIZE
+    if len(data) < need_mpr + 2:
+        raise ValueError("truncated hello public MPR list")
+
+    mpr_anon_ids: list[bytes] = []
+    for _ in range(int(n_mpr)):
+        mpr_anon_ids.append(data[off : off + ANON_ID_SIZE])
         off += ANON_ID_SIZE
 
     public_aad = data[:off]
@@ -216,6 +259,7 @@ def parse_hello_public(data: bytes) -> dict[str, Any]:
         "seq": seq,
         "ts_ms": ts_ms,
         "neighbor_anon_ids": neighbor_anon_ids,
+        "mpr_anon_ids": mpr_anon_ids,
         "private_part_len": private_part_len,
         "private_part": private_part,
         "public_aad": public_aad,
@@ -238,6 +282,7 @@ def parse_hello_private(data: bytes, group_key: bytes) -> dict[str, Any] | None:
             "seq": pub["seq"],
             "ts_ms": pub["ts_ms"],
             "neighbor_anon_ids": pub["neighbor_anon_ids"],
+            "mpr_anon_ids": pub["mpr_anon_ids"],
             "epoch": priv.get("epoch", 0),
             **priv,
         }
@@ -274,5 +319,56 @@ if __name__ == "__main__":
 
     assert parse_hello_private(pkt, wrong_key) is None
     print("✅ parse_hello_private (non-member): OK")
+
+    # No MPR → n_mpr = 0, round-trips to empty list.
+    assert pub["mpr_anon_ids"] == []
+    print("✅ MPR empty (n_mpr=0): OK")
+
+    # Non-empty MPR list: elect n1 as multipoint relay (subset of neighbors).
+    aid_n1 = compute_anon_id(group_key, n1)
+    aid_n2 = compute_anon_id(group_key, n2)
+    pkt_mpr = build_hello(
+        group_key,
+        local,
+        seq=8,
+        known_neighbors=[n1, n2],
+        local_public_key=local_pubkey,
+        mpr_anon_ids=[aid_n1],
+    )
+    pub_mpr = parse_hello_public(pkt_mpr)
+    assert pub_mpr["mpr_anon_ids"] == [aid_n1]
+    assert pub_mpr["neighbor_anon_ids"] == [aid_n1, aid_n2]
+    print("✅ MPR round-trip (non-empty): OK")
+
+    # Private part must still decrypt: AAD covers the MPR block.
+    priv_mpr = parse_hello_private(pkt_mpr, group_key)
+    assert priv_mpr is not None
+    assert priv_mpr["bd_addr"] == local.upper()
+    assert priv_mpr["neighbor_bd_addrs"] == [n1.upper(), n2.upper()]
+    assert priv_mpr["mpr_anon_ids"] == [aid_n1]
+    print("✅ parse_hello_private with MPR (AAD includes MPR): OK")
+
+    # Tampering with the MPR block must break the private AES-GCM tag.
+    tampered = bytearray(pkt_mpr)
+    mpr_off = _HELLO_PUBLIC_PREFIX.size + 2 * ANON_ID_SIZE + 1  # first MPR anon_id byte
+    tampered[mpr_off] ^= 0xFF
+    assert parse_hello_private(bytes(tampered), group_key) is None
+    print("✅ MPR tamper detected by private tag: OK")
+
+    # MPR not in neighbor set → ValueError.
+    foreign = compute_anon_id(group_key, "99:99:99:99:99:99")
+    try:
+        build_hello(
+            group_key,
+            local,
+            seq=9,
+            known_neighbors=[n1, n2],
+            local_public_key=local_pubkey,
+            mpr_anon_ids=[foreign],
+        )
+        raise AssertionError("expected ValueError for non-neighbor MPR")
+    except ValueError:
+        pass
+    print("✅ MPR subset validation: OK")
 
     print("\n✅ All Hello self-tests passed")
