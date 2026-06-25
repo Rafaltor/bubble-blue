@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from config import BubbleBlueConfig
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
-from src.forwarding.cds import am_i_cds
+from src.forwarding.cds import am_i_cds, compute_local_mpr
 from src.security.epoch import EpochStore, is_coordinator
 from src.security.keys import BBKeyStore
 
@@ -194,6 +194,19 @@ class HelloManager:
             return
 
         neighbors = self._known_neighbor_bd_addrs()
+
+        # Advertise our own MPR set so peers can apply MPR-CDS rule (b) at runtime.
+        mpr = compute_local_mpr(self.table, self.anon_id)
+        # build_hello requires mpr_anon_ids ⊆ the neighbor anon_ids it advertises,
+        # else it raises ValueError. Those neighbor anon_ids are derived from
+        # `neighbors` via the SAME anon_id_key (bootstrap key) build_hello uses, so
+        # we recompute them here and keep only MPR ids that match an advertised
+        # neighbor; any MPR id without a matching advertised neighbor is dropped.
+        advertised_neighbor_aids = {
+            compute_anon_id(self._bootstrap_key, bd) for bd in neighbors
+        }
+        mpr_filtered = sorted(advertised_neighbor_aids & mpr)
+
         seq = self._next_seq()
         pkt = build_hello(
             self._epoch_store.current_group_key(),
@@ -203,6 +216,7 @@ class HelloManager:
             self._key_store.local_public_key,
             epoch=self._epoch_store.current_epoch(),
             anon_id_key=self._bootstrap_key,
+            mpr_anon_ids=mpr_filtered or None,
         )
 
         for peer in peers:

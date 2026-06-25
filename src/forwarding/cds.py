@@ -100,6 +100,36 @@ def _mutually_adjacent(u: bytes, v: bytes, advertised: dict[bytes, set[bytes]]) 
     return v in advertised.get(u, set()) and u in advertised.get(v, set())
 
 
+def local_symmetric_peers(
+    neighbor_table: NeighborTable,
+    local_anon_id: bytes,
+    l2cap_peers: frozenset[bytes] | set[bytes],
+) -> set[bytes]:
+    """
+    Correct LOCAL view of a node's symmetric 1-hop neighbors (runtime-safe).
+
+    A node's NeighborTable is populated ONLY by RECEIVED Hellos, so it never
+    contains the node's own advertised list — ``advertised[local]`` does not
+    exist. The symmetric-neighbor test must therefore be ASYMMETRIC:
+
+      - "is p MY neighbor?"      → the node knows this DIRECTLY: p ∈ l2cap_peers
+                                   (transport.connections()). We do NOT consult
+                                   advertised[local] (which is always empty).
+      - "does p list me back?"   → read from the RECEIVED table: local ∈
+                                   advertised[p] (p's Hello confirms the link).
+
+    So p is symmetric for ``local`` iff p ∈ l2cap_peers (minus local) AND
+    local ∈ advertised[p]. This is the shared notion used by am_i_cds (Wu-Li and
+    MPR). The adjacency BETWEEN peers is still read from ``advertised`` elsewhere,
+    which is legitimate (local learns p's neighbors from p's received Hello).
+    """
+    local = bytes(local_anon_id)
+    advertised = _advertised_neighbors(neighbor_table)
+    peers = {bytes(p) for p in l2cap_peers}
+    peers.discard(local)
+    return {p for p in peers if local in advertised.get(p, set())}
+
+
 def _anon_id_int(node: bytes) -> int:
     return int.from_bytes(node, "big")
 
@@ -347,6 +377,42 @@ def compute_all_mpr(neighbor_table: NeighborTable) -> dict[bytes, set[bytes]]:
     return {node: _select_mpr(node, topo) for node in topo.nodes}
 
 
+def compute_local_mpr(neighbor_table: NeighborTable, local_anon_id: bytes) -> set[bytes]:
+    """
+    MPR set this node would advertise in its own Hello (Qayyum, RFC 3626).
+
+    A node's own NeighborTable holds only RECEIVED Hellos — it never contains the
+    node's own advertised neighbor list — so ``_extract_topology`` yields an empty
+    adjacency for ``local_anon_id`` and a naive ``_select_mpr`` would always return
+    ∅. We therefore rebuild the local OLSR view directly:
+      - N1 = symmetric 1-hop neighbors = peers that advertised us (the reverse
+        edge confirms the link: they list us, and our own Hello lists them).
+      - 2-hop discovery is directional, OLSR-style: each y in N1 exposes the
+        neighbors it advertised, so a node w is a strict 2-hop neighbor when some
+        y in N1 advertised it and w is neither us nor in N1.
+    This view is fed to the same ``_select_mpr`` heuristic used elsewhere.
+    """
+    local = bytes(local_anon_id)
+    advertised = _advertised_neighbors(neighbor_table)
+
+    # N1 uses the same "p listed me back" predicate as local_symmetric_peers,
+    # but WITHOUT the l2cap_peers filter (this helper has no transport handle).
+    # At runtime the two coincide: a node appears in advertised[p] only because p
+    # listed it, and p lists exactly its own direct (L2CAP) peers. We reuse
+    # local_symmetric_peers by treating every advertiser of `local` as a peer,
+    # so the symmetric-neighbor definition stays single-sourced.
+    advertisers_of_local = {p for p, ads in advertised.items() if local in ads}
+    n1 = local_symmetric_peers(neighbor_table, local, advertisers_of_local)
+    if not n1:
+        return set()
+
+    view = _Topology()
+    view.adj[local] = set(n1)
+    for y in n1:
+        view.adj[y] = set(advertised.get(y, set()))
+    return _select_mpr(local, view)
+
+
 def _is_mpr_cds_member(
     node: bytes,
     sym_neighbors: set[bytes],
@@ -479,7 +545,11 @@ def am_i_cds(
         return False
 
     advertised = _advertised_neighbors(neighbor_table)
-    sym_peers = {p for p in peers if _mutually_adjacent(local, p, advertised)}
+    # Runtime-correct symmetric peers: "p is my neighbor" comes from l2cap_peers
+    # (known directly), "p lists me back" from the received table. NOT from
+    # advertised[local], which never exists in a received-only table (see
+    # local_symmetric_peers).
+    sym_peers = local_symmetric_peers(neighbor_table, local, peers)
     if len(sym_peers) < 2:
         return False
 
