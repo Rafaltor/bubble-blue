@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from config import BubbleBlueConfig
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
 from src.forwarding.cds import am_i_cds
+from src.security.epoch import EpochStore, is_coordinator
 from src.security.keys import BBKeyStore
 
 if TYPE_CHECKING:
@@ -32,19 +33,23 @@ class HelloManager:
         cfg: BubbleBlueConfig,
         transport: L2CAPTransport,
         key_store: BBKeyStore,
+        epoch_store: EpochStore,
         *,
         quiet: bool = False,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._key_store = key_store
+        self._epoch_store = epoch_store
         self._quiet = quiet
-        self._group_key = cfg.group_key
+        self._bootstrap_key = cfg.group_key
         self._local_bd = cfg.local_bd_addr.upper()
         self._interval_s = max(1, int(cfg.hello_interval_s))
         self._timeout_ms = int(cfg.neighbor_timeout_s) * 1000
+        self._peer_epochs: dict[str, int] = {}
+        self._rekey_catchup: Callable[[str], None] | None = None
 
-        self.anon_id = compute_anon_id(self._group_key, self._local_bd)
+        self.anon_id = compute_anon_id(self._bootstrap_key, self._local_bd)
         self.table = NeighborTable()
         self.table.resolve_member(
             self.anon_id,
@@ -84,22 +89,66 @@ class HelloManager:
         """X25519 identity and per-peer pairwise keys (fed from Hello private parts)."""
         return self._key_store
 
+    @property
+    def epoch_store(self) -> EpochStore:
+        return self._epoch_store
+
+    def set_rekey_catchup(self, handler: Callable[[str], None]) -> None:
+        """Register callback to pairwise-flood PKT_REKEY when a peer's epoch is stale."""
+        self._rekey_catchup = handler
+
+    def get_peer_epoch(self, bd_addr: str) -> int:
+        return int(self._peer_epochs.get(bd_addr.strip().upper(), 0))
+
+    def is_coordinator(self) -> bool:
+        """True if this node has the smallest anon_id among resolved members."""
+        member_aids = [
+            bytes(m["anon_id"])
+            for m in self.get_resolved_members()
+            if str(m["bd_addr"]).upper() != self._local_bd
+        ]
+        return is_coordinator(self.anon_id, member_aids)
+
     def l2cap_peer_anon_ids(self) -> frozenset[bytes]:
         """Anon_ids for active L2CAP peers (transport.connections() only)."""
         return self._l2cap_peer_anon_ids()
 
+    def local_anon_id(self) -> bytes:
+        """8-byte anonymous ID for this node."""
+        return self.anon_id
+
+    def anon_id_for(self, bd_addr: str) -> bytes:
+        """8-byte anonymous ID for a group member BD address (bootstrap PSK)."""
+        return compute_anon_id(self._bootstrap_key, bd_addr.strip().upper())
+
+    def _parse_hello_member(self, data: bytes) -> dict[str, Any] | None:
+        """Decrypt Hello private part with current or bootstrap group key."""
+        for key in (self._epoch_store.current_group_key(), self._bootstrap_key):
+            priv = parse_hello_private(data, key)
+            if priv is not None:
+                return priv
+        return None
+
     def on_receive(self, peer_bd_addr: str, data: bytes) -> None:
         """Parse and ingest a received Hello packet (topology only — not L2CAP peers)."""
-        _ = peer_bd_addr  # sender BD available for future link-local validation
+        _ = peer_bd_addr
         pub = parse_hello_public(data)
-        priv = parse_hello_private(data, self._group_key)
+        priv = self._parse_hello_member(data)
         self.table.update_from_hello(pub, priv)
         if priv is not None:
             public_key = priv.get("public_key")
             bd_addr = priv.get("bd_addr")
+            peer_epoch = int(priv.get("epoch", 0))
             if public_key is not None and bd_addr is not None:
-                self._key_store.register_peer(str(bd_addr), public_key)
-        # CDS uses transport.connections() only; table update must not change l2cap_peers.
+                bd_u = str(bd_addr).upper()
+                self._peer_epochs[bd_u] = peer_epoch
+                self._key_store.register_peer(bd_u, public_key)
+                if (
+                    peer_epoch < self._epoch_store.current_epoch()
+                    and not self._epoch_store.is_revoked_pubkey(public_key)
+                    and self._rekey_catchup is not None
+                ):
+                    self._rekey_catchup(bd_u)
         self.refresh_cds_role(verbose=not self._quiet)
 
     def get_resolved_members(self) -> list[dict[str, Any]]:
@@ -118,7 +167,8 @@ class HelloManager:
         Only transport.connections() — never Hello-advertised neighbors.
         """
         return frozenset(
-            compute_anon_id(self._group_key, bd_addr) for bd_addr in self._transport.connections()
+            compute_anon_id(self._bootstrap_key, bd_addr)
+            for bd_addr in self._transport.connections()
         )
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
@@ -146,11 +196,13 @@ class HelloManager:
         neighbors = self._known_neighbor_bd_addrs()
         seq = self._next_seq()
         pkt = build_hello(
-            self._group_key,
+            self._epoch_store.current_group_key(),
             self._local_bd,
             seq,
             neighbors,
             self._key_store.local_public_key,
+            epoch=self._epoch_store.current_epoch(),
+            anon_id_key=self._bootstrap_key,
         )
 
         for peer in peers:

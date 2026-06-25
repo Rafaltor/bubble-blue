@@ -1,3 +1,8 @@
+# CDS election: Wu-Li 2001 algorithm
+# Reference: Wu J, Li H (2001). A domination-based scheme for mobile ad-hoc
+# networks. Telecommunication Systems 18(1-3):13-35.
+# Selected for BUBBLE-BLUE per arXiv:2509.00967 (Achir, Jacquet 2025).
+
 from __future__ import annotations
 
 import itertools
@@ -72,8 +77,79 @@ def _mutually_adjacent(u: bytes, v: bytes, advertised: dict[bytes, set[bytes]]) 
     return v in advertised.get(u, set()) and u in advertised.get(v, set())
 
 
+def _anon_id_int(node: bytes) -> int:
+    return int.from_bytes(node, "big")
+
+
 def _one_hop_neighbors(node: bytes, topo: _Topology) -> set[bytes]:
     return set(topo.adj.get(node, set()))
+
+
+def _wu_li_rule1(sym_neighbors: set[bytes], advertised: dict[bytes, set[bytes]]) -> bool:
+    """
+    Gateway rule: some pair of symmetric neighbors is not directly linked.
+    """
+    if len(sym_neighbors) < 2:
+        return False
+    for u, v in itertools.combinations(sym_neighbors, 2):
+        if not _mutually_adjacent(u, v, advertised):
+            return True
+    return False
+
+
+def _wu_li_rule2_not_dominated(
+    node: bytes,
+    sym_neighbors: set[bytes],
+    neighbor_closure: dict[bytes, set[bytes]],
+) -> bool:
+    """
+    Pruning rule: node is not dominated by a higher-ID symmetric neighbor Y
+    (sym_neighbors \\ {Y} ⊆ N(Y)).
+    """
+    node_id = _anon_id_int(node)
+    for y in sym_neighbors:
+        if _anon_id_int(y) <= node_id:
+            continue
+        if sym_neighbors - {y} <= neighbor_closure.get(y, set()):
+            return False
+    return True
+
+
+def _wu_li_is_cds_member(
+    node: bytes,
+    sym_neighbors: set[bytes],
+    *,
+    advertised: dict[bytes, set[bytes]],
+    neighbor_closure: dict[bytes, set[bytes]],
+) -> bool:
+    if not _wu_li_rule1(sym_neighbors, advertised):
+        return False
+    return _wu_li_rule2_not_dominated(node, sym_neighbors, neighbor_closure)
+
+
+def compute_cds(neighbor_table: NeighborTable) -> set[bytes]:
+    """
+    Wu-Li 2001 CDS backbone (anon_ids only, global merged Hello view).
+
+    For each node X, sym_N = mutual Hello neighbors of X. X ∈ CDS iff:
+      Rule 1: ∃ u,v ∈ sym_N with no mutual Hello link u↔v
+      Rule 2: no Y ∈ sym_N with ID(Y) > ID(X) such that sym_N \\ {Y} ⊆ N(Y)
+    """
+    topo = _extract_topology(neighbor_table)
+    if not topo.nodes:
+        return set()
+
+    cds: set[bytes] = set()
+    for node in topo.nodes:
+        sym_n = _one_hop_neighbors(node, topo)
+        if _wu_li_is_cds_member(
+            node,
+            sym_n,
+            advertised=topo.advertised,
+            neighbor_closure=topo.adj,
+        ):
+            cds.add(node)
+    return cds
 
 
 def _bridged_by_cds(u: bytes, v: bytes, cds: set[bytes], topo: _Topology) -> bool:
@@ -85,10 +161,8 @@ def _bridged_by_cds(u: bytes, v: bytes, cds: set[bytes], topo: _Topology) -> boo
     return False
 
 
-def _should_join_cds(node: bytes, cds: set[bytes], topo: _Topology) -> bool:
-    """
-    Greedy CDS election rule for node X (global view, mutual Hello adjacency only).
-    """
+def _should_join_greedy_cds(node: bytes, cds: set[bytes], topo: _Topology) -> bool:
+    """Legacy Greedy CDS rule (reference for tests / comparison only)."""
     if node in cds:
         return False
 
@@ -108,12 +182,8 @@ def _should_join_cds(node: bytes, cds: set[bytes], topo: _Topology) -> bool:
     return False
 
 
-def compute_cds(neighbor_table: NeighborTable) -> set[bytes]:
-    """
-    Compute the Greedy CDS backbone (anon_ids only, global merged view).
-
-    Uses mutual Hello adjacency only — not 2-hop reachability.
-    """
+def compute_greedy_cds(neighbor_table: NeighborTable) -> set[bytes]:
+    """Greedy CDS (Wu-Li 1999-style reference). Used only in self-tests."""
     topo = _extract_topology(neighbor_table)
     if not topo.nodes:
         return set()
@@ -121,13 +191,13 @@ def compute_cds(neighbor_table: NeighborTable) -> set[bytes]:
     cds: set[bytes] = set()
     ordered = sorted(
         topo.nodes,
-        key=lambda n: (-len(_one_hop_neighbors(n, topo)), int.from_bytes(n, "big")),
+        key=lambda n: (-len(_one_hop_neighbors(n, topo)), _anon_id_int(n)),
     )
 
     while True:
         added = False
         for node in ordered:
-            if _should_join_cds(node, cds, topo):
+            if _should_join_greedy_cds(node, cds, topo):
                 cds.add(node)
                 added = True
                 break
@@ -137,39 +207,19 @@ def compute_cds(neighbor_table: NeighborTable) -> set[bytes]:
     return cds
 
 
-def _pair_has_direct_l2cap(
-    u: bytes,
-    v: bytes,
-    l2cap_peers: set[bytes],
-    advertised: dict[bytes, set[bytes]],
-) -> bool:
-    """
-    True if u and v have a direct link between them.
-
-    Both must be in ``l2cap_peers`` (active L2CAP to this node). Hello is used
-    only to check u↔v: each must list the other in its Hello 1-hop set (mutual).
-    Hello must never add nodes to ``l2cap_peers`` — only pairwise adjacency.
-    """
-    if u == v:
-        return True
-    if u not in l2cap_peers or v not in l2cap_peers:
-        return False
-    return _mutually_adjacent(u, v, advertised)
-
-
 def am_i_cds(
     local_anon_id: bytes,
     neighbor_table: NeighborTable,
     l2cap_peers: frozenset[bytes] | set[bytes],
 ) -> bool:
     """
-    Return True if this node should relay packets (local CDS role).
+    Return True if this node should relay packets (local Wu-Li 2001 CDS role).
 
     Direct L2CAP peers are exactly ``l2cap_peers`` (from transport.connections()).
+    Hello is used only for mutual adjacency between those peers.
 
-    RELAY iff some pair (u, v) of distinct L2CAP peers is not directly linked
-    (no mutual Hello 1-hop listing between u and v). If every pair is linked
-    (e.g. 3 devices all in range with full mesh), this node stays LEAF.
+    RELAY iff Wu-Li Rule 1 (gateway) and Rule 2 (not pruned) both hold on the
+    symmetric L2CAP peer set.
     """
     local = bytes(local_anon_id)
     peers = {bytes(p) for p in l2cap_peers}
@@ -179,10 +229,20 @@ def am_i_cds(
         return False
 
     advertised = _advertised_neighbors(neighbor_table)
-    for u, v in itertools.combinations(sorted(peers), 2):
-        if not _pair_has_direct_l2cap(u, v, peers, advertised):
-            return True
-    return False
+    sym_peers = {p for p in peers if _mutually_adjacent(local, p, advertised)}
+    if len(sym_peers) < 2:
+        return False
+
+    neighbor_closure: dict[bytes, set[bytes]] = {}
+    for p in sym_peers | {local}:
+        neighbor_closure[p] = {bytes(n) for n in advertised.get(p, set())}
+
+    return _wu_li_is_cds_member(
+        local,
+        sym_peers,
+        advertised=advertised,
+        neighbor_closure=neighbor_closure,
+    )
 
 
 def _verify_cds_properties(cds: set[bytes], topo: _Topology) -> None:
@@ -228,7 +288,14 @@ def _build_linear_topology_table(group_key: bytes, addrs: list[str]) -> Neighbor
         if i + 1 < len(addrs):
             neighbors.append(addrs[i + 1])
 
-        pkt = build_hello(group_key, addr, seq=i + 1, known_neighbors=neighbors, ts_ms=1_000 + i)
+        pkt = build_hello(
+            group_key,
+            addr,
+            seq=i + 1,
+            known_neighbors=neighbors,
+            local_public_key=b"\x00" * 31 + bytes([i + 1]),
+            ts_ms=1_000 + i,
+        )
         pub = parse_hello_public(pkt)
         priv = parse_hello_private(pkt, group_key)
         merged.update_from_hello(pub, priv)
@@ -248,7 +315,14 @@ def _build_mesh_topology_table(
     merged = NeighborTable()
     for i, addr in enumerate(addrs):
         neighbors = neighbor_map.get(addr, [])
-        pkt = build_hello(group_key, addr, seq=i + 1, known_neighbors=neighbors, ts_ms=1_000 + i)
+        pkt = build_hello(
+            group_key,
+            addr,
+            seq=i + 1,
+            known_neighbors=neighbors,
+            local_public_key=b"\x00" * 31 + bytes([i + 1]),
+            ts_ms=1_000 + i,
+        )
         pub = parse_hello_public(pkt)
         priv = parse_hello_private(pkt, group_key)
         merged.update_from_hello(pub, priv)
@@ -274,10 +348,15 @@ if __name__ == "__main__":
     topo = _extract_topology(table)
 
     cds = compute_cds(table)
+    greedy = compute_greedy_cds(table)
     _verify_cds_properties(cds, topo)
 
     print("Linear topology A — B — C — D — E")
-    print(f"CDS size (global greedy): {len(cds)}")
+    print(f"CDS size (Wu-Li 2001): {len(cds)}  (Greedy reference: {len(greedy)})")
+    assert len(cds) <= len(greedy)
+    relay_addrs = [a for a in addrs if anon_by_addr[a] in cds]
+    assert any(labels[a] in ("B", "D") for a in relay_addrs), f"expected B or D in CDS, got {relay_addrs}"
+
     for addr in addrs:
         aid = anon_by_addr[addr]
         role = "CDS" if aid in cds else "not CDS"
@@ -298,6 +377,17 @@ if __name__ == "__main__":
     assert am_i_cds(anon_by_addr[addrs[1]], table, {anon_by_addr[addrs[0]], anon_by_addr[addrs[2]]}) is True
     assert am_i_cds(anon_by_addr[addrs[0]], table, {anon_by_addr[addrs[1]]}) is False
     assert am_i_cds(anon_by_addr[addrs[4]], table, {anon_by_addr[addrs[3]]}) is False
+
+    # 4-node path A—B—C—D
+    path4 = addrs[0:4]
+    path_table = _build_linear_topology_table(group_key, path4)
+    path_topo = _extract_topology(path_table)
+    path_cds = compute_cds(path_table)
+    _verify_cds_properties(path_cds, path_topo)
+    path_labels = {labels[a] for a in path4 if anon_by_addr[a] in path_cds}
+    assert path_labels.intersection({"B", "C"}), f"expected B or C in 4-node CDS, got {path_labels}"
+    assert anon_by_addr[path4[0]] not in path_cds or path_topo.adj[path4[0]].intersection(path_cds)
+    assert anon_by_addr[path4[3]] not in path_cds or path_topo.adj[path4[3]].intersection(path_cds)
 
     # Star: hub has L2CAP to two leaves; leaves do not list each other in Hello.
     star_addrs = addrs[0:3]
@@ -327,6 +417,6 @@ if __name__ == "__main__":
         (ay, {ax, az}),
         (az, {ax, ay}),
     ):
-        assert am_i_cds(aid, tri_table, peers) is False, f"mesh node should be LEAF"
+        assert am_i_cds(aid, tri_table, peers) is False, "mesh node should be LEAF"
 
     print("\n✅ All CDS self-tests passed")

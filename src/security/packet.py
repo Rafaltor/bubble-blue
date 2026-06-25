@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import struct
 import time
@@ -186,6 +187,159 @@ def packet_overhead() -> int:
     return ROUTING_HEADER_SIZE + GCM_TAG_SIZE
 
 
+# =============================================================================
+# PKT_SUBGROUP — à la carte multicast (subset S of group members)
+# =============================================================================
+#
+# One message to an arbitrary subset S with O(|S|) wire overhead on that message
+# only (vs permanent 16·n multi-key header). Relays flood like PKT_DATA when
+# dst = BROADCAST_BD_ADDR and type = PKT_SUBGROUP (0x04).
+#
+# Wire layout:
+#   [ routing_header (26 B) | n_cases (1 B) | cases[n_cases] | ciphertext ]
+#
+# routing_header: same 26-byte cleartext header as PKT_DATA; type = PKT_SUBGROUP,
+#   dst typically FF:FF:FF:FF:FF:FF so CDS relays forward opaque.
+#
+# n_cases: uint8 count of recipients in S (1..255).
+#
+# Each case (56 B fixed):
+#   recipient_tag (8 B)  — first 8 bytes of recipient anon_id (locate own case)
+#   wrapped_key   (32 B) — per-recipient key material (e.g. encrypted session key)
+#   wrap_tag      (16 B) — GCM tag authenticating wrapped_key under group/wrap key
+#
+# ciphertext: AES-256-GCM of plaintext (includes 16 B GCM tag at end).
+#   AAD should bind routing header (TTL zeroed) + subgroup_cases_digest(cases).
+#
+# Fixed overhead (excluding plaintext): 26 + 1 + 56·n_cases + 16 bytes
+# =============================================================================
+
+SUBGROUP_CASE_TAG_SIZE = 8
+SUBGROUP_WRAPPED_KEY_SIZE = 32
+SUBGROUP_WRAP_TAG_SIZE = 16
+SUBGROUP_CASE_BLOB_SIZE = SUBGROUP_WRAPPED_KEY_SIZE + SUBGROUP_WRAP_TAG_SIZE  # 48
+SUBGROUP_CASE_SIZE = SUBGROUP_CASE_TAG_SIZE + SUBGROUP_CASE_BLOB_SIZE  # 56
+SUBGROUP_N_CASES_MAX = 255
+SUBGROUP_N_CASES_MIN = 1
+
+
+def subgroup_overhead(n_cases: int) -> int:
+    """Fixed wire overhead for PKT_SUBGROUP: 26 + 1 + 56·n_cases + 16."""
+    n = int(n_cases)
+    if not (SUBGROUP_N_CASES_MIN <= n <= SUBGROUP_N_CASES_MAX):
+        raise ValueError(f"n_cases must be in [{SUBGROUP_N_CASES_MIN}, {SUBGROUP_N_CASES_MAX}] (got {n})")
+    return ROUTING_HEADER_SIZE + 1 + (SUBGROUP_CASE_SIZE * n) + GCM_TAG_SIZE
+
+
+def subgroup_cases_digest(cases: list[tuple[bytes, bytes]]) -> bytes:
+    """
+    SHA-256 over concatenated cases (recipient_tag ‖ wrapped_blob) in order.
+
+    Used as part of AES-GCM AAD to bind the case header to the payload ciphertext.
+    """
+    h = hashlib.sha256()
+    for tag, blob in cases:
+        if len(tag) != SUBGROUP_CASE_TAG_SIZE:
+            raise ValueError(f"recipient_tag must be {SUBGROUP_CASE_TAG_SIZE} bytes (got {len(tag)})")
+        if len(blob) != SUBGROUP_CASE_BLOB_SIZE:
+            raise ValueError(f"wrapped_blob must be {SUBGROUP_CASE_BLOB_SIZE} bytes (got {len(blob)})")
+        h.update(tag)
+        h.update(blob)
+    return h.digest()
+
+
+def _validate_subgroup_cases(cases: list[tuple[bytes, bytes]]) -> int:
+    n_cases = len(cases)
+    if not (SUBGROUP_N_CASES_MIN <= n_cases <= SUBGROUP_N_CASES_MAX):
+        raise ValueError(
+            f"n_cases must be in [{SUBGROUP_N_CASES_MIN}, {SUBGROUP_N_CASES_MAX}] (got {n_cases})"
+        )
+    for i, (tag, blob) in enumerate(cases):
+        if len(tag) != SUBGROUP_CASE_TAG_SIZE:
+            raise ValueError(
+                f"cases[{i}].recipient_tag must be {SUBGROUP_CASE_TAG_SIZE} bytes (got {len(tag)})"
+            )
+        if len(blob) != SUBGROUP_CASE_BLOB_SIZE:
+            raise ValueError(
+                f"cases[{i}].wrapped_blob must be {SUBGROUP_CASE_BLOB_SIZE} bytes (got {len(blob)})"
+            )
+    return n_cases
+
+
+def build_subgroup_packet(
+    routing_header: bytes,
+    cases: list[tuple[bytes, bytes]],
+    ciphertext: bytes,
+) -> bytes:
+    """
+    Assemble a PKT_SUBGROUP wire packet.
+
+    ``cases``: list of (recipient_tag_8B, wrapped_blob_48B) where wrapped_blob is
+    32-byte wrapped key + 16-byte GCM wrap tag.
+    """
+    if len(routing_header) != ROUTING_HEADER_SIZE:
+        raise ValueError(f"routing_header must be {ROUTING_HEADER_SIZE} bytes (got {len(routing_header)})")
+    if len(ciphertext) < GCM_TAG_SIZE:
+        raise ValueError(f"ciphertext must include a {GCM_TAG_SIZE}-byte GCM tag (len >= {GCM_TAG_SIZE})")
+
+    n_cases = _validate_subgroup_cases(cases)
+
+    out = bytearray(routing_header)
+    out.append(n_cases)
+    for tag, blob in cases:
+        out += tag
+        out += blob
+    out += ciphertext
+    return bytes(out)
+
+
+def parse_subgroup_packet(data: bytes) -> dict[str, Any]:
+    """
+    Parse a PKT_SUBGROUP wire packet.
+
+    Returns routing_header, parsed_header, n_cases, cases (tag, blob pairs), ciphertext.
+    """
+    min_len = ROUTING_HEADER_SIZE + 1 + SUBGROUP_CASE_SIZE + GCM_TAG_SIZE
+    if len(data) < min_len:
+        raise ValueError(f"subgroup packet too short: {len(data)} bytes (min {min_len})")
+
+    routing_header = data[:ROUTING_HEADER_SIZE]
+    parsed_header = parse_routing_header(routing_header)
+    n_cases = data[ROUTING_HEADER_SIZE]
+    if not (SUBGROUP_N_CASES_MIN <= n_cases <= SUBGROUP_N_CASES_MAX):
+        raise ValueError(f"invalid n_cases: {n_cases}")
+
+    cases_start = ROUTING_HEADER_SIZE + 1
+    cases_end = cases_start + (n_cases * SUBGROUP_CASE_SIZE)
+    expected_min = cases_end + GCM_TAG_SIZE
+    if len(data) < expected_min:
+        raise ValueError(
+            f"subgroup packet length inconsistent: {len(data)} bytes "
+            f"(expected >= {expected_min} for n_cases={n_cases})"
+        )
+
+    cases: list[tuple[bytes, bytes]] = []
+    off = cases_start
+    for _ in range(n_cases):
+        tag = data[off : off + SUBGROUP_CASE_TAG_SIZE]
+        off += SUBGROUP_CASE_TAG_SIZE
+        blob = data[off : off + SUBGROUP_CASE_BLOB_SIZE]
+        off += SUBGROUP_CASE_BLOB_SIZE
+        cases.append((tag, blob))
+
+    ciphertext = data[cases_end:]
+    if len(ciphertext) < GCM_TAG_SIZE:
+        raise ValueError("malformed subgroup packet (missing payload GCM tag)")
+
+    return {
+        "routing_header": routing_header,
+        "parsed_header": parsed_header,
+        "n_cases": n_cases,
+        "cases": cases,
+        "ciphertext": ciphertext,
+    }
+
+
 if __name__ == "__main__":
     src = "40:D9:5A:8B:69:3F"
     dst = "14:B5:CD:E2:49:ED"
@@ -222,4 +376,41 @@ if __name__ == "__main__":
     print(f"   Ciphertext+tag  : payload + {GCM_TAG_SIZE} bytes")
     print(f"   Fixed overhead  : {packet_overhead()} bytes")
     print(f"   Payload space   : {1021 - packet_overhead()} bytes (BT Classic MTU)")
-    print("\n✅ All packet self-tests passed")
+
+    # PKT_SUBGROUP
+    from config import PKT_SUBGROUP
+
+    tag_a = b"\xaa" * SUBGROUP_CASE_TAG_SIZE
+    tag_b = b"\xbb" * SUBGROUP_CASE_TAG_SIZE
+    blob_a = bytes(SUBGROUP_CASE_BLOB_SIZE)
+    blob_b = bytes([1] * SUBGROUP_CASE_BLOB_SIZE)
+    cases = [(tag_a, blob_a), (tag_b, blob_b)]
+    digest = subgroup_cases_digest(cases)
+    assert len(digest) == 32
+
+    rh_sg = build_routing_header(
+        PKT_SUBGROUP, src, BROADCAST_BD_ADDR, ttl=10, seq=99, ts_ms=now_ms
+    )
+    ct_sg = b"hello" + bytes(GCM_TAG_SIZE)
+    sg_pkt = build_subgroup_packet(rh_sg, cases, ct_sg)
+    assert len(sg_pkt) == subgroup_overhead(2) + (len(ct_sg) - GCM_TAG_SIZE)
+    assert subgroup_overhead(2) == 26 + 1 + 56 * 2 + 16
+
+    sg_parsed = parse_subgroup_packet(sg_pkt)
+    assert sg_parsed["n_cases"] == 2
+    assert sg_parsed["cases"] == cases
+    assert sg_parsed["ciphertext"] == ct_sg
+    assert sg_parsed["parsed_header"]["type"] == PKT_SUBGROUP
+    assert sg_parsed["parsed_header"]["dst"] == BROADCAST_BD_ADDR
+
+    cases_end = ROUTING_HEADER_SIZE + 1 + SUBGROUP_CASE_SIZE * 2
+    try:
+        parse_subgroup_packet(sg_pkt[: cases_end + GCM_TAG_SIZE - 1])
+        raise AssertionError("expected ValueError for truncated subgroup packet")
+    except ValueError:
+        pass
+
+    print("✅ PKT_SUBGROUP serialization: OK")
+    print(f"   Subgroup overhead (|S|=2): {subgroup_overhead(2)} bytes")
+    print(f"   Subgroup overhead (|S|=10): {subgroup_overhead(10)} bytes")
+    print("\n✅ All packet self-tests passed (incl. PKT_SUBGROUP)")

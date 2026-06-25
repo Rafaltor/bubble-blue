@@ -10,6 +10,7 @@ from config import BubbleBlueConfig, config_warnings, load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_commands import (
     CHAT_HELP,
+    format_members_display,
     load_chat_aliases,
     parse_chat_command,
     resolve_chat_target,
@@ -139,14 +140,72 @@ def run_chat(
                     ChatLog.interrupt(CHAT_HELP)
                     continue
                 if cmd.kind == "members":
-                    known = node.resolved_member_addresses()
-                    if known:
-                        ChatLog.interrupt("membres: " + ", ".join(sorted(known)))
-                    else:
+                    ChatLog.interrupt(
+                        format_members_display(
+                            alias_config=aliases,
+                            resolved_members=node.resolved_member_addresses(),
+                            group_members=cfg.group_members,
+                            local_bd_addr=node.local_bd_addr,
+                        )
+                    )
+                    continue
+                if cmd.kind == "epoch":
+                    coord = "oui" if node.is_coordinator() else "non"
+                    ChatLog.interrupt(
+                        f"epoch={node.current_epoch()} · coordinateur={coord}"
+                    )
+                    continue
+                if cmd.kind == "revoke":
+                    if not cmd.target:
+                        ChatLog.interrupt("usage: /revoke <cible>", err=True)
+                        continue
+                    dst = resolve_chat_target(
+                        cmd.target,
+                        aliases=aliases.lookup,
+                        group_members=cfg.group_members,
+                        resolved_members=node.resolved_member_addresses(),
+                        local_bd_addr=node.local_bd_addr,
+                    )
+                    if dst is None:
+                        ChatLog.interrupt(f"cible inconnue: {cmd.target!r}", err=True)
+                        continue
+                    try:
+                        node.revoke_member(dst)
+                        ChatLog.interrupt(f"révocation initiée pour {dst} (epoch={node.current_epoch()})")
+                    except RuntimeError as e:
+                        ChatLog.interrupt(str(e), err=True)
+                    continue
+                if cmd.kind == "subgroup":
+                    if not cmd.recipients or not cmd.message:
                         ChatLog.interrupt(
-                            "aucun membre résolu — attendre Hello (~5 s)",
+                            'usage: /subgroup <cible>… <message>  ex: /subgroup rubikQ arduino "hi"',
                             err=True,
                         )
+                        continue
+                    resolved: list[str] = []
+                    for name in cmd.recipients:
+                        dst = resolve_chat_target(
+                            name,
+                            aliases=aliases.lookup,
+                            group_members=cfg.group_members,
+                            resolved_members=node.resolved_member_addresses(),
+                            local_bd_addr=node.local_bd_addr,
+                        )
+                        if dst is None:
+                            ChatLog.interrupt(f"cible inconnue: {name!r}", err=True)
+                            resolved = []
+                            break
+                        resolved.append(dst)
+                    if not resolved:
+                        continue
+                    if not node.peers():
+                        ChatLog.interrupt("aucun peer connecté", err=True)
+                        continue
+                    try:
+                        node.send_subgroup(cmd.message, resolved)
+                        ChatLog.interrupt(f"→ subgroup {resolved}: {cmd.message}")
+                    except (OSError, RuntimeError) as e:
+                        ChatLog.interrupt(str(e), err=True)
                     continue
                 if cmd.kind == "private":
                     if not cmd.target or not cmd.message:
@@ -157,7 +216,7 @@ def run_chat(
                         continue
                     dst = resolve_chat_target(
                         cmd.target,
-                        aliases=aliases,
+                        aliases=aliases.lookup,
                         group_members=cfg.group_members,
                         resolved_members=node.resolved_member_addresses(),
                         local_bd_addr=node.local_bd_addr,

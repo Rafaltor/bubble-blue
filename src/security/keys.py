@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover — direct script execution
 
 _X25519_KEY_SIZE: Final = 32
 _PAIRWISE_HKDF_SALT: Final = b"bubble-blue-v1"
+_SUBGROUP_WRAP_HKDF_SALT: Final = b"bb-subgroup-wrap-v1"
 _IDENTITY_HKDF_SALT: Final = b"bb-identity-v1"
 _IDENTITY_HKDF_INFO_PREFIX: Final = b"bubble-blue-x25519-identity:"
 _DERIVED_KEY_SIZE: Final = 32
@@ -77,13 +78,19 @@ def _derive_identity_private_key(group_key: bytes, local_bd_addr: str) -> bytes:
     )
 
 
-def _derive_pairwise_key(private_key: X25519PrivateKey, peer_public_key: bytes) -> bytes:
-    """ECDH + HKDF to a 32-byte static pairwise secret (never sent on the wire)."""
+def _derive_pairwise_key(
+    private_key: X25519PrivateKey,
+    peer_public_key: bytes,
+    *,
+    epoch: int = 0,
+) -> bytes:
+    """ECDH + HKDF to a 32-byte pairwise secret (epoch-domain-separated)."""
     if len(peer_public_key) != _X25519_KEY_SIZE:
         raise ValueError(f"peer public key must be {_X25519_KEY_SIZE} bytes (got {len(peer_public_key)})")
     peer = X25519PublicKey.from_public_bytes(peer_public_key)
     shared = private_key.exchange(peer)
-    return _hkdf_sha256(shared, length=_DERIVED_KEY_SIZE, salt=_PAIRWISE_HKDF_SALT)
+    info = b"" if int(epoch) == 0 else struct.pack("!L", int(epoch) & 0xFFFFFFFF)
+    return _hkdf_sha256(shared, length=_DERIVED_KEY_SIZE, salt=_PAIRWISE_HKDF_SALT, info=info)
 
 
 def derive_packet_key(base_key: bytes, src: str, seq: int, ts_ms: int) -> bytes:
@@ -102,6 +109,31 @@ def derive_packet_key(base_key: bytes, src: str, seq: int, ts_ms: int) -> bytes:
     src_b = bd_addr_to_bytes(src)
     info = src_b + struct.pack("!LQ", int(seq), int(ts_ms))
     return _hkdf_sha256(base_key, length=_DERIVED_KEY_SIZE, info=info)
+
+
+def derive_wrap_key(pair_key: bytes, src: str, seq: int, ts_ms: int) -> bytes:
+    """
+    Per-message, per-recipient wrap key for PKT_SUBGROUP case blobs.
+
+    ``info`` = ``src`` BD address (6 B) || ``seq`` (uint32 BE) || ``ts_ms`` (uint64 BE).
+    Domain-separated from ``derive_packet_key`` via a distinct HKDF salt so wrap keys
+    and payload keys cannot be cross-used (nonce reuse under the same AES key).
+    """
+    if len(pair_key) != _DERIVED_KEY_SIZE:
+        raise ValueError(f"pair_key must be {_DERIVED_KEY_SIZE} bytes (got {len(pair_key)})")
+    if not (0 <= seq <= 0xFFFFFFFF):
+        raise ValueError("seq must fit in uint32")
+    if not (0 <= ts_ms <= 0xFFFFFFFFFFFFFFFF):
+        raise ValueError("ts_ms must fit in uint64")
+
+    src_b = bd_addr_to_bytes(src)
+    info = src_b + struct.pack("!LQ", int(seq), int(ts_ms))
+    return _hkdf_sha256(
+        pair_key,
+        length=_DERIVED_KEY_SIZE,
+        salt=_SUBGROUP_WRAP_HKDF_SALT,
+        info=info,
+    )
 
 
 class BBKeyStore:
@@ -159,7 +191,11 @@ class BBKeyStore:
     def _init_peer_state(self) -> None:
         self._local_public_key = self._private_key.public_key().public_bytes_raw()
         self._peer_public_keys: dict[str, bytes] = {}
-        self._pair_key_cache: dict[str, bytes] = {}
+        self._pair_key_cache: dict[tuple[str, int], bytes] = {}
+
+    def clear_pair_key_cache(self) -> None:
+        """Invalidate cached pairwise keys (e.g. after epoch adoption)."""
+        self._pair_key_cache.clear()
 
     @property
     def local_public_key(self) -> bytes:
@@ -180,27 +216,33 @@ class BBKeyStore:
         prev = self._peer_public_keys.get(addr)
         self._peer_public_keys[addr] = bytes(public_key)
         if prev != public_key:
-            self._pair_key_cache.pop(addr, None)
+            self._pair_key_cache = {k: v for k, v in self._pair_key_cache.items() if k[0] != addr}
 
-    def get_pair_key(self, bd_addr: str) -> bytes | None:
+    def get_pair_key(self, bd_addr: str, *, epoch: int = 0) -> bytes | None:
         """
-        Return the cached 32-byte pairwise key for ``bd_addr``, or ``None`` if unknown.
+        Return the cached 32-byte pairwise key for ``bd_addr`` at ``epoch``.
 
-        Computed once per peer as
-        HKDF-SHA256(ECDH(priv_local, pub_peer), salt=b"bubble-blue-v1", length=32).
+        ``K_pair = HKDF(ECDH, info=epoch)`` (empty info at epoch 0 for wire compat).
         """
         addr = bd_addr.strip().upper()
         pub = self._peer_public_keys.get(addr)
         if pub is None:
             return None
 
-        cached = self._pair_key_cache.get(addr)
+        ep = int(epoch)
+        cache_key = (addr, ep)
+        cached = self._pair_key_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        pair_key = _derive_pairwise_key(self._private_key, pub)
-        self._pair_key_cache[addr] = pair_key
+        pair_key = _derive_pairwise_key(self._private_key, pub, epoch=ep)
+        self._pair_key_cache[cache_key] = pair_key
         return pair_key
+
+    def get_peer_public_key(self, bd_addr: str) -> bytes | None:
+        """Return the registered X25519 public key for ``bd_addr``, if known."""
+        pub = self._peer_public_keys.get(bd_addr.strip().upper())
+        return bytes(pub) if pub is not None else None
 
     def known_peers(self) -> list[str]:
         """BD addresses for which a peer public key has been registered."""
@@ -229,6 +271,11 @@ if __name__ == "__main__":
     pkt_key = derive_packet_key(key_ab, addr_a, seq=1, ts_ms=1_700_000_000_000)
     assert len(pkt_key) == 32
     assert pkt_key != key_ab
+
+    wrap_key = derive_wrap_key(key_ab, addr_a, seq=1, ts_ms=1_700_000_000_000)
+    assert len(wrap_key) == 32
+    assert wrap_key != key_ab
+    assert wrap_key != pkt_key
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "identity.key"

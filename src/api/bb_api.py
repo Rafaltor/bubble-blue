@@ -7,9 +7,10 @@ import threading
 import time
 from collections.abc import Callable
 
-from config import PKT_DATA, PKT_HELLO, BubbleBlueConfig, load_config
+from config import PKT_DATA, PKT_HELLO, PKT_REKEY, PKT_SUBGROUP, BubbleBlueConfig, load_config
 from src.control.hello_manager import HelloManager
 from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
+from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
 from src.transport.l2cap import L2CAPTransport
 
@@ -132,7 +133,7 @@ class BBNode:
                     if hm is not None:
                         hm.on_receive(peer, data)
                     return
-                if data[0] == PKT_DATA:
+                if data[0] in (PKT_DATA, PKT_SUBGROUP, PKT_REKEY):
                     fwd = holder["fwd"]
                     if fwd is not None:
                         fwd.handle(peer, data)
@@ -149,7 +150,11 @@ class BBNode:
                 self._cfg.group_key,
                 self._cfg.local_bd_addr,
             )
-            hello = HelloManager(self._cfg, transport, key_store, quiet=self._quiet)
+            epoch_store = EpochStore(
+                self._cfg.group_key,
+                local_bd_addr=self._cfg.local_bd_addr,
+            )
+            hello = HelloManager(self._cfg, transport, key_store, epoch_store, quiet=self._quiet)
             fwd = PacketForwarder(
                 self._cfg,
                 transport,
@@ -160,6 +165,7 @@ class BBNode:
                     self._dispatch_decrypt_fail if self.on_decrypt_fail else None
                 ),
             )
+            hello.set_rekey_catchup(fwd.send_rekey_catchup)
             holder["hello"] = hello
             holder["fwd"] = fwd
 
@@ -205,6 +211,24 @@ class BBNode:
     def send(self, text: str) -> None:
         """Broadcast chat message (dst = FF:FF:FF:FF:FF:FF) on all L2CAP links."""
         self._require_forwarder().send_broadcast(text)
+
+    def send_subgroup(self, text: str, recipients: list[str]) -> None:
+        """À la carte multicast (PKT_SUBGROUP) to subset ``recipients``."""
+        self._require_forwarder().send_subgroup(text, recipients)
+
+    def revoke_member(self, bd_addr: str) -> None:
+        """Revoke a member (epoch bump + PKT_REKEY flood). Coordinator only."""
+        self._require_forwarder().revoke_member(bd_addr)
+
+    def current_epoch(self) -> int:
+        if self._hello_mgr is None:
+            return 0
+        return self._hello_mgr.epoch_store.current_epoch()
+
+    def is_coordinator(self) -> bool:
+        if self._hello_mgr is None:
+            return False
+        return self._hello_mgr.is_coordinator()
 
     def send_unicast(
         self,

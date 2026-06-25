@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Révocation par Epoch + Gossip</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --surface2: #eef1f4;
+    --border: #d8dee6;
+    --accent: #0052cc;
+    --green: #1e7e34;
+    --red: #c0392b;
+    --yellow: #b88700;
+    --text: #1a2340;
+    --text-muted: #5a6378;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+    --nav-bg: rgba(17, 24, 39, 0.95);
+    --nav-border: #2a3548;
+    --nav-text-muted: #8899aa;
+    --nav-width: 11.625rem;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #nav {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: var(--nav-width);
+    display: flex; flex-direction: column; gap: 0.35rem;
+    background: var(--nav-bg);
+    border-right: 1px solid var(--nav-border);
+    padding: 1rem 0.75rem;
+    z-index: 1000;
+    overflow-y: auto;
+  }
+  #nav button {
+    background: none; border: none;
+    color: var(--nav-text-muted);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+    text-align: left; width: 100%;
+  }
+  #nav button:hover { color: #ffffff; }
+  #nav button.active { background: var(--accent); color: #ffffff; }
+  #slide-counter {
+    font-size: 0.7rem; color: var(--nav-text-muted);
+    margin-top: auto; padding: 0.75rem 0.5rem 0;
+    border-top: 1px solid var(--nav-border);
+    text-align: center;
+  }
+
+  .slide {
+    position: absolute; top: 0; left: var(--nav-width);
+    width: calc(100% - var(--nav-width)); height: 100%;
+    display: none;
+    padding: 2.5rem 3.5rem;
+    flex-direction: column;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .slide.active { display: flex; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .slide-num {
+    font-size: 0.7rem; color: var(--accent);
+    letter-spacing: 0.15em; text-transform: uppercase;
+    margin-bottom: 0.5rem; font-weight: 600;
+  }
+  h1 { font-size: 3.2rem; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.7rem; font-weight: 600; margin-bottom: 0.3rem; }
+  h3 {
+    font-size: 0.8rem; color: var(--accent);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 1.2rem; padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  .subtitle { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1.6rem; }
+
+  .title-slide { justify-content: center; }
+  .title-slide h1 { font-size: 4.2rem; }
+  .title-meta { display: flex; gap: 2rem; margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--border); }
+  .meta-item { display: flex; flex-direction: column; gap: 0.3rem; }
+  .meta-label { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .meta-value { font-size: 0.9rem; color: var(--accent); font-weight: 500; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-bottom: 1.2rem; }
+  th {
+    background: var(--surface2); padding: 0.55rem 0.8rem; text-align: left;
+    font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+    border: 1px solid var(--border); font-weight: 600;
+  }
+  td { padding: 0.5rem 0.8rem; border: 1px solid var(--border); vertical-align: middle; }
+  tr:nth-child(even) td { background: rgba(26, 35, 64, 0.04); }
+  .cell-good { color: var(--green); font-weight: 600; }
+  .cell-bad { color: var(--red); }
+  .cell-warn { color: var(--yellow); }
+  .cell-neutral { color: var(--text-muted); }
+
+  .compare-grid { display: grid; gap: 1rem; }
+  .compare-2 { grid-template-columns: 1fr 1fr; }
+  .compare-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.1rem 1.25rem; position: relative;
+  }
+  .compare-box.winner { border-color: var(--green); }
+  .box-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.6rem; }
+  .box-list { list-style: none; }
+  .box-list li {
+    font-size: 0.74rem; color: var(--text-muted);
+    padding: 0.28rem 0 0.28rem 1.1rem; position: relative; line-height: 1.45;
+  }
+  .box-list li::before { content: '·'; position: absolute; left: 0.3rem; color: var(--accent); font-weight: 700; }
+  .box-list li strong { color: var(--text); }
+
+  code, .mono { font-family: var(--mono); font-size: 0.92em; }
+  .codeblock {
+    background: #111827; color: #c5cdd8;
+    font-family: var(--mono); font-size: 0.72rem; line-height: 1.55;
+    border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem;
+    white-space: pre; overflow-x: auto;
+  }
+  .codeblock .k { color: #7aa2f7; }
+  .codeblock .c { color: #6b7a90; }
+  .codeblock .g { color: #5fd068; }
+  .codeblock .r { color: #ef6a6a; }
+
+  .diagram-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem;
+  }
+  .diagram-title { font-size: 0.72rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.6rem; }
+  svg text { font-family: var(--sans); }
+  svg .svgmono { font-family: var(--mono); }
+
+  .tag {
+    display: inline-block; font-size: 0.62rem; font-weight: 600;
+    padding: 0.12rem 0.5rem; border-radius: 99px; letter-spacing: 0.05em;
+    vertical-align: middle;
+  }
+  .tag-green { background: rgba(30,126,52,0.12); color: var(--green); }
+  .tag-red { background: rgba(192,57,43,0.12); color: var(--red); }
+  .tag-yellow { background: rgba(184,135,0,0.14); color: var(--yellow); }
+  .tag-blue { background: rgba(0,82,204,0.1); color: var(--accent); }
+
+  .verdict {
+    background: var(--surface); border-left: 4px solid var(--accent);
+    border-radius: 0 8px 8px 0; padding: 1rem 1.3rem; margin-top: 0.4rem;
+    font-size: 0.85rem; line-height: 1.55;
+  }
+  .verdict strong { color: var(--accent); }
+
+  .step-row { display: grid; grid-template-columns: 2.2rem 1fr; gap: 0.8rem; margin-bottom: 0.85rem; align-items: start; }
+  .step-num {
+    width: 2rem; height: 2rem; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85rem; margin-top: 0.1rem;
+  }
+  .step-body { font-size: 0.82rem; line-height: 1.5; color: var(--text); }
+  .step-body strong { color: var(--accent); }
+  .step-body .mono { background: var(--surface2); padding: 0.05rem 0.35rem; border-radius: 4px; font-size: 0.78em; }
+</style>
+</head>
+<body>
+
+<nav id="nav"></nav>
+
+<!-- ═══════════ SLIDE 1 — TITRE ═══════════ -->
+<section class="slide title-slide active">
+  <div class="slide-num">BUBBLE-BLUE · Sécurité de groupe</div>
+  <h1>Révocation par<br>Epoch + Gossip</h1>
+  <p class="subtitle" style="font-size:1rem; margin-top:0.8rem;">
+    Conserver la fluidité de révocation du schéma multi-clés,<br>
+    sans payer 16·n bytes sur chaque paquet, pour toujours.
+  </p>
+  <div class="title-meta">
+    <div class="meta-item"><span class="meta-label">Exigence n°1</span><span class="meta-value">Révocation fluide</span></div>
+    <div class="meta-item"><span class="meta-label">Overhead régime normal</span><span class="meta-value">16 B (vs 16·n B)</span></div>
+    <div class="meta-item"><span class="meta-label">Briques requises</span><span class="meta-value">ECDH X25519 + Hello (déjà en prod)</span></div>
+    <div class="meta-item"><span class="meta-label">Statut</span><span class="meta-value">Implémenté — epoch + gossip + PKT_SUBGROUP</span></div>
+  </div>
+</section>
+
+<!-- ═══════════ SLIDE 2 — CAHIER DES CHARGES ═══════════ -->
+<section class="slide">
+  <div class="slide-num">02 · Point de départ</div>
+  <h2>Le cahier des charges de la révocation</h2>
+  <h3>Ce que le schéma multi-clés fait bien — et ce qu'il coûte</h3>
+
+  <div class="compare-grid compare-2">
+    <div class="compare-box">
+      <div class="box-title">✅ Les propriétés à conserver absolument</div>
+      <ul class="box-list">
+        <li><strong>Instantanée</strong> — l'émetteur décide, le paquet suivant exclut déjà M</li>
+        <li><strong>Sans protocole</strong> — pas de cérémonie de re-keying, pas de phase de blocage</li>
+        <li><strong>Récepteurs stateless</strong> — un membre absent une semaine revient et lit, sans synchronisation</li>
+        <li><strong>Suppression de case</strong> — révoquer M ne touche au matériel de personne d'autre</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">❌ Le prix payé en permanence</div>
+      <ul class="box-list">
+        <li><strong>16·n bytes par paquet, à vie</strong> — même quand personne n'est révoqué (99,9 % du temps)</li>
+        <li><strong>Incompatible BLE</strong> — n = 32 → header de 512 B &gt; MTU 251 B : ne rentre pas</li>
+        <li><strong>Multihop</strong> — chaque relais re-transmet la taxe ; énergie × nombre de sauts</li>
+        <li><strong>Révocation locale, pas globale</strong> — un émetteur non informé continue d'inclure M (voir slide 7)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <strong>Objectif de ce design :</strong> garder les 4 propriétés de gauche, supprimer les 4 coûts de droite.
+    L'idée centrale — séparer la <strong>révocation</strong> (instantanée, par message) de la <strong>redistribution</strong>
+    (paresseuse, automatique, par gossip).
+  </div>
+</section>
+
+<!-- ═══════════ SLIDE 3 — LE MÉCANISME ═══════════ -->
+<section class="slide">
+  <div class="slide-num">03 · Fonctionnement</div>
+  <h2>Le cycle de révocation</h2>
+  <h3>Trois temps : bascule immédiate · vie normale · rattrapage automatique</h3>
+
+  <div class="step-row">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <strong>Révocation de M (instantanée).</strong> Le coordinateur (convention : plus petit <span class="mono">anon_id</span>)
+      génère <span class="mono">group_key[e+1]</span> aléatoire et flood un <span class="mono">PKT_REKEY</span>
+      en message privé pairwise (ECDH) à chaque membre joignable :
+      <span class="mono">{ epoch: e+1, group_key', revoked: [pubkey_M] }</span>.
+      En quelques secondes, tout le composant connecté bascule. Les messages groupe restent à <strong>16 B de header</strong>.
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <strong>Vie normale.</strong> Personne n'attend personne. Le groupe émet sous l'epoch e+1.
+      M possède encore <span class="mono">group_key[e]</span> et ses clés ECDH — aucune ne déchiffre plus rien :
+      <span class="mono">InvalidTag</span> systématique.
+    </div>
+  </div>
+  <div class="step-row">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <strong>Rattrapage par gossip.</strong> Chaque Hello privé contient désormais l'<strong>epoch</strong> du nœud.
+      Quand un membre à jour voit un Hello avec un epoch périmé d'un membre <em>non révoqué</em>,
+      il lui renvoie le <span class="mono">PKT_REKEY</span> courant en pairwise. Convergence en ~1 cycle Hello (5 s).
+      <strong>N'importe quel membre peut rattraper n'importe quel autre</strong> — pas de coordinateur permanent.
+    </div>
+  </div>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Flood PKT_REKEY — révocation de M</div>
+    <svg viewBox="0 0 860 170" width="100%">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#0052cc"/>
+        </marker>
+      </defs>
+      <!-- Coordinateur -->
+      <circle cx="110" cy="85" r="34" fill="#0052cc"/>
+      <text x="110" y="80" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Coord.</text>
+      <text x="110" y="97" text-anchor="middle" fill="#cfe0ff" font-size="10">epoch e+1</text>
+      <!-- Membres -->
+      <circle cx="420" cy="35" r="28" fill="#fff" stroke="#1e7e34" stroke-width="2.5"/>
+      <text x="420" y="32" text-anchor="middle" fill="#1a2340" font-size="12" font-weight="600">Alice</text>
+      <text x="420" y="46" text-anchor="middle" fill="#1e7e34" font-size="9">e → e+1</text>
+      <circle cx="420" cy="135" r="28" fill="#fff" stroke="#1e7e34" stroke-width="2.5"/>
+      <text x="420" y="132" text-anchor="middle" fill="#1a2340" font-size="12" font-weight="600">Bob</text>
+      <text x="420" y="146" text-anchor="middle" fill="#1e7e34" font-size="9">e → e+1</text>
+      <!-- Relais via Bob -->
+      <circle cx="660" cy="135" r="28" fill="#fff" stroke="#1e7e34" stroke-width="2.5"/>
+      <text x="660" y="132" text-anchor="middle" fill="#1a2340" font-size="12" font-weight="600">Carol</text>
+      <text x="660" y="146" text-anchor="middle" fill="#1e7e34" font-size="9">e → e+1</text>
+      <!-- M révoqué -->
+      <circle cx="660" cy="35" r="28" fill="#fff" stroke="#c0392b" stroke-width="2.5" stroke-dasharray="5 4"/>
+      <text x="660" y="32" text-anchor="middle" fill="#c0392b" font-size="12" font-weight="700">M</text>
+      <text x="660" y="46" text-anchor="middle" fill="#c0392b" font-size="9">bloqué à e</text>
+      <!-- Flèches -->
+      <line x1="148" y1="68" x2="386" y2="40" stroke="#0052cc" stroke-width="2" marker-end="url(#arr)"/>
+      <line x1="148" y1="102" x2="386" y2="130" stroke="#0052cc" stroke-width="2" marker-end="url(#arr)"/>
+      <line x1="452" y1="135" x2="626" y2="135" stroke="#0052cc" stroke-width="2" marker-end="url(#arr)"/>
+      <text x="268" y="40" text-anchor="middle" fill="#0052cc" font-size="10" class="svgmono">PKT_REKEY (pairwise)</text>
+      <text x="268" y="130" text-anchor="middle" fill="#0052cc" font-size="10" class="svgmono">PKT_REKEY (pairwise)</text>
+      <text x="539" y="125" text-anchor="middle" fill="#0052cc" font-size="10" class="svgmono">relais gossip</text>
+      <!-- Pas de flèche vers M -->
+      <line x1="452" y1="35" x2="626" y2="35" stroke="#c0392b" stroke-width="2" stroke-dasharray="6 5"/>
+      <text x="539" y="25" text-anchor="middle" fill="#c0392b" font-size="10" font-weight="600">jamais envoyé — revoked_list</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ═══════════ SLIDE 4 — SCÉNARIO CRITIQUE ═══════════ -->
+<section class="slide">
+  <div class="slide-num">04 · Scénario critique</div>
+  <h2>Le membre absent une semaine</h2>
+  <h3>Le test que l'ancien schéma met en avant — et que ce design passe aussi</h3>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Timeline — Alice part 7 jours, M est révoqué pendant son absence</div>
+    <svg viewBox="0 0 860 215" width="100%">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#5a6378"/>
+        </marker>
+      </defs>
+      <!-- Axe -->
+      <line x1="50" y1="105" x2="820" y2="105" stroke="#5a6378" stroke-width="2" marker-end="url(#arr2)"/>
+      <!-- J0 départ -->
+      <line x1="120" y1="92" x2="120" y2="118" stroke="#1a2340" stroke-width="2"/>
+      <text x="120" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#1a2340">J0</text>
+      <text x="120" y="138" text-anchor="middle" font-size="10" fill="#5a6378">Alice part</text>
+      <text x="120" y="152" text-anchor="middle" font-size="10" fill="#5a6378" class="svgmono">epoch = e</text>
+      <!-- J2 révocation -->
+      <line x1="330" y1="92" x2="330" y2="118" stroke="#c0392b" stroke-width="2"/>
+      <text x="330" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#c0392b">J2 — révocation de M</text>
+      <text x="330" y="138" text-anchor="middle" font-size="10" fill="#5a6378">flood PKT_REKEY</text>
+      <text x="330" y="152" text-anchor="middle" font-size="10" fill="#1e7e34" class="svgmono">groupe → e+1 en ~5 s</text>
+      <text x="330" y="166" text-anchor="middle" font-size="10" fill="#1e7e34" font-weight="600">header reste 16 B — personne n'attend Alice</text>
+      <!-- Zone absence -->
+      <rect x="120" y="98" width="450" height="14" rx="7" fill="rgba(184,135,0,0.18)"/>
+      <text x="345" y="60" text-anchor="middle" font-size="10" fill="#b88700" font-weight="600">absence d'Alice — 7 jours, injoignable</text>
+      <!-- J7 retour -->
+      <line x1="570" y1="92" x2="570" y2="118" stroke="#0052cc" stroke-width="2"/>
+      <text x="570" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#0052cc">J7 — retour</text>
+      <text x="570" y="138" text-anchor="middle" font-size="10" fill="#5a6378">Hello privé : epoch = e (périmé)</text>
+      <!-- catch up -->
+      <line x1="700" y1="92" x2="700" y2="118" stroke="#1e7e34" stroke-width="2"/>
+      <text x="700" y="82" text-anchor="middle" font-size="11" font-weight="600" fill="#1e7e34">J7 + 5 s</text>
+      <text x="700" y="138" text-anchor="middle" font-size="10" fill="#1e7e34">Bob voit l'epoch périmé →</text>
+      <text x="700" y="152" text-anchor="middle" font-size="10" fill="#1e7e34" class="svgmono">PKT_REKEY pairwise → e+1</text>
+      <text x="700" y="166" text-anchor="middle" font-size="10" fill="#1e7e34" font-weight="600">Alice lit tout le trafic futur</text>
+      <!-- M -->
+      <text x="430" y="195" text-anchor="middle" font-size="10.5" fill="#c0392b">M revient aussi ? Même Hello périmé — mais sa pubkey est dans la <tspan class="svgmono">revoked_list</tspan> : personne ne le rattrape, jamais.</text>
+    </svg>
+  </div>
+
+  <div class="compare-grid compare-2">
+    <div class="compare-box">
+      <div class="box-title">Un seul PKT_REKEY suffit, même après k révocations</div>
+      <ul class="box-list">
+        <li>Le message porte l'<strong>état courant complet</strong> : epoch, clé, revoked_list</li>
+        <li>Alice rate 3 epochs → un seul rattrapage, pas de rejeu d'historique</li>
+        <li>Elle apprend en même temps <strong>qui a été exclu</strong> pendant son absence</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Honnêteté : ce qu'Alice rate vraiment</div>
+      <ul class="box-list">
+        <li>Les messages émis <strong>pendant</strong> l'absence — mais BB n'a pas de store-and-forward : ils sont perdus au niveau transport, <strong>quel que soit le schéma crypto</strong></li>
+        <li>Identique à l'ancien schéma sur ce point : zéro régression</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ SLIDE 5 — SIMPLICITÉ ═══════════ -->
+<section class="slide">
+  <div class="slide-num">05 · Mise en œuvre</div>
+  <h2>Tout est déjà dans la stack</h2>
+  <h3>Le design n'invente rien : il compose trois briques validées sur hardware</h3>
+
+  <table>
+    <tr><th style="width:26%">Brique requise</th><th style="width:34%">État dans le code</th><th>Rôle dans le schéma</th></tr>
+    <tr>
+      <td class="mono">Canaux pairwise ECDH</td>
+      <td><span class="tag tag-green">EN PROD</span> <span class="mono">keys.py</span> — X25519 + HKDF, validé hardware</td>
+      <td>Transport chiffré du PKT_REKEY, membre par membre</td>
+    </tr>
+    <tr>
+      <td class="mono">Messages privés routés</td>
+      <td><span class="tag tag-green">EN PROD</span> <span class="mono">--private</span>, forwarding multihop opaque</td>
+      <td>Le REKEY atteint les membres à plusieurs sauts</td>
+    </tr>
+    <tr>
+      <td class="mono">Hello privé extensible</td>
+      <td><span class="tag tag-green">EN PROD</span> Hello privé v0x02 (+4 B <span class="mono">epoch</span>)</td>
+      <td>+4 bytes : le champ <span class="mono">epoch</span> — déclencheur du gossip</td>
+    </tr>
+    <tr>
+      <td class="mono">PKT_REKEY</td>
+      <td><span class="tag tag-green">EN PROD</span> <span class="mono">rekey.py</span> + <span class="mono">forwarder.py</span></td>
+      <td><span class="mono">{epoch, group_key', revoked_list}</span> — pairwise flood</td>
+    </tr>
+    <tr>
+      <td class="mono">Logique de bascule</td>
+      <td><span class="tag tag-green">EN PROD</span> <span class="mono">epoch.py</span> · persistance locale</td>
+      <td>epoch courant + <code>group_key[epoch]</code> + <code>revoked_list</code></td>
+    </tr>
+    <tr>
+      <td class="mono">Règle de gossip</td>
+      <td><span class="tag tag-green">EN PROD</span> <span class="mono">hello_manager.py</span></td>
+      <td>Hello epoch périmé + non révoqué → <span class="mono">PKT_REKEY</span></td>
+    </tr>
+    <tr>
+      <td class="mono">PKT_SUBGROUP (transitoire)</td>
+      <td><span class="tag tag-green">EN PROD</span> <span class="mono">packet.py</span> · chat <span class="mono">/subgroup</span></td>
+      <td>Multicast à la carte O(|S|) — fenêtre de propagation</td>
+    </tr>
+  </table>
+
+  <div class="codeblock"><span class="c"># L'intégralité de la logique d'exécution tient en trois règles :</span>
+
+<span class="k">À l'émission groupe :</span>   chiffrer sous group_key[epoch_courant]          <span class="c"># inchangé — 16 B</span>
+<span class="k">À la réception REKEY :</span>  si epoch &gt; courant : adopter {epoch, clé, liste} <span class="c"># bascule</span>
+<span class="k">À la réception Hello :</span>  si epoch_pair &lt; courant <span class="g">et</span> pair ∉ revoked_list :
+                            envoyer PKT_REKEY en pairwise                 <span class="c"># gossip</span></div>
+
+  <div class="verdict">
+    Estimation : <strong>~150–200 lignes</strong> au-dessus de l'existant, aucun nouveau primitif cryptographique,
+    aucune dépendance. La complexité d'<strong>exécution</strong> est portée par des mécanismes déjà testés
+    (Hello périodique 5 s, forwarding privé) — le schéma ne fait que les composer.
+  </div>
+</section>
+
+<!-- ═══════════ SLIDE 6 — POINTS FORTS ═══════════ -->
+<section class="slide">
+  <div class="slide-num">06 · Points forts</div>
+  <h2>Réponse au cahier des charges, point par point</h2>
+  <h3>Chaque propriété exigée de l'ancien schéma — conservée ou améliorée</h3>
+
+  <table>
+    <tr>
+      <th style="width:30%">Exigence (ancien schéma)</th>
+      <th style="width:21%">Multi-clés (papier)</th>
+      <th style="width:21%">Epoch + Gossip</th>
+      <th>Commentaire</th>
+    </tr>
+    <tr>
+      <td>Révocation instantanée, décidée côté émetteur</td>
+      <td class="cell-good">✅ case à zéro</td>
+      <td class="cell-good">✅ flood REKEY, effet en ~5 s</td>
+      <td class="cell-neutral">Délai = 1 flood mesh ; mode trivial transitoire possible pour le paquet immédiat</td>
+    </tr>
+    <tr>
+      <td>Aucune attente globale, membres absents tolérés</td>
+      <td class="cell-good">✅ stateless</td>
+      <td class="cell-good">✅ gossip catch-up auto</td>
+      <td class="cell-neutral">Rattrapage en 1 cycle Hello au retour — zéro intervention</td>
+    </tr>
+    <tr>
+      <td>Révoquer M ne touche pas les autres membres</td>
+      <td class="cell-good">✅ suppression de case</td>
+      <td class="cell-good">✅ clés ECDH intactes</td>
+      <td class="cell-neutral">Les K_pair sont dérivées, jamais distribuées → rien à redistribuer</td>
+    </tr>
+    <tr>
+      <td>Révocation <strong>globale et cohérente</strong></td>
+      <td class="cell-bad">❌ par émetteur, divergences indétectables</td>
+      <td class="cell-good">✅ état explicite, epoch comparable</td>
+      <td class="cell-neutral">Le gossip répare les vues divergentes — y compris après partition du mesh</td>
+    </tr>
+    <tr>
+      <td>Overhead en régime permanent</td>
+      <td class="cell-bad">16·n B / paquet, à vie</td>
+      <td class="cell-good">16 B / paquet</td>
+      <td class="cell-neutral">n = 32 : <strong>512 B → 16 B</strong>. Coût de révocation payé 1 fois, pas sur chaque paquet</td>
+    </tr>
+    <tr>
+      <td>Compatibilité BLE (Phase 2)</td>
+      <td class="cell-bad">❌ header &gt; MTU dès n ≈ 14</td>
+      <td class="cell-good">✅ 16 B, indépendant de n</td>
+      <td class="cell-neutral">Condition sine qua non du portage BLE GATT prévu</td>
+    </tr>
+    <tr>
+      <td>Anonymat (design anon_id de BB)</td>
+      <td class="cell-bad">❌ roster + révocations exposés dans le header</td>
+      <td class="cell-good">✅ REKEY chiffré pairwise</td>
+      <td class="cell-neutral">Taille de groupe et exclusions invisibles des observateurs externes</td>
+    </tr>
+    <tr>
+      <td>Récupération après vol de device</td>
+      <td class="cell-bad">❌ re-setup O(n²) hors-bande</td>
+      <td class="cell-good">✅ epoch++, in-band</td>
+      <td class="cell-neutral">Même mécanisme que la révocation — un seul outil pour deux menaces</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ═══════════ SLIDE 7 — POINTS FAIBLES ═══════════ -->
+<section class="slide">
+  <div class="slide-num">07 · Points faibles</div>
+  <h2>Limites assumées — et leurs mitigations</h2>
+  <h3>Transparence totale : ce que ce design ne résout pas, ou résout imparfaitement</h3>
+
+  <table>
+    <tr><th style="width:24%">Limite</th><th style="width:8%">Sévérité</th><th style="width:36%">Détail</th><th>Mitigation</th></tr>
+    <tr>
+      <td><strong>Fenêtre de propagation</strong></td>
+      <td><span class="tag tag-yellow">MOYENNE</span></td>
+      <td>Entre la décision et la réception du REKEY, un membre pas encore basculé émet sous l'ancienne clé → M lit ces quelques messages (secondes)</td>
+      <td>Mode trivial transitoire (16·(n−r) B) pour les paquets urgents pendant le flood — la propriété de l'ancien schéma reste disponible à la demande</td>
+    </tr>
+    <tr>
+      <td><strong>Qui a le droit de révoquer ?</strong></td>
+      <td><span class="tag tag-yellow">MOYENNE</span></td>
+      <td>Un REKEY est un pouvoir : non authentifié, un membre malveillant peut exclure arbitrairement ou forker le groupe</td>
+      <td>REKEY signé / accepté seulement du coordinateur (min anon_id) + epoch strictement monotone. La gouvernance (qui décide) reste un choix humain, hors crypto — vrai aussi pour l'ancien schéma</td>
+    </tr>
+    <tr>
+      <td><strong>Les nœuds ne sont plus stateless</strong></td>
+      <td><span class="tag tag-yellow">MOYENNE</span></td>
+      <td>epoch + clé courante + revoked_list doivent survivre au reboot, sinon le nœud retombe en epoch 0</td>
+      <td>Persistance locale (~100 B) ; au pire, un nœud amnésique est rattrapé par le gossip comme un absent — le système s'auto-répare</td>
+    </tr>
+    <tr>
+      <td><strong>Collusion interne</strong></td>
+      <td><span class="tag tag-yellow">MOYENNE</span></td>
+      <td>Un membre complice peut re-transmettre la nouvelle clé à M</td>
+      <td>Irréductible dans <em>tout</em> schéma à clé partagée — y compris le multi-clés (un complice peut remplir la case de M). Pas une régression</td>
+    </tr>
+    <tr>
+      <td><strong>revoked_list croissante</strong></td>
+      <td><span class="tag tag-green">BASSE</span></td>
+      <td>32 B par membre révoqué, transportés dans chaque REKEY</td>
+      <td>Négligeable à l'échelle d'une bulle (10 révocations = 320 B, sur un message rare). Purge possible à la re-création du groupe</td>
+    </tr>
+    <tr>
+      <td><strong>Membre isolé très longtemps</strong></td>
+      <td><span class="tag tag-green">BASSE</span></td>
+      <td>Le rattrapage exige de croiser au moins un membre à jour</td>
+      <td>Inhérent au mesh sans infrastructure : un nœud qui ne croise personne ne reçoit rien de toute façon</td>
+    </tr>
+  </table>
+
+  <div class="verdict">
+    Aucune de ces limites n'est une régression par rapport au schéma multi-clés — et deux d'entre elles
+    (fenêtre de propagation, collusion) <strong>existaient déjà dans l'ancien schéma sous une forme pire</strong>,
+    car sans mécanisme de détection ni de réparation.
+  </div>
+</section>
+
+<!-- ═══════════ SLIDE 8 — VERDICT ═══════════ -->
+<section class="slide">
+  <div class="slide-num">08 · Synthèse</div>
+  <h2>Verdict chiffré</h2>
+  <h3>Bulle de n = 32 membres, r révocations cumulées</h3>
+
+  <table>
+    <tr><th>Métrique</th><th>Multi-clés (papier)</th><th>Epoch + Gossip</th></tr>
+    <tr><td>Header clés — régime normal (r = 0)</td><td class="cell-bad">512 B</td><td class="cell-good">16 B</td></tr>
+    <tr><td>Header clés — après 4 révocations</td><td class="cell-bad">512 B (cases à zéro incluses)</td><td class="cell-good">16 B</td></tr>
+    <tr><td>Coût d'une révocation</td><td class="cell-neutral">0 B (mais propagation de l'info non résolue)</td><td class="cell-neutral">1 flood PKT_REKEY ≈ n × 100 B, une fois</td></tr>
+    <tr><td>Retour d'un absent (7 jours)</td><td class="cell-good">immédiat</td><td class="cell-good">~5 s, automatique</td></tr>
+    <tr><td>Paquet chat typique (46 B payload)</td><td class="cell-bad">~600 B</td><td class="cell-good">~88 B</td></tr>
+    <tr><td>Passe dans un paquet BLE (MTU 251 B)</td><td class="cell-bad">non</td><td class="cell-good">oui</td></tr>
+    <tr><td>Setup initial du groupe</td><td class="cell-bad">O(n²) clés hors-bande (496 paires)</td><td class="cell-good">1 PSK + ECDH automatique</td></tr>
+    <tr><td>Ajout d'un membre</td><td class="cell-bad">n clés hors-bande + reformat header</td><td class="cell-good">1 PKT_REKEY</td></tr>
+  </table>
+
+  <div class="compare-grid compare-2" style="margin-top:0.4rem;">
+    <div class="compare-box winner">
+      <div class="box-title">Proposition</div>
+      <ul class="box-list">
+        <li><strong>Phase 2 :</strong> implémentation epoch + gossip (~150–200 lignes, briques existantes)</li>
+        <li><strong>Conserver</strong> le mode trivial sur clés ECDH dérivées comme régime transitoire optionnel — le meilleur des deux mondes</li>
+        <li><strong>Critère de validation :</strong> scénario « absent 7 jours + révocation » rejoué sur les 3 boards</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Hors périmètre (documenté, non implémenté)</div>
+      <ul class="box-list">
+        <li>BGW (broadcast encryption à chiffré constant) — piste recherche Phase 3, crypto à couplages</li>
+        <li>Gouvernance de la révocation (qui décide) — choix produit, orthogonal à la crypto</li>
+        <li>Store-and-forward des messages manqués — limite du transport, pas du schéma</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div id="slide-counter"></div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const nav = document.getElementById('nav');
+  const titles = [
+    'Titre', 'Cahier des charges', 'Le cycle de révocation', 'Membre absent 7 jours',
+    'Mise en œuvre', 'Points forts', 'Points faibles', 'Verdict chiffré'
+  ];
+  let current = 0;
+
+  titles.forEach((t, i) => {
+    const b = document.createElement('button');
+    b.textContent = (i + 1) + '. ' + t;
+    b.onclick = () => go(i);
+    nav.appendChild(b);
+  });
+  const counter = document.createElement('div');
+  counter.id = 'slide-counter';
+  nav.appendChild(counter);
+
+  function go(i) {
+    if (i < 0 || i >= slides.length) return;
+    slides[current].classList.remove('active');
+    nav.children[current].classList.remove('active');
+    current = i;
+    slides[current].classList.add('active');
+    nav.children[current].classList.add('active');
+    counter.textContent = (current + 1) + ' / ' + slides.length;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') go(current + 1);
+    if (e.key === 'ArrowLeft') go(current - 1);
+  });
+
+  go(0);
+</script>
+</body>
+</html>

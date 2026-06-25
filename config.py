@@ -11,6 +11,8 @@ from dataclasses import dataclass
 PKT_HELLO = 0x01
 PKT_DATA  = 0x02
 PKT_ACK   = 0x03
+PKT_SUBGROUP = 0x04
+PKT_REKEY   = 0x05
 
 # Security
 AES_KEY_SIZE = 32      # bytes
