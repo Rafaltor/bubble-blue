@@ -781,7 +781,7 @@
   <div>
     <div class="slide-num">BUBBLE-BLUE — STACK TECHNIQUE</div>
     <h1>Implémentation Phase 1A + 1B</h1>
-    <h2 style="color: var(--text-muted); font-weight: 400; font-size: 1.3rem;">État d'avancement technique — Stack complet BT Classic</h2>
+    <h2 style="color: var(--text-muted); font-weight: 400; font-size: 1.3rem;">État d'avancement — stack BT Classic · epoch · subgroup · MPR Hello</h2>
     <div class="title-meta">
       <div class="meta-item">
         <span class="meta-label">Plateformes</span>
@@ -797,7 +797,7 @@
       </div>
       <div class="meta-item">
         <span class="meta-label">Status</span>
-        <span class="meta-value">Phase 1A ✅ · Phase 1B ✅ · HKDF + multihop validé</span>
+        <span class="meta-value">Phase 1A ✅ · Phase 1B ✅ · RELAY hardware à revalider</span>
       </div>
     </div>
   </div>
@@ -816,16 +816,16 @@
         <code>bubble-blue/</code><br>
         ├── <code>bb_node.py</code> <span style="color: var(--text-muted);">— CLI</span><br>
         ├── <code>config.py</code> <span style="color: var(--text-muted);">— .env</span><br>
-        ├── <code>tests/</code> <span style="color: var(--text-muted);">— forwarder · bb_api · pairwise</span><br>
+        ├── <code>tests/</code> <span style="color: var(--text-muted);">— forwarder · epoch · mpr · cds runtime</span><br>
         └── <code>src/</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>BBNode</code><br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>api/</code> → <code>BBNode</code> · chat<br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>transport/</code> → <code>l2cap.py</code><br>
-        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → keys · crypto · replay<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├── <code>security/</code> → keys · crypto · epoch · rekey · packet<br>
         &nbsp;&nbsp;&nbsp;&nbsp;├── <code>control/</code> → hello · neighbors<br>
         &nbsp;&nbsp;&nbsp;&nbsp;└── <code>forwarding/</code> → cds · forwarder
       </div>
       <ul class="crypto-anno-list" style="margin-top: 0.85rem;">
-        <li><strong>Entrée</strong> : <code>bb_node.py --chat</code></li>
+        <li><strong>Entrée</strong> : <code>bb_node.py --chat</code> · <code>/revoke</code> · <code>/subgroup</code></li>
         <li><strong>Config</strong> : <code>GROUP_KEY</code> · <code>GROUP_MEMBERS</code> dans <code>.env</code></li>
       </ul>
     </div>
@@ -849,7 +849,7 @@
         <line x1="260" y1="24" x2="260" y2="30" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arr-stack)"/>
         <rect x="8" y="30" width="504" height="18" rx="4" fill="url(#layer-fwd)" stroke="#3b82f6" stroke-width="1"/>
         <text x="20" y="42" fill="#dbeafe" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Forwarding</text>
-        <text x="110" y="42" fill="#bfdbfe" font-family="Consolas,monospace" font-size="7">forwarder.py · cds.py (Wu-Li)</text>
+        <text x="110" y="42" fill="#bfdbfe" font-family="Consolas,monospace" font-size="7">forwarder.py · cds (Wu-Li + MPR)</text>
         <line x1="260" y1="48" x2="260" y2="54" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arr-stack)"/>
         <rect x="8" y="54" width="504" height="18" rx="4" fill="url(#layer-ctl)" stroke="#22c55e" stroke-width="1"/>
         <text x="20" y="66" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">Control</text>
@@ -868,7 +868,7 @@
       </svg>
       <ul class="crypto-anno-list">
         <li>Chaque couche ne connaît que la couche <strong>inférieure</strong> (sauf callbacks montants)</li>
-        <li>Deux types de paquets : <code>PKT_HELLO</code> (control) · <code>PKT_DATA</code> (forwarding)</li>
+        <li>Cinq types : <code>PKT_HELLO</code> · <code>PKT_DATA</code> · <code>PKT_SUBGROUP</code> · <code>PKT_REKEY</code> · <code>PKT_ACK</code> (constante seule)</li>
       </ul>
     </div>
   </div>
@@ -878,7 +878,7 @@
 <div class="slide arch-slide" id="s3">
   <div class="slide-num">ARCHITECTURE — 2/2</div>
   <h2>Transport L2CAP &amp; routage paquets</h2>
-  <p class="arch-subtitle">Nœud symétrique · multihop · deux chemins selon le type de paquet</p>
+  <p class="arch-subtitle">Nœud symétrique · multihop flood naïf · control + data + subgroup + rekey</p>
 
   <div class="arch-diagram-grid">
     <div class="crypto-diagram-panel node">
@@ -911,7 +911,7 @@
     </div>
 
     <div class="crypto-diagram-panel node">
-      <div class="crypto-diagram-title">Multihop validé (3 boards)</div>
+      <div class="crypto-diagram-title">Multihop 3 boards — topologie cible</div>
       <svg viewBox="0 0 420 88" xmlns="http://www.w3.org/2000/svg" aria-label="Topologie multihop">
         <defs>
           <marker id="arr-topo" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
@@ -923,16 +923,17 @@
         <text x="70" y="54" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6">LEAF</text>
         <circle cx="210" cy="44" r="26" fill="#422006" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 2"/>
         <text x="210" y="42" text-anchor="middle" fill="#fef3c7" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Arduino</text>
-        <text x="210" y="54" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="6">RELAY</text>
+        <text x="210" y="54" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="6">RELAY?</text>
         <circle cx="350" cy="44" r="26" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
         <text x="350" y="42" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Rubik2</text>
         <text x="350" y="54" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6">LEAF</text>
         <line x1="96" y1="44" x2="184" y2="44" stroke="#60a5fa" stroke-width="2" marker-end="url(#arr-topo)"/>
         <line x1="236" y1="44" x2="324" y2="44" stroke="#60a5fa" stroke-width="2" marker-end="url(#arr-topo)"/>
-        <text x="210" y="78" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">relais forward DATA opaque</text>
+        <text x="210" y="78" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">relais forward DATA opaque · à revalider post-fix am_i_cds</text>
       </svg>
       <ul class="crypto-anno-list" style="flex-direction: row; flex-wrap: wrap; gap: 0.2rem 1rem;">
-        <li>Hello public visible</li>
+        <li>Hello public + MPR visible</li>
+        <li><code>route_l2cap_peer</code> = voisin direct ou 1<sup>er</sup> peer (pas de routage topo)</li>
         <li>DATA chiffré E2E membres</li>
       </ul>
     </div>
@@ -968,7 +969,7 @@
         <line x1="256" y1="64" x2="205" y2="70" stroke="#4ade80" stroke-width="1" marker-end="url(#arr-hello)"/>
         <line x1="256" y1="64" x2="315" y2="70" stroke="#4ade80" stroke-width="1" marker-end="url(#arr-hello)"/>
         <rect x="40" y="108" width="320" height="18" rx="3" fill="#0f172a" stroke="#334155"/>
-        <text x="200" y="120" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6">PUBLIC clair + PRIVATE chiffré (BD, X25519)</text>
+        <text x="200" y="120" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6">PUBLIC (voisins+MPR) + PRIVATE (BD, epoch, X25519)</text>
       </svg>
       <ul class="crypto-anno-list">
         <li>Topologie <strong>anonyme</strong> pour relais non-membres</li>
@@ -1004,10 +1005,10 @@
         <line x1="180" y1="62" x2="100" y2="70" stroke="#fbbf24" stroke-width="1" marker-end="url(#arr-data)"/>
         <line x1="180" y1="62" x2="280" y2="70" stroke="#4ade80" stroke-width="1" marker-end="url(#arr-data)"/>
         <rect x="40" y="112" width="320" height="16" rx="3" fill="#0f172a" stroke="#334155"/>
-        <text x="200" y="123" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="5.5">keys · crypto · replay · _ForwardCache</text>
+        <text x="200" y="123" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="5.5">keys · crypto · replay · subgroup · rekey · _ForwardCache</text>
       </svg>
       <ul class="crypto-anno-list">
-        <li>Relais : <strong>pas de decrypt</strong></li>
+        <li>Relais : <strong>pas de decrypt</strong> · gère aussi <code>PKT_SUBGROUP</code> et <code>PKT_REKEY</code></li>
       </ul>
     </div>
   </div>
@@ -1031,7 +1032,7 @@
       <div class="compare-box plain" style="border-color: var(--accent); margin-bottom: 0.5rem; padding: 0.85rem;">
         <div class="box-title" style="font-size: 0.75rem;">Groupe — broadcast / chat (<code>FF:FF:…</code>)</div>
         <ul class="box-list">
-          <li>Base : <code>group_key</code> (PSK <code>.env</code>)</li>
+          <li>Base : <code>group_key</code> (PSK <code>.env</code>, rotatif via <code>EpochStore</code>)</li>
           <li><code>packet_key = HKDF(group_key, info=src‖seq‖ts)</code></li>
         </ul>
       </div>
@@ -1077,6 +1078,7 @@
       <li class="good">Cache relay borné — <code>_ForwardCache</code> (TTL 240 s, max 4096)</li>
       <li class="good">Révocation epoch + gossip — <code>PKT_REKEY</code> · Hello privé v0x02 (<code>epoch</code>) · voir <code>bb-revocation-epoch.html</code></li>
       <li class="good">Multicast à la carte — <code>PKT_SUBGROUP</code> (O(|S|) par message, mode transitoire optionnel)</li>
+      <li class="warn">Signature REKEY coordinateur — pas encore sur le fil</li>
     </ul>
   </div>
 </div>
@@ -1342,14 +1344,14 @@
   <div class="crypto-dual-grid">
     <div class="crypto-diagram-panel hello-pkt">
       <div class="crypto-diagram-title">Structure paquet PKT_HELLO</div>
-      <svg viewBox="0 0 420 175" xmlns="http://www.w3.org/2000/svg" aria-label="Structure paquet Hello">
+      <svg viewBox="0 0 420 193" xmlns="http://www.w3.org/2000/svg" aria-label="Structure paquet Hello">
         <defs>
           <marker id="arr-hpkt" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
             <polygon points="0 0, 7 3.5, 0 7" fill="#60a5fa"/>
           </marker>
         </defs>
         <!-- PUBLIC block -->
-        <rect x="12" y="14" width="396" height="52" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+        <rect x="12" y="14" width="396" height="70" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
         <text x="24" y="30" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">PUBLIC — clair (tout nœud CDS)</text>
         <rect x="24" y="36" width="48" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
         <text x="48" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">0x01</text>
@@ -1361,24 +1363,30 @@
         <text x="204" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">ts_ms</text>
         <rect x="232" y="36" width="24" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
         <text x="244" y="50" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">n</text>
-        <rect x="262" y="36" width="134" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
-        <text x="329" y="50" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="6.5">voisins anon_id × n</text>
+        <rect x="24" y="58" width="128" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="88" y="72" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="6.5">voisins anon_id × n</text>
+        <rect x="158" y="58" width="24" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="170" y="72" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">n_mpr</text>
+        <rect x="188" y="58" width="208" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="292" y="72" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="6.5">MPR anon_id × n_mpr</text>
         <!-- Arrow down -->
-        <line x1="210" y1="66" x2="210" y2="78" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr-hpkt)"/>
+        <line x1="210" y1="84" x2="210" y2="96" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arr-hpkt)"/>
         <!-- PRIVATE block -->
-        <rect x="12" y="78" width="396" height="58" rx="6" fill="#422006" stroke="#eab308" stroke-width="1.5"/>
-        <text x="24" y="94" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">PRIVATE — AES-256-GCM (membres seulement)</text>
-        <rect x="24" y="100" width="36" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
-        <text x="42" y="114" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">len</text>
-        <rect x="66" y="100" width="330" height="22" rx="3" fill="#0f172a" stroke="#713f12" stroke-dasharray="3 2"/>
-        <text x="231" y="114" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="6.5">BD addr · voisins BD · pubkey X25519 (32 B)</text>
+        <rect x="12" y="96" width="396" height="58" rx="6" fill="#422006" stroke="#eab308" stroke-width="1.5"/>
+        <text x="24" y="112" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">PRIVATE — AES-256-GCM (membres seulement)</text>
+        <rect x="24" y="118" width="36" height="22" rx="3" fill="#0f172a" stroke="#475569"/>
+        <text x="42" y="132" text-anchor="middle" fill="#e2e8f0" font-family="Consolas,monospace" font-size="6.5">len</text>
+        <rect x="66" y="118" width="330" height="22" rx="3" fill="#0f172a" stroke="#713f12" stroke-dasharray="3 2"/>
+        <text x="231" y="132" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="6">BD · voisins BD · epoch (v0x02) · X25519 (32 B)</text>
         <!-- anon_id formula -->
-        <rect x="12" y="148" width="396" height="24" rx="4" fill="#0f172a" stroke="#334155"/>
-        <text x="210" y="164" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">anon_id = HMAC-SHA256(group_key, bd_addr)[:8]</text>
+        <rect x="12" y="166" width="396" height="24" rx="4" fill="#0f172a" stroke="#334155"/>
+        <text x="210" y="182" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">anon_id = HMAC-SHA256(group_key, bd_addr)[:8]</text>
       </svg>
       <ul class="crypto-anno-list">
-        <li>Public = AAD du chiffrement private</li>
-        <li>Taille typique : <strong>~106 B</strong> (1 voisin + X25519) · TX <strong>5 s</strong></li>
+        <li>Public (voisins + MPR) = AAD du chiffrement private — MPR inaltérable</li>
+        <li>Bloc MPR en clair : anon_ids élus multipoint relays (OLSR/Qayyum) · n_mpr=0 si aucun</li>
+        <li>Hello privé v0x02 : champ <code>epoch</code> + gossip stale → <code>PKT_REKEY</code></li>
+        <li>Taille typique : <strong>~107+ B</strong> (1 voisin + MPR + X25519) · TX <strong>5 s</strong></li>
       </ul>
     </div>
 
@@ -1423,7 +1431,7 @@
         <text x="348" y="132" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="6">rien ✅</text>
         <!-- Broadcast cycle -->
         <rect x="8" y="152" width="404" height="20" rx="4" fill="#0f172a" stroke="#334155"/>
-        <text x="210" y="165" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">HelloManager · broadcast 5 s · NeighborTable 1-hop / 2-hop</text>
+        <text x="210" y="165" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">HelloManager · 5 s · NeighborTable 1-hop/2-hop/MPR · gossip epoch</text>
       </svg>
       <ul class="crypto-anno-list">
         <li>Relais construit le CDS sans connaître les BD addresses</li>
@@ -1441,28 +1449,30 @@
 
 <!-- SLIDE 7: CDS -->
 <div class="slide cds-slide" id="s7">
-  <div class="slide-num">CDS — WU-LI 2001 · 1/2</div>
+  <div class="slide-num">CDS — WU-LI 1999 · 1/2</div>
   <h2>Élection relais — <code>am_i_cds</code></h2>
-  <p class="arch-subtitle">Wu &amp; Li 2001 · arXiv:2509.00967 · <code>HelloManager.refresh_cds_role()</code> → <code>is_relay</code> → <code>PacketForwarder</code></p>
+  <p class="arch-subtitle">Wu &amp; Li 1999 · formulation arXiv:2509.00967 §2.4.2 · <code>HelloManager.refresh_cds_role()</code> → <code>is_relay</code> → <code>PacketForwarder</code></p>
 
   <div class="arch-diagram-grid" style="margin-bottom: 0.75rem;">
     <div class="crypto-diagram-panel stack span-full">
-      <div class="crypto-diagram-title">Algorithme Wu-Li 2001 — deux règles (anon_ids uniquement)</div>
+      <div class="crypto-diagram-title">Algorithme Wu-Li 1999 — marquage + pruning §2.4.2 (anon_ids uniquement)</div>
       <svg viewBox="0 0 880 88" xmlns="http://www.w3.org/2000/svg" aria-label="Règles Wu-Li CDS">
         <rect x="8" y="10" width="420" height="68" rx="6" fill="#422006" stroke="#f59e0b" stroke-width="1.5"/>
-        <text x="24" y="28" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Rule 1 — Gateway</text>
+        <text x="24" y="28" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Marquage — Gateway</text>
         <text x="218" y="28" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="7">∃ u,v ∈ sym_N · pas de lien Hello mutuel u↔v</text>
-        <text x="24" y="44" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">sym_N = voisins L2CAP locaux ∩ adjacence Hello mutuelle avec moi</text>
-        <text x="24" y="58" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">Ex. chaîne A—B—C : B voit {A,C}, A↔C absent → candidat RELAY</text>
-        <text x="24" y="72" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">Mesh complet : toutes paires liées → Rule 1 = FALSE → LEAF</text>
+        <text x="24" y="40" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6">sym_peers : p ∈ peers L2CAP directs ET p me liste en retour</text>
+        <text x="24" y="50" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6">(local ∈ advertised[p]) — voir <tspan font-family="Consolas,monospace">local_symmetric_peers</tspan></text>
+        <text x="24" y="62" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">Ex. chaîne A—B—C : B voit {A,C}, A↔C absent → candidat RELAY</text>
+        <text x="24" y="74" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">Mesh complet : toutes paires liées → Rule 1 = FALSE → LEAF</text>
         <rect x="452" y="10" width="420" height="68" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
-        <text x="468" y="28" fill="#cbd5e1" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Rule 2 — Pruning (domination)</text>
-        <text x="662" y="28" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">∄ Y ∈ sym_N · ID(Y) &gt; ID(X) · sym_N \ {Y} ⊆ N(Y)</text>
-        <text x="468" y="44" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">ID = valeur entière de l'anon_id (8 B BE)</text>
-        <text x="468" y="58" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">Si un voisin « plus fort » couvre déjà mes autres peers → je reste LEAF</text>
-        <text x="468" y="72" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">RELAY = Rule 1 ∧ Rule 2 · &lt; 2 sym_peers → LEAF immédiat</text>
+        <text x="468" y="28" fill="#cbd5e1" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Pruning §2.4.2 — Cas 1 / Cas 2</text>
+        <text x="468" y="39" fill="#94a3b8" font-family="Consolas,monospace" font-size="5.5">Cas 1: id(X) = min → RELAY · Cas 2: sinon LEAF ssi S_low forme un CDS de N(X)</text>
+        <text x="468" y="50" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="6.5">S_low = { Y ∈ sym_N | id(Y) &lt; id(X) } (voisins d'ID INFÉRIEUR)</text>
+        <text x="468" y="61" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">CDS de N(X) = dominant ET connexe (connexité stricte)</text>
+        <text x="468" y="72" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">RELAY = gateway ∧ non élagué · &lt; 2 sym_peers → LEAF immédiat</text>
       </svg>
       <ul class="crypto-anno-list" style="flex-direction: row; flex-wrap: wrap; gap: 0.35rem 1.5rem;">
+        <li>Correctif runtime : sym_peers ne lit pas <code>advertised[local]</code> (jamais présent en table reçue) — un nœud connaît ses voisins directs via L2CAP</li>
         <li>Peers L2CAP = <code>transport.connections()</code> — Hello ne crée pas de peers</li>
         <li><code>compute_cds()</code> = même Wu-Li sur graphe Hello fusionné (self-tests)</li>
         <li><code>compute_greedy_cds()</code> = greedy legacy · comparaison tests uniquement</li>
@@ -1479,7 +1489,7 @@
             <polygon points="0 0, 7 3.5, 0 7" fill="#fbbf24"/>
           </marker>
         </defs>
-        <text x="210" y="16" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="7" font-weight="600">sym_peers(B) = {A, C} — L2CAP + Hello mutuel</text>
+        <text x="210" y="16" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5" font-weight="600">sym_peers(B) = {A, C} — peers L2CAP directs confirmés en retour</text>
         <circle cx="70" cy="58" r="28" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
         <text x="70" y="54" text-anchor="middle" fill="#dcfce7" font-family="IBM Plex Sans,sans-serif" font-size="10" font-weight="700">A</text>
         <text x="70" y="66" text-anchor="middle" fill="#86efac" font-family="Consolas,monospace" font-size="6.5">LEAF</text>
@@ -1502,7 +1512,7 @@
         <text x="210" y="124" text-anchor="middle" fill="#f87171" font-family="Consolas,monospace" font-size="7" font-weight="600">A ↔ C ❌ → Rule 1 TRUE</text>
         <rect x="24" y="142" width="372" height="36" rx="5" fill="#422006" stroke="#f59e0b" stroke-width="1.5"/>
         <text x="210" y="158" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Rule 1 ∧ Rule 2 → am_i_cds(B) = TRUE</text>
-        <text x="210" y="172" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">Validé labo : Arduino central · RubikQ + Rubik2 LEAF</text>
+        <text x="210" y="172" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6">À revalider sur hardware depuis le fix runtime (am_i_cds corrigé)</text>
       </svg>
       <ul class="crypto-anno-list">
         <li>Ligne 5 nœuds : B, C, D = RELAY local · A, E = LEAF</li>
@@ -1532,7 +1542,7 @@
         <text x="210" y="164" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Rule 1 = FALSE (toutes paires liées) → LEAF</text>
         <text x="210" y="176" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5">flood direct suffit</text>
         <rect x="24" y="14" width="372" height="28" rx="4" fill="#0f172a" stroke="#334155"/>
-        <text x="210" y="32" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">≥2 sym_peers ? → Wu-Li Rule 1 → Rule 2 (pruning par anon_id)</text>
+        <text x="210" y="32" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="6.5">≥2 sym_peers ? → marquage gateway → pruning Cas 1/Cas 2 (§2.4.2)</text>
       </svg>
       <ul class="crypto-anno-list">
         <li>Recalcul : chaque Hello · boucle 5 s · changement L2CAP</li>
@@ -1544,7 +1554,7 @@
 
 <!-- SLIDE 8: CDS — EXEMPLES AVANCÉS -->
 <div class="slide cds-slide" id="s8">
-  <div class="slide-num">CDS — WU-LI 2001 · 2/2</div>
+  <div class="slide-num">CDS — WU-LI 1999 · 2/2</div>
   <h2>Exemples avancés — topologies complexes</h2>
   <p class="arch-subtitle">Cas validés par <code>cds.py</code> self-tests · vue locale <code>am_i_cds</code> vs globale <code>compute_cds()</code></p>
 
@@ -1659,7 +1669,7 @@
         <text x="306" y="102" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="5.5">Wu-Li identique par nœud</text>
       </svg>
       <ul class="crypto-anno-list">
-        <li>Rule 2 peut élaguer un candidat si voisin ID supérieur domine</li>
+        <li>Cas 2 élague X si ses voisins d'ID inférieur (S_low) forment déjà un CDS de N(X)</li>
       </ul>
     </div>
   </div>
@@ -1673,7 +1683,7 @@
         <td>Chaîne 3 (labo)</td>
         <td>B : {A,C}</td>
         <td class="cell-good">A↔C absent</td>
-        <td class="cell-warn">B = RELAY</td>
+        <td class="cell-warn">B = RELAY (à revalider HW)</td>
         <td>RubikQ — Arduino — Rubik2</td>
       </tr>
       <tr>
@@ -1713,7 +1723,7 @@
       <svg viewBox="0 0 880 56" xmlns="http://www.w3.org/2000/svg" aria-label="Runtime vs offline CDS">
         <rect x="8" y="6" width="400" height="44" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
         <text x="208" y="22" text-anchor="middle" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">am_i_cds() — RUNTIME ✅</text>
-        <text x="208" y="36" text-anchor="middle" fill="#bbf7d0" font-family="Consolas,monospace" font-size="6.5">Wu-Li · sym_peers L2CAP ∩ Hello · refresh_cds_role()</text>
+        <text x="208" y="36" text-anchor="middle" fill="#bbf7d0" font-family="Consolas,monospace" font-size="6.5">Wu-Li/MPR · local_symmetric_peers (L2CAP + retour) · refresh_cds_role()</text>
         <text x="208" y="46" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">→ PacketForwarder si is_relay</text>
         <rect x="472" y="6" width="400" height="44" rx="6" fill="#1e293b" stroke="#6366f1" stroke-width="1"/>
         <text x="672" y="22" text-anchor="middle" fill="#c7d2fe" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">compute_cds() — GLOBAL</text>
@@ -1726,11 +1736,107 @@
   <div class="verdict" style="margin-top: 0.65rem; padding: 0.55rem 1rem;">
     <div class="verdict-label">Audit CDS — état actuel</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem 1.25rem; margin-top: 0.3rem; font-size: 0.68rem;">
-      <li class="good">Wu-Li 2001 · arXiv:2509.00967</li>
+      <li class="good">Wu-Li 1999 · arXiv:2509.00967 §2.4.2</li>
       <li class="good">sym_peers filtre L2CAP sans Hello mutuel</li>
-      <li class="good">Rule 2 pruning (domination par anon_id)</li>
+      <li class="good">Pruning Cas 1/Cas 2 — S_low (ID inférieur), dominant + connexe</li>
       <li class="good">Tests : chaîne 5 · étoile · triangle · path 4</li>
+      <li class="warn" style="grid-column: 1 / -1;">Élection RELAY runtime corrigée (local_symmetric_peers) — revalidation hardware 3 boards à refaire</li>
       <li class="warn" style="grid-column: 1 / -1;">Vue globale ≠ locale si topologie Hello partielle — attendu en distribué</li>
+    </ul>
+  </div>
+</div>
+
+<!-- SLIDE 8b: CDS — MPR (JACQUET 2004) -->
+<div class="slide cds-slide" id="s8b">
+  <div class="slide-num">CDS — MPR (JACQUET 2004)</div>
+  <h2>Variante MPR — sélection Qayyum + MPR-CDS</h2>
+  <p class="arch-subtitle">Sélectionnable via <code>CDSAlgorithm.MPR</code> · liste MPR annoncée en clair dans le Hello</p>
+
+  <div class="crypto-dual-grid" style="margin-bottom: 0.75rem;">
+    <div class="crypto-diagram-panel cds-chain">
+      <div class="crypto-diagram-title">§1 — Sélection MPR · <code>_select_mpr</code> (Qayyum, RFC 3626)</div>
+      <svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" aria-label="Sélection MPR Qayyum">
+        <text x="210" y="14" text-anchor="middle" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6.5" font-weight="600">N1 = voisins symétriques 1-saut · N2 = 2-sauts stricts (via N1 seulement)</text>
+        <circle cx="60" cy="58" r="16" fill="#1e293b" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="60" y="62" text-anchor="middle" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="8">A</text>
+        <circle cx="140" cy="58" r="18" fill="#422006" stroke="#f59e0b" stroke-width="2"/>
+        <text x="140" y="54" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">B</text>
+        <text x="140" y="66" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="5.5">MPR</text>
+        <circle cx="210" cy="58" r="20" fill="#172554" stroke="#3b82f6" stroke-width="2"/>
+        <text x="210" y="54" text-anchor="middle" fill="#bfdbfe" font-family="IBM Plex Sans,sans-serif" font-size="9" font-weight="700">C</text>
+        <text x="210" y="66" text-anchor="middle" fill="#93c5fd" font-family="Consolas,monospace" font-size="5.5">électeur</text>
+        <circle cx="280" cy="58" r="18" fill="#422006" stroke="#f59e0b" stroke-width="2"/>
+        <text x="280" y="54" text-anchor="middle" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">D</text>
+        <text x="280" y="66" text-anchor="middle" fill="#fde68a" font-family="Consolas,monospace" font-size="5.5">MPR</text>
+        <circle cx="360" cy="58" r="16" fill="#1e293b" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="360" y="62" text-anchor="middle" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="8">E</text>
+        <line x1="76" y1="58" x2="122" y2="58" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="158" y1="58" x2="190" y2="58" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="230" y1="58" x2="262" y2="58" stroke="#60a5fa" stroke-width="2"/>
+        <line x1="298" y1="58" x2="344" y2="58" stroke="#60a5fa" stroke-width="2"/>
+        <text x="100" y="48" fill="#64748b" font-family="Consolas,monospace" font-size="5.5">N1(C)</text>
+        <text x="60" y="88" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="5.5">N2: A via B</text>
+        <text x="360" y="88" text-anchor="middle" fill="#94a3b8" font-family="Consolas,monospace" font-size="5.5">N2: E via D</text>
+        <rect x="24" y="98" width="372" height="28" rx="5" fill="#422006" stroke="#f59e0b" stroke-width="1.5"/>
+        <text x="210" y="112" text-anchor="middle" fill="#fcd34d" font-family="Consolas,monospace" font-size="6.5">MPR(C) = {B, D} — obligatoires (seul pont vers A / E)</text>
+        <text x="210" y="122" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Sans,sans-serif" font-size="5.5">Étape 2 gloutonne : tie-break plus petit anon_id</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li><strong>Étape 1</strong> : tout w ∈ N2 couvert par un SEUL y ∈ N1 force y dans le MPR</li>
+        <li><strong>Étape 2</strong> : ajouter le y couvrant le plus de N2 non couvert (tie-break id min)</li>
+        <li>But : le plus petit sous-ensemble de N1 qui couvre <strong>TOUT</strong> N2</li>
+      </ul>
+    </div>
+
+    <div class="crypto-diagram-panel stack">
+      <div class="crypto-diagram-title">§2 — MPR-CDS · <code>_is_mpr_cds_member</code> (Jacquet 2004, §2.4.2)</div>
+      <svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" aria-label="Règles MPR-CDS">
+        <rect x="12" y="18" width="188" height="58" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+        <text x="24" y="36" fill="#86efac" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Cas (a) — id local-min</text>
+        <text x="24" y="50" fill="#bbf7d0" font-family="Consolas,monospace" font-size="6.5">id(X) = min(N1(X)) → X ∈ MPR-CDS</text>
+        <text x="24" y="64" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">RELAY sans condition gateway Wu-Li</text>
+        <rect x="220" y="18" width="188" height="58" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+        <text x="232" y="36" fill="#93c5fd" font-family="IBM Plex Sans,sans-serif" font-size="8" font-weight="700">Cas (b) — via Y*</text>
+        <text x="232" y="50" fill="#bfdbfe" font-family="Consolas,monospace" font-size="6">Y* = voisin id min · X ∈ MPR-CDS ssi X ∈ MPR(Y*)</text>
+        <text x="232" y="64" fill="#64748b" font-family="IBM Plex Sans,sans-serif" font-size="6">MPR(Y*) = ce que Y* a annoncé dans son Hello</text>
+        <rect x="12" y="86" width="396" height="38" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1.5"/>
+        <text x="24" y="102" fill="#fcd34d" font-family="IBM Plex Sans,sans-serif" font-size="7" font-weight="700">Runtime</text>
+        <text x="24" y="116" fill="#94a3b8" font-family="Consolas,monospace" font-size="6">neighbor_table.get_mpr()[Y*] · Hello MPR absent → conservateur (pas de relais)</text>
+      </svg>
+      <ul class="crypto-anno-list">
+        <li><code>am_i_cds(..., CDSAlgorithm.MPR)</code> · <code>compute_local_mpr()</code> pour annoncer</li>
+        <li>Runtime prod : élection <strong>Wu-Li</strong> par défaut — MPR annoncé mais pas sélectionné pour relais</li>
+        <li>Bloc MPR public Hello = AAD GCM (inaltérable)</li>
+      </ul>
+    </div>
+  </div>
+
+  <table class="table-compact crypto-compare-table" style="margin-bottom: 0.75rem;">
+    <thead>
+      <tr><th>Stratégie</th><th>Élection</th><th>Vue runtime</th><th>Overhead Hello</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>WU_LI_1999</code></td>
+        <td>Gateway + pruning Cas 1/2 (S_low)</td>
+        <td><code>local_symmetric_peers</code></td>
+        <td class="cell-good">voisins seuls</td>
+      </tr>
+      <tr>
+        <td><code>MPR</code></td>
+        <td>Jacquet 2004 (a)/(b) sur MPR annoncés</td>
+        <td><code>get_mpr()</code> de Y*</td>
+        <td class="cell-warn">+ n_mpr × anon_id</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="verdict" style="border-color: var(--yellow); border-left-color: var(--yellow); padding: 0.55rem 1rem;">
+    <div class="verdict-label" style="color: var(--yellow);">Défaut connu + comparaison Wu-Li</div>
+    <ul class="box-list" style="display: grid; grid-template-columns: 1fr; gap: 0.25rem; margin-top: 0.35rem; font-size: 0.68rem;">
+      <li class="warn"><strong>Règle 1 (Jacquet 2004)</strong> : un nœud peut entrer dans le backbone juste parce qu'il a l'id local-min, même s'il ne relaie rien (feuille id-min). Wu qualifie ces ajouts d'« inutiles ».</li>
+      <li class="warn">Sur petites topologies, MPR-CDS peut être <strong>PLUS GRAND</strong> que Wu-Li (ex. ligne où le min global est une extrémité). La prédiction MPR ≤ Wu-Li du préprint est asymptotique (λ→∞).</li>
+      <li>Correctif littérature : <strong>EMPR</strong> (Règle 1 + condition gateway « ≥2 voisins non connectés ») — hors périmètre du préprint §2.4.2, non appliqué pour rester fidèle à la formulation.</li>
     </ul>
   </div>
 </div>
@@ -1746,17 +1852,19 @@
       <ul class="box-list" style="margin-bottom: 1rem;">
         <li><strong>RELAY</strong> → forward octets bruts (sans dériver la clé)</li>
         <li><strong>LEAF / destinataire</strong> → <code>derive_packet_key</code> puis decrypt</li>
-        <li>Broadcast : base = <code>group_key</code> · privé (<code>--private</code>) : base = ECDH pairwise</li>
+        <li>Types gérés : <code>PKT_DATA</code> · <code>PKT_SUBGROUP</code> · <code>PKT_REKEY</code></li>
+        <li>Broadcast : base = <code>group_key[epoch]</code> · privé (<code>--private</code>) : ECDH pairwise</li>
         <li>Anti-replay relay (<code>_check_relay_ingress</code>) + livraison (<code>_check_replay</code>)</li>
         <li>Cache relay borné <code>_ForwardCache</code> (TTL 240 s, max 4096)</li>
         <li>TTL décrémenté sur le fil · AAD avec TTL=0</li>
+        <li class="warn"><code>route_l2cap_peer</code> : voisin direct ou <strong>premier peer connecté</strong> (flood naïf, pas de Dijkstra)</li>
       </ul>
-      <div class="compare-box plain" style="border-color: var(--green);">
-        <div class="box-title" style="font-size: 0.8rem; color: var(--green);">Exemple labo — 3 nœuds linéaires</div>
+      <div class="compare-box plain" style="border-color: var(--yellow);">
+        <div class="box-title" style="font-size: 0.8rem; color: var(--yellow);">Exemple labo — 3 nœuds linéaires</div>
         <ul class="box-list">
-          <li class="good"><strong>Nœud A</strong> → envoie <code>PKT_DATA</code> broadcast</li>
-          <li class="good"><strong>Nœud B (RELAY)</strong> → forward opaque</li>
-          <li class="good"><strong>Nœud C</strong> → reçoit et déchiffre ✅</li>
+          <li><strong>Nœud A</strong> → envoie <code>PKT_DATA</code> broadcast</li>
+          <li class="warn"><strong>Nœud B (RELAY attendu)</strong> → forward opaque — à revalider post-fix <code>am_i_cds</code></li>
+          <li class="warn"><strong>Nœud C</strong> → reçoit et déchiffre (multihop à revalider)</li>
         </ul>
       </div>
     </div>
@@ -1780,9 +1888,10 @@
 <!-- SLIDE 10: RÉSULTATS -->
 <div class="slide" id="s10">
   <div class="slide-num">RÉSULTATS EXPÉRIMENTAUX</div>
-  <h2>Validation hardware — 2 et 3 boards</h2>
+  <h2>Validation hardware &amp; état logiciel</h2>
+  <p class="arch-subtitle">Tests unitaires + scripts L2CAP · revalidation RELAY multihop en cours après correctif <code>local_symmetric_peers</code></p>
 
-  <div class="section-label">Sortie console — mode <code>--chat</code> (exemple)</div>
+  <div class="section-label">Sortie console — mode <code>--chat</code> (exemple, rôle RELAY non revalidé)</div>
   <div class="formula-box" style="margin-bottom: 1rem;">
 <pre style="margin: 0; white-space: pre; font-family: ui-monospace, 'Cascadia Code', monospace; font-size: 0.66rem; color: var(--text);">local AA:BB:CC:DD:EE:01 · RELAY · 2 peer(s)
 dial: AA:BB:CC:DD:EE:02, AA:BB:CC:DD:EE:03
@@ -1796,19 +1905,23 @@ peer connecté: AA:BB:CC:DD:EE:02
       <div class="section-label">Implémenté ✅</div>
       <ul class="box-list">
         <li class="good">HKDF par paquet + messages privés X25519 (<code>--private</code>)</li>
-        <li class="good">Multihop linéaire 3 boards : Arduino=RELAY, RubikQ+Rubik2=LEAF</li>
-        <li class="good">Forwarding RubikQ → Arduino → Rubik2 ✅</li>
+        <li class="warn">Multihop 3 boards (Arduino=RELAY) — à revalider depuis le fix runtime am_i_cds</li>
+        <li class="warn">Forwarding multihop — à revalider depuis le fix runtime</li>
         <li class="good">Relais non-membre (mauvaise clé) : forward opaque ✅</li>
-        <li class="good">Chat groupe 3 boards (<code>--chat</code>) · <code>/subgroup</code> · <code>/revoke</code></li>
+        <li class="good">Chat groupe 3 boards (<code>--chat</code>) · commandes <code>/members</code> <code>/epoch</code></li>
+        <li class="good">Révocation epoch + gossip — <code>/revoke</code> · <code>PKT_REKEY</code> · <code>.bb-epoch-*.bin</code></li>
+        <li class="good"><code>PKT_SUBGROUP</code> — wire + forwarder + chat <code>/subgroup</code></li>
+        <li class="good">MPR Hello (Qayyum) annoncé · MPR-CDS codé (<code>CDSAlgorithm.MPR</code>, tests)</li>
         <li class="good">Auto-pairing · config <code>.env</code> générique (<code>docs/CONFIGURATION.md</code>)</li>
-        <li class="good">Tests unitaires : <code>forwarder</code>, <code>bb_api</code>, <code>cds</code>, <code>phase1a</code></li>
+        <li class="good">Tests : <code>forwarder</code> · <code>epoch</code> · <code>mpr_hello</code> · <code>am_i_cds_runtime</code> · <code>phase1a</code></li>
       </ul>
       <div class="section-label" style="margin-top: 0.75rem;">Pas encore / partiel ⚠️</div>
       <ul class="box-list">
         <li class="warn"><code>PKT_ACK</code> — constante seulement (non utilisé par epoch+gossip)</li>
-        <li class="good">Révocation epoch + gossip — <code>epoch.py</code> · <code>PKT_REKEY</code> · persistance <code>.bb-epoch-*.bin</code></li>
-        <li class="good"><code>PKT_SUBGROUP</code> — wire + forwarder + chat <code>/subgroup</code></li>
+        <li class="warn">Élection MPR-CDS au runtime — Wu-Li seul dans <code>HelloManager</code></li>
+        <li class="warn">Routage intelligent multihop — <code>route_l2cap_peer</code> = 1<sup>er</sup> peer</li>
         <li class="warn">Signature REKEY par coordinateur (min <code>anon_id</code>) — gouvernance à durcir</li>
+        <li class="warn"><code>legacy.py</code> — ancien format session_key sur fil (retiré du forwarder)</li>
         <li class="warn">BLE / Android (phases 2–5)</li>
       </ul>
     </div>
@@ -1822,7 +1935,7 @@ peer connecté: AA:BB:CC:DD:EE:02
           <tr><td>Overhead fixe paquet</td><td class="cell-good">42 bytes</td></tr>
           <tr><td>Payload disponible</td><td class="cell-good">979 bytes</td></tr>
           <tr><td>Taille message chat (typ.)</td><td class="cell-good">~88 bytes total</td></tr>
-          <tr><td>Hello packet size</td><td>~106 bytes (1 voisin + X25519)</td></tr>
+          <tr><td>Hello packet size</td><td>~107+ bytes (1 voisin + MPR + X25519)</td></tr>
           <tr><td>Intervalle Hello</td><td>5 secondes</td></tr>
           <tr><td>Fenêtre anti-replay</td><td class="cell-good">256 — relay + livraison (<code>ReplayFilter</code>)</td></tr>
           <tr><td>Timestamp tolerance</td><td>±120 secondes</td></tr>
@@ -1836,16 +1949,17 @@ peer connecté: AA:BB:CC:DD:EE:02
 <!-- SLIDE 11: ROADMAP -->
 <div class="slide" id="s11">
   <div class="slide-num">PROCHAINES ÉTAPES</div>
-  <h2>Phase 1B terminée → BLE &amp; mesures</h2>
+  <h2>Phase 1B livrée → revalidation hardware &amp; BLE</h2>
 
   <div class="roadmap" style="grid-template-columns: repeat(5, 1fr);">
     <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.12);">
       <div class="phase-label" style="color: var(--green);">Phase 1B — ✅</div>
       <div class="phase-title">Stack BT Classic</div>
       <ul class="phase-items">
-        <li class="good">CDS Wu-Li 2001 + <code>am_i_cds</code></li>
-        <li class="good">HKDF par paquet + X25519 (<code>keys.py</code>)</li>
-        <li class="good"><code>PacketForwarder</code> + chat + multihop 3 boards</li>
+        <li class="good">CDS Wu-Li 1999 + fix <code>local_symmetric_peers</code></li>
+        <li class="good">HKDF par paquet + X25519 · epoch + <code>PKT_SUBGROUP</code></li>
+        <li class="warn">Multihop 3 boards — revalidation RELAY à refaire</li>
+        <li class="good"><code>PacketForwarder</code> + chat (<code>/revoke</code>, <code>/subgroup</code>)</li>
         <li class="good">Config générique (.env / topology)</li>
       </ul>
     </div>
@@ -1886,9 +2000,11 @@ peer connecté: AA:BB:CC:DD:EE:02
   <div class="verdict" style="margin-top: 1.25rem; border-color: var(--yellow); border-left-color: var(--yellow);">
     <div class="verdict-label" style="color: var(--yellow);">Questions ouvertes</div>
     <ul class="box-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.5rem; margin-top: 0.35rem;">
-      <li class="good">✅ CDS Wu-Li 2001 · sym_peers · multihop · relais opaque</li>
+      <li class="good">✅ Epoch + gossip + <code>PKT_SUBGROUP</code> (réf. <code>bb-revocation-epoch.html</code>)</li>
       <li class="good">✅ Anti-replay relay + livraison · cache relay borné · identité X25519 stable</li>
-      <li class="good">✅ Révocation epoch + gossip (réf. <code>bb-revocation-epoch.html</code>)</li>
+      <li class="good">✅ MPR Hello annoncé · MPR-CDS implémenté (tests)</li>
+      <li class="warn">⚠️ RELAY multihop 3 boards — revalidation hardware post-fix</li>
+      <li class="warn">❓ Bascule runtime <code>CDSAlgorithm.MPR</code> — config à ajouter ?</li>
       <li class="warn">❓ Jitter window : BT Classic ou BLE seulement ?</li>
     </ul>
   </div>
@@ -1904,22 +2020,24 @@ peer connecté: AA:BB:CC:DD:EE:02
   <button onclick="goTo(6)" id="btn6">Hello</button>
   <button onclick="goTo(7)" id="btn7">CDS 1/2</button>
   <button onclick="goTo(8)" id="btn8">CDS 2/2</button>
-  <button onclick="goTo(9)" id="btn9">Forwarding</button>
-  <button onclick="goTo(10)" id="btn10">Résultats</button>
-  <button onclick="goTo(11)" id="btn11">Roadmap</button>
-  <span id="slide-counter">1 / 11</span>
+  <button onclick="goTo(9)" id="btn9">MPR</button>
+  <button onclick="goTo(10)" id="btn10">Forwarding</button>
+  <button onclick="goTo(11)" id="btn11">Résultats</button>
+  <button onclick="goTo(12)" id="btn12">Roadmap</button>
+  <span id="slide-counter">1 / 12</span>
 </div>
 
 <script>
+  const slideIds = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's8b', 's9', 's10', 's11'];
   let current = 1;
-  const total = 11;
+  const total = slideIds.length;
   let wheelLock = false;
 
   function goTo(n) {
-    document.getElementById('s' + current).classList.remove('active');
+    document.getElementById(slideIds[current - 1]).classList.remove('active');
     document.getElementById('btn' + current).classList.remove('active');
     current = n;
-    const slide = document.getElementById('s' + current);
+    const slide = document.getElementById(slideIds[current - 1]);
     slide.classList.add('active');
     slide.scrollTop = 0;
     document.getElementById('btn' + current).classList.add('active');
