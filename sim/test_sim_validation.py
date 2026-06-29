@@ -25,7 +25,7 @@ from src.forwarding.cds import (  # noqa: E402
     _verify_cds_properties,
     compute_cds,
 )
-from sim.sim_engine import SimEngine, _GK  # noqa: E402
+from sim.sim_engine import ConvergenceResult, SimEngine, _GK  # noqa: E402
 
 # Same BD addresses as cds.py __main__ (deterministic anon_ids under _GK).
 _ADDR_A = "40:D9:5A:8B:69:3F"
@@ -148,10 +148,14 @@ def _run_engine(
     radius: float,
     *,
     max_steps: int = 30,
-) -> tuple[SimEngine, int]:
+) -> tuple[SimEngine, ConvergenceResult]:
     engine = SimEngine(positions, radius, algorithm=CDSAlgorithm.WU_LI_1999, group_key=_GK)
-    steps = engine.run_until_stable(max_steps=max_steps)
-    return engine, steps
+    result = engine.run_until_stable(max_steps=max_steps)
+    assert result.status == "fixed_point", (
+        f"static Wu-Li topology must reach a fixed point, not {result.status} "
+        f"(period={result.period}, steps={result.steps})"
+    )
+    return engine, result
 
 
 def test_line5_wu_li() -> None:
@@ -159,7 +163,8 @@ def test_line5_wu_li() -> None:
     R = 1.0
     positions = {bd: (float(i), 0.0) for i, bd in enumerate(_LINE5)}
 
-    engine, steps = _run_engine(positions, R)
+    engine, result = _run_engine(positions, R)
+    steps = result.steps
     roles = engine.roles()
     nmap = _neighbor_map(engine)
 
@@ -205,7 +210,8 @@ def test_star_wu_li() -> None:
         angle = i * 2.0 * math.pi / 3.0
         positions[leaf] = (dist * math.cos(angle), dist * math.sin(angle))
 
-    engine, steps = _run_engine(positions, R)
+    engine, result = _run_engine(positions, R)
+    steps = result.steps
     roles = engine.roles()
     nmap = _neighbor_map(engine)
 
@@ -242,7 +248,8 @@ def test_triangle_wu_li() -> None:
         tri[2]: (side / 2.0, side * math.sqrt(3) / 2.0),
     }
 
-    engine, steps = _run_engine(positions, R)
+    engine, result = _run_engine(positions, R)
+    steps = result.steps
     roles = engine.roles()
     nmap = _neighbor_map(engine)
 

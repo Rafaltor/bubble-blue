@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from config import BubbleBlueConfig
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
-from src.forwarding.cds import am_i_cds, compute_local_mpr
+from src.forwarding.cds import CDSAlgorithm, am_i_cds, compute_local_mpr
 from src.security.epoch import EpochStore, is_coordinator
 from src.security.keys import BBKeyStore
 
@@ -36,12 +36,14 @@ class HelloManager:
         epoch_store: EpochStore,
         *,
         quiet: bool = False,
+        cds_algorithm: CDSAlgorithm = CDSAlgorithm.WU_LI_1999,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._key_store = key_store
         self._epoch_store = epoch_store
         self._quiet = quiet
+        self._cds_algorithm = cds_algorithm
         self._bootstrap_key = cfg.group_key
         self._local_bd = cfg.local_bd_addr.upper()
         self._interval_s = max(1, int(cfg.hello_interval_s))
@@ -173,12 +175,22 @@ class HelloManager:
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
         """Recompute RELAY/LEAF from current L2CAP peers and Hello tables."""
-        self._is_cds = am_i_cds(self.anon_id, self.table, self._l2cap_peer_anon_ids())
+        self._is_cds = am_i_cds(
+            self.anon_id,
+            self.table,
+            self._l2cap_peer_anon_ids(),
+            algorithm=self._cds_algorithm,
+        )
         if verbose:
             if self._is_cds:
                 print("[CDS] I am a relay node", flush=True)
             else:
                 print("[CDS] I am a leaf node", flush=True)
+
+    def set_cds_algorithm(self, algorithm: CDSAlgorithm) -> None:
+        """Switch CDS election strategy and recompute the local relay role."""
+        self._cds_algorithm = algorithm
+        self.refresh_cds_role(verbose=False)
 
     def _known_neighbor_bd_addrs(self) -> list[str]:
         """BD addresses with active L2CAP to us (advertised in our Hello)."""

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from config import PKT_HELLO, load_config
-from src.control.hello import compute_anon_id
 from src.control.hello_manager import HelloManager
-from src.forwarding.cds import CDSAlgorithm, am_i_cds
+from src.forwarding.cds import CDSAlgorithm
 from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
 
@@ -16,15 +15,35 @@ from sim.sim_transport import Position, SimBus, SimTransport
 # Shared bootstrap group key for deterministic anon_ids across the simulation.
 _GK = b"\x42" * 32
 
+RoleSnapshot = tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ConvergenceResult:
+    """
+    Outcome of ``run_until_stable``.
+
+    ``steps``: step index where convergence was detected (or ``max_steps``).
+    ``status``: ``fixed_point`` (period-1), ``cycle`` (periodic oscillation), or
+        ``max_steps`` (no pattern within the limit).
+    ``period``: 1 for a fixed point, k for a cycle of period k, 0 if ``max_steps``.
+    """
+
+    steps: int
+    status: str
+    period: int
+
+
+def _roles_snapshot(engine: SimEngine) -> RoleSnapshot:
+    return tuple(sorted(engine.roles().items()))
+
 
 class SimNode:
     """
     One simulated node: real HelloManager on a SimTransport, no background thread.
 
-    The CDS role exposed by ``role()`` is computed by the simulation engine via
-    ``am_i_cds(..., algorithm=...)`` (approach b below), not via
-    ``hello_mgr.is_relay``, because HelloManager.refresh_cds_role() always calls
-    ``am_i_cds`` with the default ``WU_LI_1999`` and has no algorithm parameter.
+    CDS role is a single source of truth: ``hello_mgr.is_relay`` under the
+    ``cds_algorithm`` passed to HelloManager (same path a real forwarder uses).
     """
 
     def __init__(
@@ -38,7 +57,6 @@ class SimNode:
     ) -> None:
         self.bd = bd_addr.upper()
         self.algorithm = algorithm
-        self._group_key = group_key
         self.transport: SimTransport = bus.register(self.bd, position, self._on_receive)
 
         cfg = replace(
@@ -56,51 +74,37 @@ class SimNode:
 
         # Real HelloManager — do NOT call .start(); the sim drives _send_hellos().
         self.hello_mgr = HelloManager(
-            cfg, self.transport, key_store, epoch_store, quiet=True
+            cfg,
+            self.transport,
+            key_store,
+            epoch_store,
+            quiet=True,
+            cds_algorithm=algorithm,
         )
-        self._relay = False
-        self.refresh_role()
 
     def _on_receive(self, peer: str, data: bytes) -> None:
         """Inbound packet hook called synchronously by SimBus.deliver."""
         if data and data[0] == PKT_HELLO:
             self.hello_mgr.on_receive(peer, data)
-            # hello_mgr.on_receive also calls refresh_cds_role() with WU_LI_1999;
-            # the engine recomputes the authoritative role after each step().
 
     def refresh_role(self) -> None:
-        """
-        Recompute RELAY/LEAF with the engine's CDS algorithm (approach b).
-
-        Peers are the nodes currently in radio range (transport.connections()),
-        mapped to anon_ids with the same bootstrap key HelloManager uses.
-        """
-        peer_aids = frozenset(
-            compute_anon_id(self._group_key, bd) for bd in self.transport.connections()
-        )
-        self._relay = am_i_cds(
-            self.hello_mgr.anon_id,
-            self.hello_mgr.table,
-            peer_aids,
-            algorithm=self.algorithm,
-        )
+        """Recompute RELAY/LEAF via HelloManager (configured CDS algorithm)."""
+        self.hello_mgr.refresh_cds_role(verbose=False)
 
     def role(self) -> str:
-        """Current CDS role under the engine's algorithm."""
-        return "RELAY" if self._relay else "LEAF"
+        """Current CDS role under the configured algorithm."""
+        return "RELAY" if self.hello_mgr.is_relay else "LEAF"
 
 
 class SimEngine:
     """
     Discrete-time simulation harness: one real HelloManager per node, no threads.
 
-    CDS algorithm selection — approach (b), without modifying hello_manager.py:
-      HelloManager.refresh_cds_role() calls ``am_i_cds`` with the default
-      ``WU_LI_1999`` only. To run ``MPR`` (or any non-default algorithm) in the
-      sim, each ``step()`` ends with ``SimNode.refresh_role()``, which calls
-      ``am_i_cds(..., algorithm=self.algorithm)`` directly on the node's received-
-      only NeighborTable and its in-range peer anon_ids. ``roles()`` therefore
-      reflect the requested ``CDSAlgorithm``, not ``hello_mgr.is_relay``.
+    CDS algorithm selection is carried by HelloManager (``cds_algorithm``). Each
+    node's ``hello_mgr.is_relay`` is the single source of truth for relay/leaf
+    decisions — the same value a PacketForwarder wired to that HelloManager would
+    use. ``SimNode.role()`` reads ``hello_mgr.is_relay`` directly; there is no
+    separate parallel CDS computation in the sim.
     """
 
     def __init__(
@@ -140,40 +144,72 @@ class SimEngine:
         """Current RELAY/LEAF map (bd_addr upper-case -> role string)."""
         return {bd: node.role() for bd, node in sorted(self.nodes.items())}
 
-    def run_until_stable(self, max_steps: int = 100) -> int:
+    def run_until_stable(self, max_steps: int = 100) -> ConvergenceResult:
         """
-        Run ``step()`` until roles are unchanged between two consecutive cycles.
+        Run ``step()`` until role snapshots repeat.
 
-        Returns the step count at which stability was reached (>= 1), or
-        ``max_steps`` if roles never stabilized within the limit.
+        Detects three outcomes:
+          - ``fixed_point``: current snapshot equals the immediately previous one
+            (period 1).
+          - ``cycle``: current snapshot equals an earlier one at distance k > 1
+            (period k). Relevant for MPR on static topologies where roles can
+            oscillate RELAY/LEAF with period >= 2.
+          - ``max_steps``: limit reached with no repeated snapshot (period 0).
+
+        The return value exposes ``.steps`` for callers that only need the step
+        count (backward-compatible with the former ``int`` return).
         """
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
 
-        prev = self.roles()
+        history: list[RoleSnapshot] = [_roles_snapshot(self)]
         for step in range(1, max_steps + 1):
             self.step()
-            current = self.roles()
-            if current == prev:
-                return step
-            prev = current
-        return max_steps
+            snapshot = _roles_snapshot(self)
+
+            if snapshot == history[-1]:
+                return ConvergenceResult(
+                    steps=step, status="fixed_point", period=1
+                )
+
+            for i, prior in enumerate(history):
+                if snapshot == prior:
+                    period = len(history) - i
+                    if period > 1:
+                        return ConvergenceResult(
+                            steps=step, status="cycle", period=period
+                        )
+                    break
+
+            history.append(snapshot)
+
+        return ConvergenceResult(steps=max_steps, status="max_steps", period=0)
 
 
 if __name__ == "__main__":
     # Line A — B — C (x=0,1,2 ; R=1.0): A↔B, B↔C, not A↔C.
+    # Wu-Li on a static line reaches a fixed point (no oscillation).
+    #
+    # Under MPR, ``run_until_stable`` may report status ``cycle`` instead: that is
+    # not a sim bug but an election-algorithm instability (roles alternating
+    # RELAY/LEAF with period >= 2). Such cycles are data for mobility/stability
+    # analysis in the rapport — the sim's job is to detect and report them.
     A, B, C = "AA:AA:AA:AA:AA:AA", "BB:BB:BB:BB:BB:BB", "CC:CC:CC:CC:CC:CC"
     positions = {A: (0.0, 0.0), B: (1.0, 0.0), C: (2.0, 0.0)}
 
     engine = SimEngine(positions, radius=1.0, algorithm=CDSAlgorithm.WU_LI_1999)
-    steps = engine.run_until_stable(max_steps=20)
+    result = engine.run_until_stable(max_steps=20)
     roles = engine.roles()
 
     print(f"topology: { {bd: engine.bus.neighbors(bd) for bd in sorted(engine.nodes)} }")
-    print(f"converged in {steps} step(s)")
+    print(
+        f"convergence: {result.status} in {result.steps} step(s)"
+        f" (period={result.period})"
+    )
     for bd in sorted(roles):
         print(f"  {bd}  → {roles[bd]}")
 
+    assert result.status == "fixed_point", f"expected fixed point, got {result}"
     assert roles[B] == "RELAY", f"expected bridge B to RELAY, got {roles}"
     assert roles[A] == "LEAF" and roles[C] == "LEAF"
     print("\n✅ sim_engine line-3 self-test passed")
