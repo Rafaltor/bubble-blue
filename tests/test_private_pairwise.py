@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from cryptography.exceptions import InvalidTag
@@ -13,6 +14,7 @@ if _ROOT not in sys.path:
 from config import PKT_DATA, load_config  # noqa: E402
 from src.forwarding.forwarder import PacketForwarder  # noqa: E402
 from src.security.crypto import decrypt_with_key, encrypt_with_key  # noqa: E402
+from src.security.epoch import EpochStore  # noqa: E402
 from src.security.keys import BBKeyStore, derive_packet_key  # noqa: E402
 from src.security.packet import (  # noqa: E402
     build_bb_packet,
@@ -36,6 +38,11 @@ class _FakeHelloMgr:
     def __init__(self, *, relay: bool, key_store: BBKeyStore) -> None:
         self.is_relay = relay
         self.key_store = key_store
+        _fd, path = tempfile.mkstemp(prefix="bb-epoch-test-")
+        os.close(_fd)
+        self.epoch_store = EpochStore(
+            GROUP_KEY, persist_path=path, local_bd_addr=ADDR_B
+        )
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
         _ = verbose

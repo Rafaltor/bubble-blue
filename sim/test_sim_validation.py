@@ -12,19 +12,14 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from src.control.hello import (  # noqa: E402
-    build_hello,
-    compute_anon_id,
-    parse_hello_private,
-    parse_hello_public,
-)
-from src.control.neighbors import NeighborTable  # noqa: E402
+from src.control.hello import compute_anon_id  # noqa: E402
 from src.forwarding.cds import (  # noqa: E402
     CDSAlgorithm,
     _extract_topology,
     _verify_cds_properties,
     compute_cds,
 )
+from sim.oracle_table import build_merged_table  # noqa: E402
 from sim.sim_engine import ConvergenceResult, SimEngine, _GK  # noqa: E402
 
 # Same BD addresses as cds.py __main__ (deterministic anon_ids under _GK).
@@ -58,27 +53,6 @@ def _fail(
     raise AssertionError(msg)
 
 
-def _build_merged_table(
-    neighbor_map: dict[str, list[str]],
-    group_key: bytes = _GK,
-) -> NeighborTable:
-    """Merged NeighborTable from ground-truth adjacency (oracle for compute_cds)."""
-    merged = NeighborTable()
-    addrs = sorted(neighbor_map)
-    for i, addr in enumerate(addrs):
-        pkt = build_hello(
-            group_key,
-            addr,
-            seq=i + 1,
-            known_neighbors=neighbor_map[addr],
-            local_public_key=b"\x00" * 31 + bytes([i + 1]),
-            anon_id_key=group_key,
-            ts_ms=1_000 + i,
-        )
-        merged.update_from_hello(parse_hello_public(pkt), parse_hello_private(pkt, group_key))
-    return merged
-
-
 def _neighbor_map(engine: SimEngine) -> dict[str, list[str]]:
     return {bd: engine.bus.neighbors(bd) for bd in sorted(engine.nodes)}
 
@@ -106,7 +80,7 @@ def _compare_with_global_oracle(
     gap — neither should happen on static symmetric topologies after stability.
     """
     nmap = neighbor_map if neighbor_map is not None else _neighbor_map(engine)
-    merged = _build_merged_table(nmap)
+    merged = build_merged_table(nmap)
     topo = _extract_topology(merged)
     global_cds = compute_cds(merged, algorithm=CDSAlgorithm.WU_LI_1999)
     sim_relays = _relay_anon_ids(engine)
@@ -138,7 +112,7 @@ def _verify_relay_backbone(
     relay_aids: set[bytes],
     neighbor_map: dict[str, list[str]],
 ) -> None:
-    merged = _build_merged_table(neighbor_map)
+    merged = build_merged_table(neighbor_map)
     topo = _extract_topology(merged)
     _verify_cds_properties(relay_aids, topo)
 
