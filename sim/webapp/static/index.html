@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BUBBLE-BLUE — Simulateur CDS</title>
+  <!--
+    Rendu 100 % serveur-calculé : ce front n'appelle que /api/simulate (et
+    éventuellement /api/topology) et dessine le JSON. Aucun algorithme CDS/MPR
+    n'est implémenté en JavaScript.
+  -->
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --relay: #22c55e;
+      --link: #3b82f6;
+      --accent: #f59e0b;
+      --leaf-stroke: #64748b;
+      --error: #f87171;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.45;
+    }
+    header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    header h1 { font-size: 1.15rem; font-weight: 600; }
+    header p { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem 1.5rem;
+      align-items: flex-end;
+      padding: 1rem 1.25rem;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .field { display: flex; flex-direction: column; gap: 0.35rem; min-width: 7rem; }
+    .field label { font-size: 0.75rem; color: var(--muted); }
+    .field input[type="number"] {
+      width: 5.5rem;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, monospace;
+    }
+    .field input[type="range"] { width: 10rem; }
+    .field .val {
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
+    .btns { display: flex; gap: 0.5rem; align-items: center; }
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    button.primary { background: var(--relay); color: #052e16; }
+    button.secondary { background: var(--border); color: var(--text); }
+    button:hover { filter: brightness(1.08); }
+    .toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted); }
+    #error-banner {
+      display: none;
+      margin: 0 1.25rem;
+      padding: 0.75rem 1rem;
+      background: #450a0a;
+      border: 1px solid var(--error);
+      border-radius: 6px;
+      color: #fecaca;
+      font-size: 0.85rem;
+    }
+    #error-banner.visible { display: block; margin-top: 1rem; }
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      padding: 1rem 1.25rem;
+    }
+    @media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+    }
+    .panel h2 {
+      font-size: 0.9rem;
+      padding: 0.6rem 0.85rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .panel svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1;
+      background: #0b1220;
+    }
+    .warn-banner {
+      display: none;
+      position: absolute;
+      top: 2.5rem;
+      left: 0; right: 0;
+      text-align: center;
+      padding: 0.4rem;
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--accent);
+      font-size: 0.8rem;
+      font-weight: 600;
+      border-bottom: 1px solid rgba(245, 158, 11, 0.4);
+    }
+    .warn-banner.visible { display: block; }
+    .metrics {
+      margin: 0 1.25rem 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .metrics h3 { font-size: 0.9rem; margin-bottom: 0.75rem; color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 500; }
+    td.mono { font-family: ui-monospace, monospace; }
+    .delta-pos { color: var(--accent); font-weight: 600; }
+    .delta-neg { color: var(--relay); }
+    .delta-zero { color: var(--muted); }
+    .footnote {
+      margin-top: 0.85rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 0.65rem;
+    }
+    .loading { opacity: 0.55; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BUBBLE-BLUE — Simulateur CDS</h1>
+    <p>Wu-Li 1999 vs MPR (Jacquet 2004) · topologie et élection calculées côté serveur Python</p>
+  </header>
+
+  <div class="controls" id="controls">
+    <div class="field">
+      <label for="n_nodes">n_nodes <span class="val" id="n_nodes_val">15</span></label>
+      <input type="range" id="n_nodes" min="5" max="60" value="15" />
+    </div>
+    <div class="field">
+      <label for="target_degree">target_degree <span class="val" id="target_degree_val">5</span></label>
+      <input type="range" id="target_degree" min="1" max="12" value="5" />
+    </div>
+    <div class="field">
+      <label for="radius">radius</label>
+      <input type="number" id="radius" value="1.0" step="0.1" min="0.1" />
+    </div>
+    <div class="field">
+      <label for="seed">seed</label>
+      <input type="number" id="seed" value="20" min="0" step="1" />
+    </div>
+    <div class="field">
+      <label for="max_steps">max_steps <span class="val" id="max_steps_val">50</span></label>
+      <input type="range" id="max_steps" min="10" max="100" value="50" />
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="show_labels" checked /> labels bd (4 hex)
+    </label>
+    <div class="btns">
+      <button type="button" class="primary" id="btn_simulate">Simuler</button>
+      <button type="button" class="secondary" id="btn_random">Graine aléatoire</button>
+    </div>
+  </div>
+
+  <div id="error-banner" role="alert"></div>
+
+  <div class="panels">
+    <div class="panel" id="panel-wu_li">
+      <h2>Wu-Li 1999</h2>
+      <div class="warn-banner" id="warn-wu_li"></div>
+      <svg id="svg-wu_li" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div class="panel" id="panel-mpr">
+      <h2>MPR (Jacquet 2004)</h2>
+      <div class="warn-banner" id="warn-mpr"></div>
+      <svg id="svg-mpr" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </div>
+
+  <section class="metrics" id="metrics" hidden>
+    <h3>Métriques comparatives</h3>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Wu-Li 1999</th>
+          <th>MPR</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>cds_size</td><td class="mono" id="m-wu-size">—</td><td class="mono" id="m-mpr-size">—</td></tr>
+        <tr><td>convergence_status</td><td class="mono" id="m-wu-status">—</td><td class="mono" id="m-mpr-status">—</td></tr>
+        <tr><td>convergence_steps</td><td class="mono" id="m-wu-steps">—</td><td class="mono" id="m-mpr-steps">—</td></tr>
+        <tr><td>period</td><td class="mono" id="m-wu-period">—</td><td class="mono" id="m-mpr-period">—</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:0.75rem;font-size:0.85rem">
+      <span style="color:var(--muted)">delta (MPR − Wu-Li) :</span>
+      <span class="mono" id="m-delta">—</span>
+      &nbsp;·&nbsp;
+      <span style="color:var(--muted)">E[deg] :</span>
+      <span class="mono" id="m-emeandeg">—</span>
+      &nbsp;·&nbsp;
+      <span style="color:var(--muted)">area :</span>
+      <span class="mono" id="m-area">—</span>
+    </p>
+    <p class="footnote">
+      Note : MPR peut afficher un <strong>cds_size</strong> plus élevé que Wu-Li sur de petites densités
+      (défaut connu de la Règle 1 inconditionnelle — feuille d'id minimal tirée dans le backbone).
+      Un delta positif n'indique pas un bug du simulateur. Le front n'effectue aucun calcul d'élection.
+    </p>
+  </section>
+
+  <script>
+    // ——— Aucun algorithme ici : fetch + rendu uniquement ———
+
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const MARGIN = 28;
+
+    function $(id) { return document.getElementById(id); }
+
+    function bindSliders() {
+      const pairs = [
+        ["n_nodes", "n_nodes_val"],
+        ["target_degree", "target_degree_val"],
+        ["max_steps", "max_steps_val"],
+      ];
+      for (const [inputId, labelId] of pairs) {
+        const inp = $(inputId);
+        const lab = $(labelId);
+        const sync = () => { lab.textContent = inp.value; };
+        inp.addEventListener("input", sync);
+        sync();
+      }
+    }
+
+    function params() {
+      return {
+        n_nodes: $("n_nodes").value,
+        target_degree: $("target_degree").value,
+        radius: $("radius").value,
+        seed: $("seed").value,
+        max_steps: $("max_steps").value,
+      };
+    }
+
+    function bdShort(bd) {
+      return bd.replace(/:/g, "").slice(-4).toUpperCase();
+    }
+
+    function mapCoord(v, area, size) {
+      const inner = size - 2 * MARGIN;
+      return MARGIN + (v / area) * inner;
+    }
+
+    function clearSvg(svg) {
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+    }
+
+    /**
+     * Dessine topologie + rôles renvoyés par le serveur.
+     * roles === null → tous les nœuds en gris (état instable).
+     */
+    function drawTopology(svg, topology, roles, unstable) {
+      clearSvg(svg);
+      const area = topology.area;
+      const size = 400;
+      const showLabels = $("show_labels").checked;
+
+      const edges = document.createElementNS(SVG_NS, "g");
+      edges.setAttribute("stroke", "#3b82f6");
+      edges.setAttribute("stroke-width", "1.2");
+      edges.setAttribute("opacity", "0.75");
+      const posByBd = {};
+      for (const n of topology.nodes) posByBd[n.bd] = n;
+
+      for (const [a, b] of topology.edges) {
+        const na = posByBd[a], nb = posByBd[b];
+        if (!na || !nb) continue;
+        const line = document.createElementNS(SVG_NS, "line");
+        line.setAttribute("x1", mapCoord(na.x, area, size));
+        line.setAttribute("y1", mapCoord(na.y, area, size));
+        line.setAttribute("x2", mapCoord(nb.x, area, size));
+        line.setAttribute("y2", mapCoord(nb.y, area, size));
+        edges.appendChild(line);
+      }
+      svg.appendChild(edges);
+
+      const nodesG = document.createElementNS(SVG_NS, "g");
+      for (const n of topology.nodes) {
+        const cx = mapCoord(n.x, area, size);
+        const cy = mapCoord(n.y, area, size);
+        const role = roles ? roles[n.bd] : null;
+        const isRelay = !unstable && role === "RELAY";
+
+        const circle = document.createElementNS(SVG_NS, "circle");
+        circle.setAttribute("cx", cx);
+        circle.setAttribute("cy", cy);
+        circle.setAttribute("r", unstable ? 7 : (isRelay ? 9 : 8));
+        if (unstable) {
+          circle.setAttribute("fill", "#475569");
+          circle.setAttribute("stroke", "#64748b");
+          circle.setAttribute("stroke-width", "1.5");
+        } else if (isRelay) {
+          circle.setAttribute("fill", "#22c55e");
+          circle.setAttribute("stroke", "#16a34a");
+          circle.setAttribute("stroke-width", "1.5");
+        } else {
+          circle.setAttribute("fill", "#0f172a");
+          circle.setAttribute("stroke", "#64748b");
+          circle.setAttribute("stroke-width", "2");
+        }
+        nodesG.appendChild(circle);
+
+        if (showLabels) {
+          const t = document.createElementNS(SVG_NS, "text");
+          t.setAttribute("x", cx);
+          t.setAttribute("y", cy - 12);
+          t.setAttribute("text-anchor", "middle");
+          t.setAttribute("fill", "#94a3b8");
+          t.setAttribute("font-size", "9");
+          t.setAttribute("font-family", "ui-monospace, monospace");
+          t.textContent = bdShort(n.bd);
+          nodesG.appendChild(t);
+        }
+      }
+      svg.appendChild(nodesG);
+    }
+
+    function setWarn(panelKey, algo) {
+      const banner = $("warn-" + panelKey);
+      banner.classList.remove("visible");
+      banner.textContent = "";
+      if (!algo) return;
+      if (algo.convergence_status === "cycle") {
+        banner.textContent = "⚠ oscille (period=" + algo.convergence_period + ")";
+        banner.classList.add("visible");
+      } else if (algo.convergence_status === "max_steps") {
+        banner.textContent = "⚠ non convergent (max_steps atteint)";
+        banner.classList.add("visible");
+      }
+    }
+
+    function renderMetrics(data) {
+      $("metrics").hidden = false;
+      const w = data.wu_li, m = data.mpr, t = data.topology;
+      $("m-wu-size").textContent = w.cds_size ?? "—";
+      $("m-mpr-size").textContent = m.cds_size ?? "—";
+      $("m-wu-status").textContent = w.convergence_status;
+      $("m-mpr-status").textContent = m.convergence_status;
+      $("m-wu-steps").textContent = w.convergence_steps;
+      $("m-mpr-steps").textContent = m.convergence_steps;
+      $("m-wu-period").textContent = w.convergence_period;
+      $("m-mpr-period").textContent = m.convergence_period;
+      $("m-emeandeg").textContent = Number(t.expected_mean_degree).toFixed(2);
+      $("m-area").textContent = Number(t.area).toFixed(2);
+
+      const deltaEl = $("m-delta");
+      if (data.delta_cds_size == null) {
+        deltaEl.textContent = "n/a (pas les deux en fixed_point)";
+        deltaEl.className = "mono delta-zero";
+      } else {
+        const d = data.delta_cds_size;
+        deltaEl.textContent = (d > 0 ? "+" : "") + d;
+        deltaEl.className = "mono " + (d > 0 ? "delta-pos" : d < 0 ? "delta-neg" : "delta-zero");
+      }
+    }
+
+    function showError(msg) {
+      const el = $("error-banner");
+      el.textContent = msg;
+      el.classList.add("visible");
+    }
+
+    function hideError() {
+      $("error-banner").classList.remove("visible");
+    }
+
+    async function simulate() {
+      hideError();
+      const root = document.body;
+      root.classList.add("loading");
+      const q = new URLSearchParams(params());
+      try {
+        const res = await fetch("/api/simulate?" + q.toString());
+        const body = await res.json();
+        if (!res.ok) {
+          const detail = body.detail || body;
+          const msg = typeof detail === "object"
+            ? (detail.message || JSON.stringify(detail))
+            : String(detail);
+          showError("Erreur " + res.status + " : " + msg);
+          return;
+        }
+        const topo = body.topology;
+        const wuUnstable = body.wu_li.roles == null;
+        const mprUnstable = body.mpr.roles == null;
+        drawTopology($("svg-wu_li"), topo, body.wu_li.roles, wuUnstable);
+        drawTopology($("svg-mpr"), topo, body.mpr.roles, mprUnstable);
+        setWarn("wu_li", body.wu_li);
+        setWarn("mpr", body.mpr);
+        renderMetrics(body);
+      } catch (err) {
+        showError("Échec réseau : " + err.message);
+      } finally {
+        root.classList.remove("loading");
+      }
+    }
+
+    $("btn_simulate").addEventListener("click", simulate);
+    $("btn_random").addEventListener("click", () => {
+      $("seed").value = Math.floor(Math.random() * 100000);
+      simulate();
+    });
+    $("show_labels").addEventListener("change", () => {
+      if (!$("metrics").hidden) simulate();
+    });
+
+    bindSliders();
+    simulate();
+  </script>
+</body>
+</html>
