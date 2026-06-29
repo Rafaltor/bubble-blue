@@ -14,6 +14,7 @@ modules — this server only orchestrates and serializes JSON.
 
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 
+from sim.forwarding_sim import ForwardingSimEngine  # noqa: E402
 from sim.metrics_roles import (  # noqa: E402
     _area_for_target_degree,
     compare_one,
@@ -183,6 +185,84 @@ def build_simulate_response(
     }
 
 
+def resolve_broadcast_source(
+    positions: Position,
+    source: str | None,
+    seed: int,
+) -> str:
+    """Pick broadcast source BD; ``None`` / ``random`` → deterministic sub-seed."""
+    nodes = sorted(positions)
+    if not nodes:
+        raise ValueError("empty topology")
+    if source is None or source.strip().lower() == "random":
+        rng = random.Random(seed ^ 0xBADC0FFE)
+        return rng.choice(nodes)
+    src = source.strip().upper()
+    upper_positions = {bd.upper(): bd for bd in positions}
+    if src not in upper_positions:
+        raise ValueError(f"unknown source node: {source}")
+    return src
+
+
+def _run_broadcast_waves(
+    positions: Position,
+    radius: float,
+    algorithm: CDSAlgorithm,
+    source_bd: str,
+    ttl: int,
+    max_steps: int,
+) -> dict[str, Any]:
+    engine = ForwardingSimEngine(
+        positions, radius, algorithm, ttl_max=ttl
+    )
+    return engine.measure_broadcast_with_waves(
+        source_bd, ttl, text="probe", max_steps=max_steps
+    )
+
+
+def build_broadcast_response(
+    n_nodes: int,
+    radius: float,
+    seed: int,
+    target_degree: float,
+    max_steps: int,
+    source: str | None,
+    ttl: int | None,
+) -> dict[str, Any]:
+    """Pure JSON payload for ``/api/broadcast`` (no HTTP)."""
+    positions, area = resolve_topology_inputs(n_nodes, radius, seed, target_degree)
+    topology = topology_json(
+        positions, area=area, radius=radius, seed=seed, n_nodes=n_nodes
+    )
+    source_bd = resolve_broadcast_source(positions, source, seed)
+    actual_ttl = ttl if ttl is not None else n_nodes
+
+    wu_li = _run_broadcast_waves(
+        positions,
+        radius,
+        CDSAlgorithm.WU_LI_1999,
+        source_bd,
+        actual_ttl,
+        max_steps,
+    )
+    mpr = _run_broadcast_waves(
+        positions,
+        radius,
+        CDSAlgorithm.MPR,
+        source_bd,
+        actual_ttl,
+        max_steps,
+    )
+
+    return {
+        "topology": topology,
+        "source": source_bd,
+        "ttl": actual_ttl,
+        "wu_li": wu_li,
+        "mpr": mpr,
+    }
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(_INDEX_HTML)
@@ -215,6 +295,32 @@ def api_simulate(
         )
     except TopologyNotConnectedError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc
+
+
+@app.get("/api/broadcast")
+def api_broadcast(
+    n_nodes: int = Query(15, ge=1, le=500),
+    radius: float = Query(1.0, gt=0),
+    seed: int = Query(0, ge=0),
+    target_degree: float = Query(5.0, gt=0),
+    max_steps: int = Query(50, ge=1, le=500),
+    source: str | None = Query(None),
+    ttl: int | None = Query(None, ge=1, le=500),
+) -> dict[str, Any]:
+    try:
+        return build_broadcast_response(
+            n_nodes,
+            radius,
+            seed,
+            target_degree,
+            max_steps,
+            source,
+            ttl,
+        )
+    except TopologyNotConnectedError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 if __name__ == "__main__":

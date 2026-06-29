@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>BUBBLE-BLUE — Simulateur CDS</title>
   <!--
-    Rendu 100 % serveur-calculé : ce front n'appelle que /api/simulate (et
-    éventuellement /api/topology) et dessine le JSON. Aucun algorithme CDS/MPR
-    n'est implémenté en JavaScript.
+    Rendu 100 % serveur-calculé : fetch + dessin/animation uniquement.
+    /api/simulate → rôles CDS ; /api/broadcast → vagues de propagation.
+    Aucun algorithme CDS/MPR/flooding en JavaScript.
   -->
   <style>
     :root {
@@ -63,7 +63,7 @@
       font-size: 0.85rem;
       color: var(--accent);
     }
-    .btns { display: flex; gap: 0.5rem; align-items: center; }
+    .btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
     button {
       cursor: pointer;
       border: none;
@@ -74,7 +74,9 @@
     }
     button.primary { background: var(--relay); color: #052e16; }
     button.secondary { background: var(--border); color: var(--text); }
-    button:hover { filter: brightness(1.08); }
+    button.accent { background: var(--accent); color: #1a1200; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+    button:not(:disabled):hover { filter: brightness(1.08); }
     .toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted); }
     #error-banner {
       display: none;
@@ -87,6 +89,22 @@
       font-size: 0.85rem;
     }
     #error-banner.visible { display: block; margin-top: 1rem; }
+    .anim-bar {
+      display: none;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      align-items: center;
+      padding: 0.75rem 1.25rem;
+      background: #141c2e;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    .anim-bar.visible { display: flex; }
+    .anim-bar .wave-indicator {
+      font-family: ui-monospace, monospace;
+      color: var(--accent);
+      min-width: 8rem;
+    }
     .panels {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -107,6 +125,14 @@
       border-bottom: 1px solid var(--border);
       color: var(--muted);
     }
+    .panel-meta {
+      font-size: 0.75rem;
+      font-family: ui-monospace, monospace;
+      color: var(--muted);
+      padding: 0 0.85rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-meta strong { color: var(--text); }
     .panel svg {
       display: block;
       width: 100%;
@@ -117,7 +143,7 @@
     .warn-banner {
       display: none;
       position: absolute;
-      top: 2.5rem;
+      top: 4.5rem;
       left: 0; right: 0;
       text-align: center;
       padding: 0.4rem;
@@ -126,16 +152,21 @@
       font-size: 0.8rem;
       font-weight: 600;
       border-bottom: 1px solid rgba(245, 158, 11, 0.4);
+      z-index: 2;
     }
     .warn-banner.visible { display: block; }
-    .metrics {
+    .metrics, .broadcast-metrics {
       margin: 0 1.25rem 1.25rem;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 1rem;
     }
-    .metrics h3 { font-size: 0.9rem; margin-bottom: 0.75rem; color: var(--muted); }
+    .metrics h3, .broadcast-metrics h3 {
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+      color: var(--muted);
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -149,7 +180,7 @@
     th { color: var(--muted); font-weight: 500; }
     td.mono { font-family: ui-monospace, monospace; }
     .delta-pos { color: var(--accent); font-weight: 600; }
-    .delta-neg { color: var(--relay); }
+    .delta-neg { color: var(--relay); font-weight: 600; }
     .delta-zero { color: var(--muted); }
     .footnote {
       margin-top: 0.85rem;
@@ -159,12 +190,17 @@
       padding-top: 0.65rem;
     }
     .loading { opacity: 0.55; pointer-events: none; }
+    @keyframes pulse-new {
+      0%, 100% { filter: drop-shadow(0 0 4px var(--accent)); }
+      50% { filter: drop-shadow(0 0 10px var(--accent)); }
+    }
+    .node-new { animation: pulse-new 0.8s ease-in-out infinite; }
   </style>
 </head>
 <body>
   <header>
     <h1>BUBBLE-BLUE — Simulateur CDS</h1>
-    <p>Wu-Li 1999 vs MPR (Jacquet 2004) · topologie et élection calculées côté serveur Python</p>
+    <p>Wu-Li 1999 vs MPR · topologie, élection et propagation calculées côté serveur Python</p>
   </header>
 
   <div class="controls" id="controls">
@@ -194,7 +230,21 @@
     <div class="btns">
       <button type="button" class="primary" id="btn_simulate">Simuler</button>
       <button type="button" class="secondary" id="btn_random">Graine aléatoire</button>
+      <button type="button" class="accent" id="btn_broadcast">Broadcast (source aléatoire)</button>
     </div>
+  </div>
+
+  <div class="anim-bar" id="anim-bar">
+    <button type="button" class="secondary" id="btn_play">▶ Lecture</button>
+    <button type="button" class="secondary" id="btn_pause">⏸</button>
+    <button type="button" class="secondary" id="btn_prev-wave">⏮ Début</button>
+    <button type="button" class="secondary" id="btn_next-wave">⏭ Vague suivante</button>
+    <span class="wave-indicator" id="wave-indicator">Vague — / —</span>
+    <div class="field" style="min-width:auto">
+      <label for="anim_speed">vitesse <span class="val" id="anim_speed_val">800</span> ms/vague</label>
+      <input type="range" id="anim_speed" min="200" max="2000" step="100" value="800" />
+    </div>
+    <span style="color:var(--muted);font-size:0.8rem" id="broadcast-source-label"></span>
   </div>
 
   <div id="error-banner" role="alert"></div>
@@ -202,25 +252,23 @@
   <div class="panels">
     <div class="panel" id="panel-wu_li">
       <h2>Wu-Li 1999</h2>
+      <div class="panel-meta" id="meta-wu_li">—</div>
       <div class="warn-banner" id="warn-wu_li"></div>
       <svg id="svg-wu_li" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
     <div class="panel" id="panel-mpr">
       <h2>MPR (Jacquet 2004)</h2>
+      <div class="panel-meta" id="meta-mpr">—</div>
       <div class="warn-banner" id="warn-mpr"></div>
       <svg id="svg-mpr" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
   </div>
 
   <section class="metrics" id="metrics" hidden>
-    <h3>Métriques comparatives</h3>
+    <h3>Métriques CDS comparatives</h3>
     <table>
       <thead>
-        <tr>
-          <th></th>
-          <th>Wu-Li 1999</th>
-          <th>MPR</th>
-        </tr>
+        <tr><th></th><th>Wu-Li 1999</th><th>MPR</th></tr>
       </thead>
       <tbody>
         <tr><td>cds_size</td><td class="mono" id="m-wu-size">—</td><td class="mono" id="m-mpr-size">—</td></tr>
@@ -230,7 +278,7 @@
       </tbody>
     </table>
     <p style="margin-top:0.75rem;font-size:0.85rem">
-      <span style="color:var(--muted)">delta (MPR − Wu-Li) :</span>
+      <span style="color:var(--muted)">delta cds (MPR − Wu-Li) :</span>
       <span class="mono" id="m-delta">—</span>
       &nbsp;·&nbsp;
       <span style="color:var(--muted)">E[deg] :</span>
@@ -240,17 +288,47 @@
       <span class="mono" id="m-area">—</span>
     </p>
     <p class="footnote">
-      Note : MPR peut afficher un <strong>cds_size</strong> plus élevé que Wu-Li sur de petites densités
-      (défaut connu de la Règle 1 inconditionnelle — feuille d'id minimal tirée dans le backbone).
-      Un delta positif n'indique pas un bug du simulateur. Le front n'effectue aucun calcul d'élection.
+      Note : MPR peut afficher un cds_size plus élevé que Wu-Li sur de petites densités
+      (défaut Règle 1). Le front n'effectue aucun calcul d'élection.
+    </p>
+  </section>
+
+  <section class="broadcast-metrics" id="broadcast-metrics" hidden>
+    <h3>Broadcast — synthèse (source &amp; topologie courantes)</h3>
+    <table>
+      <thead>
+        <tr><th></th><th>Wu-Li 1999</th><th>MPR</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>total_unicasts</td><td class="mono" id="b-wu-u">—</td><td class="mono" id="b-mpr-u">—</td></tr>
+        <tr><td>n_waves (latence sauts)</td><td class="mono" id="b-wu-w">—</td><td class="mono" id="b-mpr-w">—</td></tr>
+        <tr><td>delivery_ratio</td><td class="mono" id="b-wu-d">—</td><td class="mono" id="b-mpr-d">—</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:0.75rem;font-size:0.85rem">
+      <span style="color:var(--muted)">delta unicasts (MPR − Wu-Li) :</span>
+      <span class="mono" id="b-delta">—</span>
+      &nbsp;·&nbsp;
+      <span id="b-economy" style="font-size:0.85rem"></span>
+    </p>
+    <p class="footnote">
+      Le coût en unicasts et la latence en vagues dépendent de la <strong>topologie</strong>
+      et du <strong>nœud source</strong> — ce n'est pas une loi générale valable pour tous les graphes.
+      L'animation rejoue les vagues renvoyées par <code>/api/broadcast</code> (forwarder réel + journal bus).
     </p>
   </section>
 
   <script>
-    // ——— Aucun algorithme ici : fetch + rendu uniquement ———
+    // ——— Fetch + rendu/animation uniquement — aucun algorithme réseau ———
 
     const SVG_NS = "http://www.w3.org/2000/svg";
     const MARGIN = 28;
+    const SVG_SIZE = 400;
+
+    let broadcastData = null;
+    let waveIndex = 0;
+    let playTimer = null;
+    let viewMode = "cds"; // "cds" | "broadcast"
 
     function $(id) { return document.getElementById(id); }
 
@@ -259,6 +337,7 @@
         ["n_nodes", "n_nodes_val"],
         ["target_degree", "target_degree_val"],
         ["max_steps", "max_steps_val"],
+        ["anim_speed", "anim_speed_val"],
       ];
       for (const [inputId, labelId] of pairs) {
         const inp = $(inputId);
@@ -288,46 +367,72 @@
       return MARGIN + (v / area) * inner;
     }
 
+    function posByBd(topology) {
+      const m = {};
+      for (const n of topology.nodes) m[n.bd] = n;
+      return m;
+    }
+
+    function nodeXY(bd, topology) {
+      const n = posByBd(topology)[bd];
+      if (!n) return null;
+      return {
+        x: mapCoord(n.x, topology.area, SVG_SIZE),
+        y: mapCoord(n.y, topology.area, SVG_SIZE),
+      };
+    }
+
     function clearSvg(svg) {
       while (svg.firstChild) svg.removeChild(svg.firstChild);
     }
 
-    /**
-     * Dessine topologie + rôles renvoyés par le serveur.
-     * roles === null → tous les nœuds en gris (état instable).
-     */
+    function ensureArrowDefs(svg) {
+      const defs = document.createElementNS(SVG_NS, "defs");
+      for (const [id, color] of [["arr-ok", "#22c55e"], ["arr-fail", "#f87171"]]) {
+        const m = document.createElementNS(SVG_NS, "marker");
+        m.setAttribute("id", id);
+        m.setAttribute("markerWidth", "8");
+        m.setAttribute("markerHeight", "8");
+        m.setAttribute("refX", "7");
+        m.setAttribute("refY", "3");
+        m.setAttribute("orient", "auto");
+        const p = document.createElementNS(SVG_NS, "path");
+        p.setAttribute("d", "M0,0 L8,3 L0,6 Z");
+        p.setAttribute("fill", color);
+        m.appendChild(p);
+        defs.appendChild(m);
+      }
+      svg.appendChild(defs);
+    }
+
     function drawTopology(svg, topology, roles, unstable) {
       clearSvg(svg);
       const area = topology.area;
-      const size = 400;
       const showLabels = $("show_labels").checked;
+      const positions = posByBd(topology);
 
-      const edges = document.createElementNS(SVG_NS, "g");
-      edges.setAttribute("stroke", "#3b82f6");
-      edges.setAttribute("stroke-width", "1.2");
-      edges.setAttribute("opacity", "0.75");
-      const posByBd = {};
-      for (const n of topology.nodes) posByBd[n.bd] = n;
-
+      const edgesG = document.createElementNS(SVG_NS, "g");
+      edgesG.setAttribute("stroke", "#3b82f6");
+      edgesG.setAttribute("stroke-width", "1.2");
+      edgesG.setAttribute("opacity", "0.75");
       for (const [a, b] of topology.edges) {
-        const na = posByBd[a], nb = posByBd[b];
+        const na = positions[a], nb = positions[b];
         if (!na || !nb) continue;
         const line = document.createElementNS(SVG_NS, "line");
-        line.setAttribute("x1", mapCoord(na.x, area, size));
-        line.setAttribute("y1", mapCoord(na.y, area, size));
-        line.setAttribute("x2", mapCoord(nb.x, area, size));
-        line.setAttribute("y2", mapCoord(nb.y, area, size));
-        edges.appendChild(line);
+        line.setAttribute("x1", mapCoord(na.x, area, SVG_SIZE));
+        line.setAttribute("y1", mapCoord(na.y, area, SVG_SIZE));
+        line.setAttribute("x2", mapCoord(nb.x, area, SVG_SIZE));
+        line.setAttribute("y2", mapCoord(nb.y, area, SVG_SIZE));
+        edgesG.appendChild(line);
       }
-      svg.appendChild(edges);
+      svg.appendChild(edgesG);
 
       const nodesG = document.createElementNS(SVG_NS, "g");
       for (const n of topology.nodes) {
-        const cx = mapCoord(n.x, area, size);
-        const cy = mapCoord(n.y, area, size);
+        const cx = mapCoord(n.x, area, SVG_SIZE);
+        const cy = mapCoord(n.y, area, SVG_SIZE);
         const role = roles ? roles[n.bd] : null;
         const isRelay = !unstable && role === "RELAY";
-
         const circle = document.createElementNS(SVG_NS, "circle");
         circle.setAttribute("cx", cx);
         circle.setAttribute("cy", cy);
@@ -346,7 +451,6 @@
           circle.setAttribute("stroke-width", "2");
         }
         nodesG.appendChild(circle);
-
         if (showLabels) {
           const t = document.createElementNS(SVG_NS, "text");
           t.setAttribute("x", cx);
@@ -362,11 +466,197 @@
       svg.appendChild(nodesG);
     }
 
+    /** État d'affichage pour une vague (données serveur uniquement). */
+    function waveFrame(algo, idx) {
+      const waves = algo.waves || [];
+      if (waves.length === 0) {
+        return { unicasts: [], prevReached: [], newly: [], cumU: 0, done: true };
+      }
+      if (idx >= waves.length) {
+        const last = waves[waves.length - 1];
+        return {
+          unicasts: [],
+          prevReached: last.cumulative_reached || [],
+          newly: [],
+          cumU: algo.total_unicasts,
+          done: true,
+        };
+      }
+      const w = waves[idx];
+      const prev = idx === 0 ? [] : (waves[idx - 1].cumulative_reached || []);
+      let cumU = 0;
+      for (let i = 0; i <= idx; i++) cumU += (waves[i].unicasts || []).length;
+      return {
+        unicasts: w.unicasts || [],
+        prevReached: prev,
+        newly: w.newly_reached || [],
+        cumU,
+        done: false,
+      };
+    }
+
+    function drawBroadcastWave(svg, topology, sourceBd, algo, waveIdx) {
+      clearSvg(svg);
+      ensureArrowDefs(svg);
+      const frame = waveFrame(algo, waveIdx);
+      const showLabels = $("show_labels").checked;
+      const prevSet = new Set(frame.prevReached);
+      const newSet = new Set(frame.newly);
+
+      const edgesG = document.createElementNS(SVG_NS, "g");
+      edgesG.setAttribute("stroke", "#334155");
+      edgesG.setAttribute("stroke-width", "1");
+      edgesG.setAttribute("opacity", "0.6");
+      const positions = posByBd(topology);
+      for (const [a, b] of topology.edges) {
+        const na = positions[a], nb = positions[b];
+        if (!na || !nb) continue;
+        const line = document.createElementNS(SVG_NS, "line");
+        line.setAttribute("x1", mapCoord(na.x, topology.area, SVG_SIZE));
+        line.setAttribute("y1", mapCoord(na.y, topology.area, SVG_SIZE));
+        line.setAttribute("x2", mapCoord(nb.x, topology.area, SVG_SIZE));
+        line.setAttribute("y2", mapCoord(nb.y, topology.area, SVG_SIZE));
+        edgesG.appendChild(line);
+      }
+      svg.appendChild(edgesG);
+
+      const arrowsG = document.createElementNS(SVG_NS, "g");
+      for (const u of frame.unicasts) {
+        const p1 = nodeXY(u.from, topology);
+        const p2 = nodeXY(u.to, topology);
+        if (!p1 || !p2) continue;
+        const line = document.createElementNS(SVG_NS, "line");
+        line.setAttribute("x1", p1.x);
+        line.setAttribute("y1", p1.y);
+        line.setAttribute("x2", p2.x);
+        line.setAttribute("y2", p2.y);
+        line.setAttribute("stroke-width", "2.5");
+        if (u.delivered) {
+          line.setAttribute("stroke", "#22c55e");
+          line.setAttribute("marker-end", "url(#arr-ok)");
+        } else {
+          line.setAttribute("stroke", "#f87171");
+          line.setAttribute("stroke-dasharray", "6 4");
+          line.setAttribute("marker-end", "url(#arr-fail)");
+        }
+        arrowsG.appendChild(line);
+      }
+      svg.appendChild(arrowsG);
+
+      const nodesG = document.createElementNS(SVG_NS, "g");
+      for (const n of topology.nodes) {
+        const bd = n.bd;
+        const cx = mapCoord(n.x, topology.area, SVG_SIZE);
+        const cy = mapCoord(n.y, topology.area, SVG_SIZE);
+        const isSource = bd === sourceBd;
+
+        if (isSource) {
+          const halo = document.createElementNS(SVG_NS, "circle");
+          halo.setAttribute("cx", cx);
+          halo.setAttribute("cy", cy);
+          halo.setAttribute("r", "14");
+          halo.setAttribute("fill", "none");
+          halo.setAttribute("stroke", "#f59e0b");
+          halo.setAttribute("stroke-width", "2.5");
+          halo.setAttribute("opacity", "0.85");
+          nodesG.appendChild(halo);
+        }
+
+        const circle = document.createElementNS(SVG_NS, "circle");
+        circle.setAttribute("cx", cx);
+        circle.setAttribute("cy", cy);
+        circle.setAttribute("r", isSource ? 10 : 8);
+
+        if (isSource) {
+          circle.setAttribute("fill", "#78350f");
+          circle.setAttribute("stroke", "#f59e0b");
+          circle.setAttribute("stroke-width", "2");
+        } else if (newSet.has(bd)) {
+          circle.setAttribute("fill", "#f59e0b");
+          circle.setAttribute("stroke", "#fcd34d");
+          circle.setAttribute("stroke-width", "2");
+          circle.setAttribute("class", "node-new");
+        } else if (prevSet.has(bd)) {
+          circle.setAttribute("fill", "#22c55e");
+          circle.setAttribute("stroke", "#16a34a");
+          circle.setAttribute("stroke-width", "1.5");
+        } else {
+          circle.setAttribute("fill", "#475569");
+          circle.setAttribute("stroke", "#64748b");
+          circle.setAttribute("stroke-width", "1.5");
+        }
+        nodesG.appendChild(circle);
+
+        if (showLabels) {
+          const t = document.createElementNS(SVG_NS, "text");
+          t.setAttribute("x", cx);
+          t.setAttribute("y", cy - (isSource ? 16 : 12));
+          t.setAttribute("text-anchor", "middle");
+          t.setAttribute("fill", "#94a3b8");
+          t.setAttribute("font-size", "9");
+          t.setAttribute("font-family", "ui-monospace, monospace");
+          t.textContent = bdShort(bd);
+          nodesG.appendChild(t);
+        }
+      }
+      svg.appendChild(nodesG);
+      return frame.cumU;
+    }
+
+    function maxWaveCount() {
+      if (!broadcastData) return 0;
+      return Math.max(broadcastData.wu_li.n_waves, broadcastData.mpr.n_waves);
+    }
+
+    function stopPlayback() {
+      if (playTimer) {
+        clearInterval(playTimer);
+        playTimer = null;
+      }
+    }
+
+    function updateWaveIndicator() {
+      const n = maxWaveCount();
+      const k = n === 0 ? 0 : Math.min(waveIndex + 1, n);
+      $("wave-indicator").textContent = "Vague " + k + " / " + n;
+    }
+
+    function renderBroadcastFrame() {
+      if (!broadcastData) return;
+      const topo = broadcastData.topology;
+      const src = broadcastData.source;
+      const wuU = drawBroadcastWave($("svg-wu_li"), topo, src, broadcastData.wu_li, waveIndex);
+      const mprU = drawBroadcastWave($("svg-mpr"), topo, src, broadcastData.mpr, waveIndex);
+      $("meta-wu_li").innerHTML = "unicasts cumulés : <strong>" + wuU + "</strong>";
+      $("meta-mpr").innerHTML = "unicasts cumulés : <strong>" + mprU + "</strong>";
+      updateWaveIndicator();
+    }
+
+    function goToWave(idx) {
+      const max = maxWaveCount();
+      waveIndex = Math.max(0, Math.min(idx, max > 0 ? max - 1 : 0));
+      renderBroadcastFrame();
+    }
+
+    function startPlayback() {
+      stopPlayback();
+      const ms = parseInt($("anim_speed").value, 10) || 800;
+      playTimer = setInterval(() => {
+        const max = maxWaveCount();
+        if (waveIndex >= max - 1) {
+          stopPlayback();
+          return;
+        }
+        waveIndex += 1;
+        renderBroadcastFrame();
+      }, ms);
+    }
+
     function setWarn(panelKey, algo) {
       const banner = $("warn-" + panelKey);
       banner.classList.remove("visible");
       banner.textContent = "";
-      if (!algo) return;
+      if (!algo || viewMode === "broadcast") return;
       if (algo.convergence_status === "cycle") {
         banner.textContent = "⚠ oscille (period=" + algo.convergence_period + ")";
         banner.classList.add("visible");
@@ -389,10 +679,9 @@
       $("m-mpr-period").textContent = m.convergence_period;
       $("m-emeandeg").textContent = Number(t.expected_mean_degree).toFixed(2);
       $("m-area").textContent = Number(t.area).toFixed(2);
-
       const deltaEl = $("m-delta");
       if (data.delta_cds_size == null) {
-        deltaEl.textContent = "n/a (pas les deux en fixed_point)";
+        deltaEl.textContent = "n/a";
         deltaEl.className = "mono delta-zero";
       } else {
         const d = data.delta_cds_size;
@@ -401,10 +690,28 @@
       }
     }
 
+    function renderBroadcastMetrics(data) {
+      $("broadcast-metrics").hidden = false;
+      const w = data.wu_li, m = data.mpr;
+      $("b-wu-u").textContent = w.total_unicasts;
+      $("b-mpr-u").textContent = m.total_unicasts;
+      $("b-wu-w").textContent = w.n_waves;
+      $("b-mpr-w").textContent = m.n_waves;
+      $("b-wu-d").textContent = (w.delivery_ratio * 100).toFixed(0) + "%";
+      $("b-mpr-d").textContent = (m.delivery_ratio * 100).toFixed(0) + "%";
+      const d = m.total_unicasts - w.total_unicasts;
+      const deltaEl = $("b-delta");
+      deltaEl.textContent = (d > 0 ? "+" : "") + d;
+      deltaEl.className = "mono " + (d > 0 ? "delta-pos" : d < 0 ? "delta-neg" : "delta-zero");
+      const eco = $("b-economy");
+      if (d < 0) eco.innerHTML = "<span class=\"delta-neg\">MPR plus économe</span> sur cette source/topologie";
+      else if (d > 0) eco.innerHTML = "<span class=\"delta-pos\">Wu-Li plus économe</span> sur cette source/topologie";
+      else eco.textContent = "coût identique sur cette source/topologie";
+    }
+
     function showError(msg) {
-      const el = $("error-banner");
-      el.textContent = msg;
-      el.classList.add("visible");
+      $("error-banner").textContent = msg;
+      $("error-banner").classList.add("visible");
     }
 
     function hideError() {
@@ -413,32 +720,64 @@
 
     async function simulate() {
       hideError();
-      const root = document.body;
-      root.classList.add("loading");
+      stopPlayback();
+      viewMode = "cds";
+      $("anim-bar").classList.remove("visible");
+      $("warn-wu_li").classList.remove("visible");
+      $("warn-mpr").classList.remove("visible");
+      $("meta-wu_li").textContent = "—";
+      $("meta-mpr").textContent = "—";
+      document.body.classList.add("loading");
       const q = new URLSearchParams(params());
       try {
         const res = await fetch("/api/simulate?" + q.toString());
         const body = await res.json();
         if (!res.ok) {
           const detail = body.detail || body;
-          const msg = typeof detail === "object"
-            ? (detail.message || JSON.stringify(detail))
-            : String(detail);
-          showError("Erreur " + res.status + " : " + msg);
+          showError("Erreur " + res.status + " : " + (detail.message || JSON.stringify(detail)));
           return;
         }
-        const topo = body.topology;
-        const wuUnstable = body.wu_li.roles == null;
-        const mprUnstable = body.mpr.roles == null;
-        drawTopology($("svg-wu_li"), topo, body.wu_li.roles, wuUnstable);
-        drawTopology($("svg-mpr"), topo, body.mpr.roles, mprUnstable);
+        drawTopology($("svg-wu_li"), body.topology, body.wu_li.roles, body.wu_li.roles == null);
+        drawTopology($("svg-mpr"), body.topology, body.mpr.roles, body.mpr.roles == null);
         setWarn("wu_li", body.wu_li);
         setWarn("mpr", body.mpr);
         renderMetrics(body);
       } catch (err) {
         showError("Échec réseau : " + err.message);
       } finally {
-        root.classList.remove("loading");
+        document.body.classList.remove("loading");
+      }
+    }
+
+    async function runBroadcast() {
+      hideError();
+      stopPlayback();
+      viewMode = "broadcast";
+      document.body.classList.add("loading");
+      const q = new URLSearchParams(params());
+      q.set("source", "random");
+      q.set("ttl", $("n_nodes").value);
+      try {
+        const res = await fetch("/api/broadcast?" + q.toString());
+        const body = await res.json();
+        if (!res.ok) {
+          const detail = body.detail || body;
+          showError("Erreur " + res.status + " : " + (typeof detail === "object" ? (detail.message || JSON.stringify(detail)) : detail));
+          return;
+        }
+        broadcastData = body;
+        waveIndex = 0;
+        $("anim-bar").classList.add("visible");
+        $("broadcast-source-label").textContent =
+          "source " + bdShort(body.source) + " · ttl=" + body.ttl;
+        $("warn-wu_li").classList.remove("visible");
+        $("warn-mpr").classList.remove("visible");
+        renderBroadcastMetrics(body);
+        renderBroadcastFrame();
+      } catch (err) {
+        showError("Échec réseau : " + err.message);
+      } finally {
+        document.body.classList.remove("loading");
       }
     }
 
@@ -447,8 +786,20 @@
       $("seed").value = Math.floor(Math.random() * 100000);
       simulate();
     });
+    $("btn_broadcast").addEventListener("click", runBroadcast);
+    $("btn_play").addEventListener("click", startPlayback);
+    $("btn_pause").addEventListener("click", stopPlayback);
+    $("btn_prev-wave").addEventListener("click", () => { stopPlayback(); goToWave(0); });
+    $("btn_next-wave").addEventListener("click", () => {
+      stopPlayback();
+      goToWave(waveIndex + 1);
+    });
     $("show_labels").addEventListener("change", () => {
-      if (!$("metrics").hidden) simulate();
+      if (viewMode === "broadcast" && broadcastData) renderBroadcastFrame();
+      else if (!$("metrics").hidden) simulate();
+    });
+    $("anim_speed").addEventListener("input", () => {
+      if (playTimer) startPlayback();
     });
 
     bindSliders();

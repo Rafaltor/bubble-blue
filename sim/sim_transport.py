@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import math
-from typing import Callable
+import time
+from typing import Any, Callable
+
+from config import PKT_DATA
+from src.security.packet import build_routing_header, parse_routing_header
 
 # Callback invoked on a node when it receives a packet: on_receive(peer_bd, data).
 OnReceive = Callable[[str, bytes], None]
 
 Position = tuple[float, float]
+
+DataLogEvent = dict[str, Any]
 
 
 class SimTransport:
@@ -56,6 +62,11 @@ class SimBus:
         self._on_receive: dict[str, OnReceive] = {}
         # Metrics: total unicast deliveries attempted on the bus.
         self.unicast_count = 0
+        # PKT_DATA only — excludes Hello/control traffic (see forwarding_sim).
+        self.data_unicast_count = 0
+        # Passive PKT_DATA propagation trace (see start_data_log / get_data_log).
+        self._data_log_active = False
+        self._data_log: list[DataLogEvent] = []
 
     def register(self, bd_addr: str, position: Position, on_receive: OnReceive) -> SimTransport:
         """Add a node at ``position`` and return its SimTransport façade."""
@@ -102,6 +113,19 @@ class SimBus:
             if other != bd and self._distance(bd, other) <= self.radius
         )
 
+    def start_data_log(self) -> None:
+        """Clear the journal and begin recording PKT_DATA deliver() events."""
+        self._data_log = []
+        self._data_log_active = True
+
+    def stop_data_log(self) -> None:
+        """Stop recording; existing journal remains readable via get_data_log()."""
+        self._data_log_active = False
+
+    def get_data_log(self) -> list[DataLogEvent]:
+        """Copy of recorded PKT_DATA propagation events (passive trace only)."""
+        return list(self._data_log)
+
     def deliver(self, src: str, dst: str, data: bytes) -> None:
         """
         Deliver ``data`` from ``src`` to ``dst`` if in range, else drop it.
@@ -110,10 +134,32 @@ class SimBus:
         ``on_receive(src, data)`` synchronously.
         """
         s, d = src.upper(), dst.upper()
+        in_range = self.in_range(s, d)
         self.unicast_count += 1
-        if not self.in_range(s, d):
+        is_data = bool(data) and data[0] == PKT_DATA
+        if is_data:
+            self.data_unicast_count += 1
+        if self._data_log_active and is_data:
+            try:
+                hdr = parse_routing_header(data)
+                self._data_log.append(
+                    {
+                        "from": s,
+                        "to": d,
+                        "ttl": hdr["ttl"],
+                        "seq": hdr["seq"],
+                        "delivered_in_range": in_range,
+                    }
+                )
+            except ValueError:
+                pass
+        if not in_range:
             return  # out of range → packet lost
         self._on_receive[d](s, data)
+
+    def reset_data_unicast_count(self) -> None:
+        """Zero the PKT_DATA unicast counter (broadcast overhead measurement)."""
+        self.data_unicast_count = 0
 
 
 if __name__ == "__main__":
@@ -149,5 +195,28 @@ if __name__ == "__main__":
     assert received == [], received
     assert bus.unicast_count == 2  # both attempts counted, one delivered
     print("✅ in-range delivered, out-of-range dropped, unicasts counted")
+
+    # PKT_DATA propagation journal (passive trace; wave = ttl_initial - ttl).
+    bus.start_data_log()
+    ts_ms = time.time_ns() // 1_000_000
+    pkt = build_routing_header(PKT_DATA, A, B, ttl=3, seq=7, ts_ms=ts_ms) + bytes(16)
+    bus.deliver(A, B, pkt)
+    bus.deliver(A, C, pkt)  # out of range on line A—B—C
+    log = bus.get_data_log()
+    assert len(log) == 2, log
+    assert log[0] == {
+        "from": A,
+        "to": B,
+        "ttl": 3,
+        "seq": 7,
+        "delivered_in_range": True,
+    }, log[0]
+    assert log[1]["from"] == A and log[1]["to"] == C
+    assert log[1]["ttl"] == 3 and log[1]["seq"] == 7
+    assert log[1]["delivered_in_range"] is False
+    bus.stop_data_log()
+    bus.deliver(B, C, pkt)
+    assert len(bus.get_data_log()) == 2, "log must not grow after stop_data_log()"
+    print("✅ PKT_DATA propagation journal: fields and delivered_in_range OK")
 
     print("\n✅ All sim_transport self-tests passed")
