@@ -14,6 +14,14 @@ PKT_ACK   = 0x03
 PKT_SUBGROUP = 0x04
 PKT_REKEY   = 0x05
 
+# L2CAP protocol service multiplexors
+PSM_BT_CLASSIC = 0x1001
+PSM_BLE = 0x0080  # LE dynamic PSM range (distinct from BR/EDR)
+
+# Prudent L2CAP/CoC MTU per transport (full BB wire frame including header + tag).
+MTU_BT_CLASSIC = 1021
+MTU_BLE = 512
+
 # Security
 AES_KEY_SIZE = 32      # bytes
 AES_NONCE_SIZE = 12    # bytes  
@@ -51,12 +59,16 @@ _DEFAULT_INTERFACE = os.environ.get("BUBBLE_BLUE_INTERFACE", "hci0")
 _BD_ADDR_ENV_RE = re.compile(r"^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}$")
 
 
+_VALID_TRANSPORT_KINDS = frozenset({"bt_classic", "ble_l2cap"})
+
+
 @dataclass(frozen=True)
 class BubbleBlueConfig:
     # L2CAP
-    psm: int  # L2CAP PSM
+    psm: int  # L2CAP PSM (PSM_BT_CLASSIC or PSM_BLE depending on transport_kind)
     local_bd_addr: str
     remote_bd_addr: str
+    transport_kind: str  # "bt_classic" | "ble_l2cap"
 
     # Node identity / control plane timers
     node_name: str
@@ -125,6 +137,37 @@ def _parse_group_members_env(*, exclude_local: str | None = None) -> list[str]:
         seen.add(bd)
         out.append(bd)
     return out
+
+
+def _load_transport_kind() -> str:
+    raw = os.environ.get("BUBBLE_BLUE_TRANSPORT", "bt_classic").strip().lower()
+    if raw in _VALID_TRANSPORT_KINDS:
+        return raw
+    print(
+        f"[BB] WARNING: unknown BUBBLE_BLUE_TRANSPORT={raw!r}, using bt_classic",
+        flush=True,
+    )
+    return "bt_classic"
+
+
+def mtu_for_transport(transport_kind: str) -> int:
+    """L2CAP/CoC MTU for a full on-wire BB frame (routing header + ciphertext + tag)."""
+    k = transport_kind.strip().lower()
+    if k == "ble_l2cap":
+        return MTU_BLE
+    return MTU_BT_CLASSIC
+
+
+def max_payload(transport_kind: str) -> int:
+    """
+    Maximum plaintext bytes per PKT_DATA message for ``transport_kind``.
+
+    Wire size = routing header (26) + plaintext + GCM tag (16) = plaintext + 42.
+    BLE (512 MTU) → 470 B (~470 ASCII chat characters). BT Classic unchanged at 979 B.
+    """
+    from src.security.packet import packet_overhead
+
+    return mtu_for_transport(transport_kind) - packet_overhead()
 
 
 def get_hciconfig_bd_addr(interface: str | None = None) -> str:
@@ -224,10 +267,13 @@ def load_config(
     local = get_local_bd_addr(interface=iface)
     remote = remote_bd_addr or DEFAULT_REMOTE_BD_ADDR
     remote_n = _normalize_bd_addr(remote, label="remote BD_ADDR") or "00:00:00:00:00:00"
+    transport_kind = _load_transport_kind()
+    psm = PSM_BLE if transport_kind == "ble_l2cap" else PSM_BT_CLASSIC
     return BubbleBlueConfig(
-        psm=0x1001,
+        psm=psm,
         local_bd_addr=local,
         remote_bd_addr=remote_n,
+        transport_kind=transport_kind,
         node_name=socket.gethostname(),
         hello_interval_s=5,
         neighbor_timeout_s=15,
@@ -243,6 +289,7 @@ def format_config(cfg: BubbleBlueConfig) -> str:
         [
             "=== BUBBLE-BLUE configuration ===",
             f"- Node name            : {cfg.node_name}",
+            f"- Transport            : {cfg.transport_kind}",
             f"- L2CAP PSM            : 0x{cfg.psm:04X} ({cfg.psm})",
             f"- Local BD address     : {cfg.local_bd_addr}",
             f"- Remote BD address    : {cfg.remote_bd_addr}",

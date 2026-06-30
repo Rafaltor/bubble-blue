@@ -12,7 +12,8 @@ from src.control.hello_manager import HelloManager
 from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
 from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
-from src.transport.l2cap import L2CAPTransport
+from src.transport.base import ManagedTransport
+from src.transport.factory import make_transport
 
 LogFn = Callable[[str, bool], None]
 
@@ -78,7 +79,7 @@ class BBNode:
         self._pairing_proc: subprocess.Popen[str] | None = None
 
         self._cfg: BubbleBlueConfig | None = None
-        self._transport: L2CAPTransport | None = None
+        self._transport: ManagedTransport | None = None
         self._hello_mgr: HelloManager | None = None
         self._forwarder: PacketForwarder | None = None
         self._started = False
@@ -138,7 +139,8 @@ class BBNode:
                     if fwd is not None:
                         fwd.handle(peer, data)
 
-            transport = L2CAPTransport(
+            transport = make_transport(
+                self._cfg.transport_kind,
                 on_receive=on_receive,
                 interface=self._interface,
                 quiet=self._quiet,

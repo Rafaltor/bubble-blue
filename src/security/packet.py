@@ -371,11 +371,20 @@ if __name__ == "__main__":
     print("✅ full packet serialization: OK")
 
     assert packet_overhead() == 42
+    from config import MTU_BT_CLASSIC, MTU_BLE, max_payload
+
     print(f"\n📦 Packet structure:")
     print(f"   Routing header  : {ROUTING_HEADER_SIZE} bytes (cleartext)")
     print(f"   Ciphertext+tag  : payload + {GCM_TAG_SIZE} bytes")
     print(f"   Fixed overhead  : {packet_overhead()} bytes")
-    print(f"   Payload space   : {1021 - packet_overhead()} bytes (BT Classic MTU)")
+    print(
+        f"   Payload space   : {max_payload('bt_classic')} bytes "
+        f"(BT Classic MTU {MTU_BT_CLASSIC})"
+    )
+    print(
+        f"   Payload space   : {max_payload('ble_l2cap')} bytes "
+        f"(BLE prudent MTU {MTU_BLE}; ~{max_payload('ble_l2cap')} ASCII chat chars)"
+    )
 
     # PKT_SUBGROUP
     from config import PKT_SUBGROUP

@@ -25,6 +25,7 @@ def test_bbnode_send_broadcast() -> None:
         group_key=b"\x02" * 32,
         local_bd_addr="AA:BB:CC:DD:EE:01",
         remote_bd_addr="AA:BB:CC:DD:EE:02",
+        transport_kind="bt_classic",
     )
     fake_transport = MagicMock()
     fake_transport.connections.return_value = ["AA:BB:CC:DD:EE:02"]
@@ -34,7 +35,7 @@ def test_bbnode_send_broadcast() -> None:
 
     with (
         patch("src.api.bb_api.load_config", return_value=cfg),
-        patch("src.api.bb_api.L2CAPTransport", return_value=fake_transport),
+        patch("src.api.bb_api.make_transport", return_value=fake_transport),
         patch("src.api.bb_api.HelloManager", return_value=fake_hello),
         patch("src.api.bb_api.PacketForwarder") as mock_fwd_cls,
     ):

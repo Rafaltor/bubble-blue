@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from cryptography.exceptions import InvalidTag
 
-from config import PKT_DATA, PKT_REKEY, PKT_SUBGROUP, BubbleBlueConfig
+from config import PKT_DATA, PKT_REKEY, PKT_SUBGROUP, BubbleBlueConfig, max_payload, mtu_for_transport
 from src.security.crypto import decrypt_with_key, encrypt_with_key, unwrap_msg_key, wrap_msg_key
 from src.security.keys import derive_packet_key, derive_wrap_key
 from src.security.rekey import pack_rekey_plaintext, unpack_rekey_plaintext
@@ -39,6 +39,18 @@ _SUBGROUP_MODE_MARKER = bytes([PKT_SUBGROUP])
 _ANON_TAG_SIZE = 8
 
 DeliverCallback = Callable[[str, bytes, dict[str, Any]], None]
+
+
+class PayloadTooLarge(Exception):
+    """Plaintext or wire frame exceeds the current transport MTU budget."""
+
+    def __init__(self, limit: int, actual: int) -> None:
+        self.limit = limit
+        self.actual = actual
+        super().__init__(
+            f"payload {actual} B exceeds transport limit {limit} B "
+            "(fragmentation not enabled — shorten message or use bt_classic)"
+        )
 
 
 class _ForwardCache:
@@ -128,6 +140,16 @@ class PacketForwarder:
         ep = self._hello_mgr.get_peer_epoch(bd_addr) if wire_epoch is None else int(wire_epoch)
         return self._hello_mgr.key_store.get_pair_key(bd_addr, epoch=ep)
 
+    def _check_plaintext_payload(self, payload: bytes) -> None:
+        limit = max_payload(self._cfg.transport_kind)
+        if len(payload) > limit:
+            raise PayloadTooLarge(limit, len(payload))
+
+    def _check_wire_packet(self, packet: bytes) -> None:
+        limit = mtu_for_transport(self._cfg.transport_kind)
+        if len(packet) > limit:
+            raise PayloadTooLarge(limit, len(packet))
+
     def build_data_packet(
         self,
         plaintext: str | bytes,
@@ -139,8 +161,12 @@ class PacketForwarder:
         Build a PKT_DATA wire packet using per-packet key derivation.
 
         Group traffic uses ``group_key``; private unicast uses the pairwise key for ``dst``.
+
+        Plaintext is capped by ``max_payload(transport_kind)`` (470 B on BLE, 979 B on
+        BT Classic) so the full wire frame fits without L2CAP fragmentation.
         """
         payload = plaintext.encode("utf-8") if isinstance(plaintext, str) else bytes(plaintext)
+        self._check_plaintext_payload(payload)
         dst = dst_bd_addr.upper()
         src = self._cfg.local_bd_addr.upper()
 
@@ -173,6 +199,7 @@ class PacketForwarder:
             raise RuntimeError("no recipients for subgroup multicast")
 
         payload = plaintext.encode("utf-8") if isinstance(plaintext, str) else bytes(plaintext)
+        self._check_plaintext_payload(payload)
         src = self._cfg.local_bd_addr.upper()
         seq = self._next_seq()
         ts_ms = time.time_ns() // 1_000_000
@@ -199,7 +226,9 @@ class PacketForwarder:
         payload_plaintext = bytes([len(recipients)]) + s_tags + payload
         aad = routing_header_aad(rh) + _SUBGROUP_MODE_MARKER + cases_digest
         enc = encrypt_with_key(k_msg, payload_plaintext, aad)
-        return build_subgroup_packet(rh, cases, enc["ciphertext"])
+        packet = build_subgroup_packet(rh, cases, enc["ciphertext"])
+        self._check_wire_packet(packet)
+        return packet
 
     def build_rekey_packet(self, dst_bd_addr: str, *, peer_epoch: int | None = None) -> bytes:
         """Build PKT_REKEY unicast carrying the current epoch state for ``dst_bd_addr``."""
