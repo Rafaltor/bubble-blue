@@ -1,12 +1,7 @@
-"""Minimal BLE L2CAP CoC client — mirrors ``BLEL2CAPTransport`` outbound path."""
-import socket
-import struct
-import time
+import socket, struct, time
 
-from config import PSM_BLE, load_config
-
-_cfg = load_config()
-SERVER_ADDR = _cfg.group_members[0] if _cfg.group_members else "9C:B8:B4:9F:2D:75"
+SERVER_ADDR = "9C:B8:B4:9F:2D:75"
+PSM = 0x0081
 ADDR_TYPE = socket.BDADDR_LE_PUBLIC
 
 s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
@@ -22,8 +17,8 @@ print("[client] BT_MODE = LE_FLOWCTL OK", flush=True)
 
 # 3) sécurité, puis connect
 s.setsockopt(socket.SOL_BLUETOOTH, socket.BT_SECURITY, struct.pack("BB", socket.BT_SECURITY_MEDIUM, 0))
-s.connect((SERVER_ADDR, PSM_BLE, 0, ADDR_TYPE))
-print(f"[client] connected to {SERVER_ADDR} PSM=0x{PSM_BLE:04X}", flush=True)
+s.connect((SERVER_ADDR, PSM, 0, ADDR_TYPE))
+print("[client] connected", flush=True)
 
 for i in range(3):
     n = s.send(f"MSG-{i} from client".encode())
