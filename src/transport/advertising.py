@@ -26,24 +26,33 @@ BB_BEACON_COMPANY_ID = 0xFFFF
 _FLAGS_AD = bytes([0x02, 0x01, 0x06])
 
 # Manufacturer Specific Data AD: company ID 0xFFFF (LE) + magic + protocol version.
-_MFG_PAYLOAD = (
+_MFG_AD_STRUCTURE = (
     bytes([0x06, 0xFF])
     + BB_BEACON_COMPANY_ID.to_bytes(2, "little")
     + BB_BEACON_MAGIC
     + bytes([BB_BEACON_PROTOCOL_VERSION])
 )
 
-BB_BEACON_AD: bytes = _FLAGS_AD + _MFG_PAYLOAD
+# On-air AD (Flags + Manufacturer) — scanners / match_bb_beacon_in_ad.
+BB_BEACON_AD: bytes = _FLAGS_AD + _MFG_AD_STRUCTURE
+
+# btmgmt add-adv -d payload only: kernel mgmt sets Flags itself (type 0x01 rejected).
+BB_BEACON_ADV_DATA: bytes = _MFG_AD_STRUCTURE
 
 
 def build_bb_beacon_ad() -> bytes:
-    """Return the static BLE advertising data payload for BB presence."""
+    """Return the full on-air AD bytes (Flags + Manufacturer Specific Data)."""
     return BB_BEACON_AD
 
 
+def build_bb_beacon_adv_data() -> bytes:
+    """Return Manufacturer Specific Data for ``btmgmt add-adv -d``."""
+    return BB_BEACON_ADV_DATA
+
+
 def bb_beacon_ad_hex() -> str:
-    """Hex string for ``btmgmt add-adv -d <hex>``."""
-    return BB_BEACON_AD.hex()
+    """Hex string for ``btmgmt add-adv -d <hex>`` (Manufacturer data only)."""
+    return BB_BEACON_ADV_DATA.hex()
 
 
 def match_bb_beacon_manufacturer_data(data: bytes) -> bool:
@@ -118,7 +127,11 @@ class LEAdvertiser:
     re-arms it when BlueZ drops it. ``mute()`` is an alias for ``stop()``.
     """
 
-    _INSTANCE_RE = re.compile(r"^\s*Instance:\s*(\d+)", re.MULTILINE)
+    _ADVINFO_INSTANCE_RE = re.compile(r"^\s*Instance:\s*(\d+)\s*$", re.MULTILINE | re.IGNORECASE)
+    _ADVINFO_COUNT_RE = re.compile(
+        r"Instances list with (\d+) item",
+        re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -195,7 +208,7 @@ class LEAdvertiser:
     def _add_instance(self) -> bool:
         result = self._run(
             self._hci_index,
-            f"add-adv -d {self.ad_hex()} {self._instance_id}",
+            f"add-adv -c -d {self.ad_hex()} {self._instance_id}",
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
@@ -205,17 +218,31 @@ class LEAdvertiser:
         return True
 
     def _instance_present(self) -> bool:
-        result = self._run(self._hci_index, "info")
-        text = result.stdout or ""
-        if result.returncode != 0:
-            return False
-        for match in self._INSTANCE_RE.finditer(text):
-            if int(match.group(1)) != self._instance_id:
-                continue
-            chunk = text[match.start() : match.start() + 512]
-            normalized = chunk.replace(" ", "").lower()
-            if self.ad_hex().lower() in normalized:
-                return True
+        advinfo = self._run(self._hci_index, "advinfo")
+        if advinfo.returncode == 0 and self._instance_present_in_advinfo(advinfo.stdout or ""):
+            return True
+        info = self._run(self._hci_index, "info")
+        if info.returncode == 0 and self._instance_present_in_info(info.stdout or ""):
+            return True
+        return False
+
+    def _instance_present_in_advinfo(self, text: str) -> bool:
+        """True when ``btmgmt advinfo`` reports our advertising instance."""
+        instances = [int(m.group(1)) for m in self._ADVINFO_INSTANCE_RE.finditer(text)]
+        if instances:
+            return self._instance_id in instances
+        count_match = self._ADVINFO_COUNT_RE.search(text)
+        if count_match and int(count_match.group(1)) >= 1:
+            # Single-instance deployments: count-only advinfo (stock BlueZ) implies id 1.
+            return self._instance_id == 1
+        return False
+
+    @staticmethod
+    def _instance_present_in_info(text: str) -> bool:
+        """Fallback: ``current settings`` includes ``advertising``."""
+        for line in text.splitlines():
+            if "current settings:" in line.casefold():
+                return "advertising" in line.casefold()
         return False
 
     def _ensure_instance(self, *, force: bool = False) -> bool:

@@ -10,22 +10,64 @@ if _ROOT not in sys.path:
 
 from src.transport.advertising import (  # noqa: E402
     BB_BEACON_AD,
+    BB_BEACON_ADV_DATA,
     BB_BEACON_MAGIC,
     BB_BEACON_PROTOCOL_VERSION,
     LEAdvertiser,
     bb_beacon_ad_hex,
     build_bb_beacon_ad,
+    build_bb_beacon_adv_data,
     match_bb_beacon_in_ad,
     match_bb_beacon_manufacturer_data,
 )
 
+# TODO: recaler ces fixtures sur la sortie capturée des boards (btmgmt advinfo / info).
+# Format btmgmt réel — pas btmon/HCI decode.
+BTMGMT_ADVINFO_ACTIVE = """
+Supported flags: connectable general-discoverable limited-discoverable managed-flags tx-power appearance local-name
+Max advertising data len: 31
+Max scan response data len: 31
+Max instances: 10
+Instances list with 1 item
+Instance: 1
+"""
+
+BTMGMT_ADVINFO_EMPTY = """
+Supported flags: connectable general-discoverable limited-discoverable managed-flags tx-power appearance local-name
+Max advertising data len: 31
+Max scan response data len: 31
+Max instances: 10
+Instances list with 0 items
+"""
+
+BTMGMT_INFO_ADVERTISING = """
+Index list with 1 item
+hci0:	Primary controller
+	addr 40:D9:5A:8B:69:3F version 9 manufacturer 15 class 0x6c0000
+	supported settings: powered connectable discoverable bondable le advertising secure-conn
+	current settings: powered connectable le advertising secure-conn
+	name ubuntu
+"""
+
+BTMGMT_INFO_IDLE = """
+Index list with 1 item
+hci0:	Primary controller
+	addr 40:D9:5A:8B:69:3F version 9 manufacturer 15 class 0x6c0000
+	supported settings: powered connectable discoverable bondable le advertising secure-conn
+	current settings: powered connectable le secure-conn
+	name ubuntu
+"""
+
 
 def test_bb_beacon_static_payload() -> None:
     ad = build_bb_beacon_ad()
-    # 02 01 06 | 06 FF FF FF 42 42 01  (Flags + Manufacturer Specific Data)
+    mfg = build_bb_beacon_adv_data()
+    # On-air: 02 01 06 | 06 FF FF FF 42 42 01
     assert ad == bytes([0x02, 0x01, 0x06, 0x06, 0xFF, 0xFF, 0xFF, 0x42, 0x42, 0x01])
     assert ad == BB_BEACON_AD
-    assert bb_beacon_ad_hex() == "02010606ffffff424201"
+    assert mfg == bytes([0x06, 0xFF, 0xFF, 0xFF, 0x42, 0x42, 0x01])
+    assert mfg == BB_BEACON_ADV_DATA
+    assert bb_beacon_ad_hex() == "06ffffff424201"
     assert BB_BEACON_MAGIC == b"BB"
     assert BB_BEACON_PROTOCOL_VERSION == 0x01
 
@@ -38,34 +80,32 @@ def test_match_bb_beacon_manufacturer_data() -> None:
 
 def test_match_bb_beacon_in_ad() -> None:
     assert match_bb_beacon_in_ad(BB_BEACON_AD)
-    # Extra unrelated AD element before the BB beacon.
     prefixed = bytes([0x02, 0x01, 0x04]) + BB_BEACON_AD
     assert match_bb_beacon_in_ad(prefixed)
     assert not match_bb_beacon_in_ad(b"\x02\x01\x06")
     assert not match_bb_beacon_in_ad(bytes.fromhex("0606FFFF424201"))
 
 
+def test_instance_present_advinfo_and_info_fallback() -> None:
+    adv = LEAdvertiser(quiet=True)
+    assert adv._instance_present_in_advinfo(BTMGMT_ADVINFO_ACTIVE)
+    assert not adv._instance_present_in_advinfo(BTMGMT_ADVINFO_EMPTY)
+    assert adv._instance_present_in_info(BTMGMT_INFO_ADVERTISING)
+    assert not adv._instance_present_in_info(BTMGMT_INFO_IDLE)
+
+
 def test_le_advertiser_watchdog_rearms() -> None:
     calls: list[str] = []
-    present = {"ok": False}
+    present = {"ok": True}
 
     def fake_run(_idx: int, cmd: str) -> object:
         calls.append(cmd)
+        if cmd == "advinfo":
+            stdout = BTMGMT_ADVINFO_ACTIVE if present["ok"] else BTMGMT_ADVINFO_EMPTY
+            return type("R", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
         if cmd == "info":
-            if present["ok"]:
-
-                class _Result:
-                    returncode = 0
-                    stdout = (
-                        f"Advertising (0x0048) plen 13\n"
-                        f"        Instance: 1 (0x01)\n"
-                        f"        Data len: 10\n"
-                        f"        {LEAdvertiser.ad_hex()}\n"
-                    )
-                    stderr = ""
-
-                return _Result()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            stdout = BTMGMT_INFO_ADVERTISING if present["ok"] else BTMGMT_INFO_IDLE
+            return type("R", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
         return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     adv = LEAdvertiser(
@@ -75,19 +115,26 @@ def test_le_advertiser_watchdog_rearms() -> None:
         btmgmt_runner=fake_run,
     )
     adv.start()
-    assert any(cmd.startswith("add-adv") for cmd in calls)
+    assert any(cmd == f"add-adv -c -d {bb_beacon_ad_hex()} 1" for cmd in calls)
 
     present["ok"] = False
     time.sleep(0.12)
-    assert any(cmd.startswith("add-adv") for cmd in calls[1:])
+    assert any(cmd.startswith("add-adv -c -d") for cmd in calls[1:])
 
     adv.stop()
-    assert any(cmd.startswith("rm-adv") for cmd in calls)
+    assert any(cmd == "rm-adv 1" for cmd in calls)
     assert not adv.running
 
 
 def test_mute_is_stop() -> None:
-    adv = LEAdvertiser(quiet=True, btmgmt_runner=lambda _i, _c: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    ok = type("R", (), {"returncode": 0, "stdout": BTMGMT_ADVINFO_ACTIVE, "stderr": ""})()
+
+    def fake_run(_idx: int, cmd: str) -> object:
+        if cmd == "advinfo":
+            return ok
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    adv = LEAdvertiser(quiet=True, btmgmt_runner=fake_run)
     adv.start()
     adv.mute()
     assert not adv.running
@@ -100,6 +147,8 @@ if __name__ == "__main__":
     print("✅ match_bb_beacon_manufacturer_data")
     test_match_bb_beacon_in_ad()
     print("✅ match_bb_beacon_in_ad")
+    test_instance_present_advinfo_and_info_fallback()
+    print("✅ instance present advinfo + info fallback")
     test_le_advertiser_watchdog_rearms()
     print("✅ LEAdvertiser watchdog re-arms")
     test_mute_is_stop()
