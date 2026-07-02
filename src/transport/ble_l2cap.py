@@ -23,6 +23,8 @@ Functional two-board testing is out of scope for ``__main__`` (environment check
 from __future__ import annotations
 
 import errno
+import os
+import select
 import socket
 import struct
 import sys
@@ -118,6 +120,38 @@ def _bind_le_outbound(sock: socket.socket, *, bdaddr_type: int) -> None:
     """
     sock.bind((socket.BDADDR_ANY, 0, 0, bdaddr_type))
     _apply_le_flowctl(sock)
+
+
+def _connect_le_coc(
+    sock: socket.socket,
+    addr: tuple[str, int, int, int],
+    *,
+    timeout: float = 30.0,
+) -> None:
+    """
+    Blocking LE CoC ``connect``. BlueZ often returns ``EINPROGRESS`` (115) while
+    the LE link comes up — wait on the socket and check ``SO_ERROR``.
+    """
+    try:
+        sock.connect(addr)
+        return
+    except OSError as e:
+        if e.errno not in (errno.EINPROGRESS, errno.EALREADY):
+            raise
+
+    _, writable, exceptional = select.select([], [sock], [sock], timeout)
+    if exceptional:
+        err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if err:
+            raise OSError(err, os.strerror(err))
+    if not writable:
+        raise OSError(
+            errno.ETIMEDOUT,
+            f"BLE L2CAP connect to {addr[0]} timed out after {timeout:g}s",
+        )
+    err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+    if err:
+        raise OSError(err, os.strerror(err))
 
 
 def _probe_negotiated_mtu(sock: socket.socket, *, default: int) -> int:
@@ -289,7 +323,7 @@ class BLEL2CAPTransport:
 
             sock = _new_coc_socket()
             _bind_le_outbound(sock, bdaddr_type=self._bdaddr_type)
-            sock.connect(self._le_addr(bd_addr))
+            _connect_le_coc(sock, self._le_addr(bd_addr))
             mtu = _probe_negotiated_mtu(sock, default=self.mtu)
             self.mtu = min(self.mtu, mtu) if self.mtu else mtu
 

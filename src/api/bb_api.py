@@ -373,6 +373,8 @@ class BBNode:
             errno.ETIMEDOUT,
             errno.ECONNABORTED,
             errno.ECONNRESET,
+            errno.EINPROGRESS,
+            errno.EALREADY,
         ):
             return
         key = f"{e.errno}"
