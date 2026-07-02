@@ -1,23 +1,22 @@
-import socket, struct
+#!/usr/bin/env python3.14
+"""BLE L2CAP CoC echo server — same stack as ``BLEL2CAPTransport`` / all boards."""
+from __future__ import annotations
 
-PSM = 0x0081
-ADDR_TYPE = socket.BDADDR_LE_PUBLIC
+import os
+import sys
 
-s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-# 1) bind D'ABORD : type la source en LE ; (PSM + src LE) => passage auto en LE_FLOWCTL
-s.bind((socket.BDADDR_ANY, PSM, 0, ADDR_TYPE))
+from src.transport.ble_coc import open_listener, print_board_info  # noqa: E402
 
-# 2) BT_MODE maintenant accepté (état BT_BOUND + src LE) — sert d'assertion
-s.setsockopt(socket.SOL_BLUETOOTH, socket.BT_MODE, struct.pack("B", socket.BT_MODE_LE_FLOWCTL))
+print_board_info("server")
+s = open_listener(backlog=1)
 print("[server] BT_MODE = LE_FLOWCTL OK", flush=True)
-
-# 3) sécurité, puis listen
-s.setsockopt(socket.SOL_BLUETOOTH, socket.BT_SECURITY, struct.pack("BB", socket.BT_SECURITY_MEDIUM, 0))
-s.listen(1)
 print("[server] listening...", flush=True)
 
-conn, addr = s.accept()   # le socket accepté hérite du mode du parent
+conn, addr = s.accept()
 print(f"[server] connected by {addr}", flush=True)
 while True:
     data = conn.recv(1024)
@@ -25,6 +24,6 @@ while True:
         print("[server] peer closed", flush=True)
         break
     print(f"[server] GOT {len(data)} bytes: {data!r}", flush=True)
-    conn.send(b"ACK " + data)   # echo : prouve le sens serveur->client dans le même run
+    conn.send(b"ACK " + data)
 conn.close()
 s.close()

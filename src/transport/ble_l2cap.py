@@ -23,10 +23,7 @@ Functional two-board testing is out of scope for ``__main__`` (environment check
 from __future__ import annotations
 
 import errno
-import os
-import select
 import socket
-import struct
 import sys
 import threading
 from dataclasses import dataclass, replace
@@ -45,6 +42,7 @@ if not hasattr(socket, "BDADDR_LE_PUBLIC"):
     )
 
 from config import MTU_BLE, PSM_BLE, load_config  # noqa: E402
+from src.transport.ble_coc import LE_ADDR_TYPE, open_listener, open_outbound  # noqa: E402
 from src.transport.fragmentation import (  # noqa: E402
     HEADER_SIZE,
     Reassembler,
@@ -81,77 +79,6 @@ def _expected_socket_close(err: OSError, *, stopping: bool, replaced: bool) -> b
 
 def _should_initiate_connect(local_bd_addr: str, remote_bd_addr: str) -> bool:
     return local_bd_addr.upper() < remote_bd_addr.upper()
-
-
-def _new_coc_socket() -> socket.socket:
-    return socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
-
-
-def _apply_le_flowctl(sock: socket.socket) -> None:
-    """
-    After a LE ``bind``, assert L2CAP LE flow-control mode and pairing level.
-
-    Matches the working ``coc_server`` / ``coc_client`` sequence on BlueZ 3.14+.
-    """
-    bt_mode = getattr(socket, "BT_MODE", None)
-    le_flowctl = getattr(socket, "BT_MODE_LE_FLOWCTL", None)
-    if bt_mode is not None and le_flowctl is not None:
-        sock.setsockopt(socket.SOL_BLUETOOTH, bt_mode, struct.pack("B", le_flowctl))
-
-    bt_security = getattr(socket, "BT_SECURITY", None)
-    sec_medium = getattr(socket, "BT_SECURITY_MEDIUM", None)
-    if bt_security is not None and sec_medium is not None:
-        sock.setsockopt(
-            socket.SOL_BLUETOOTH, bt_security, struct.pack("BB", sec_medium, 0)
-        )
-
-
-def _bind_le_listen(sock: socket.socket, *, psm: int, bdaddr_type: int) -> None:
-    """Server/listener: bind LE PSM on any local address, then LE_FLOWCTL."""
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((socket.BDADDR_ANY, psm, 0, bdaddr_type))
-    _apply_le_flowctl(sock)
-
-
-def _bind_le_outbound(sock: socket.socket, *, bdaddr_type: int) -> None:
-    """
-    Outbound client: bind local LE with ``psm=0`` (kernel auto-allocates 0x80–0xFF),
-    then LE_FLOWCTL — required before ``connect`` on CoC.
-    """
-    sock.bind((socket.BDADDR_ANY, 0, 0, bdaddr_type))
-    _apply_le_flowctl(sock)
-
-
-def _connect_le_coc(
-    sock: socket.socket,
-    addr: tuple[str, int, int, int],
-    *,
-    timeout: float = 30.0,
-) -> None:
-    """
-    Blocking LE CoC ``connect``. BlueZ often returns ``EINPROGRESS`` (115) while
-    the LE link comes up — wait on the socket and check ``SO_ERROR``.
-    """
-    try:
-        sock.connect(addr)
-        return
-    except OSError as e:
-        if e.errno not in (errno.EINPROGRESS, errno.EALREADY):
-            raise
-
-    _, writable, exceptional = select.select([], [sock], [sock], timeout)
-    if exceptional:
-        err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-        if err:
-            raise OSError(err, os.strerror(err))
-    if not writable:
-        raise OSError(
-            errno.ETIMEDOUT,
-            f"BLE L2CAP connect to {addr[0]} timed out after {timeout:g}s",
-        )
-    err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-    if err:
-        raise OSError(err, os.strerror(err))
 
 
 def _probe_negotiated_mtu(sock: socket.socket, *, default: int) -> int:
@@ -207,9 +134,7 @@ class BLEL2CAPTransport:
             frozenset(a.upper() for a in allowed_peers) if allowed_peers is not None else None
         )
         self._bdaddr_type = (
-            int(bdaddr_type)
-            if bdaddr_type is not None
-            else int(socket.BDADDR_LE_PUBLIC)
+            int(bdaddr_type) if bdaddr_type is not None else LE_ADDR_TYPE
         )
 
         self.on_receive: Callable[[str, bytes], None] = on_receive or (lambda _a, _d: None)
@@ -248,9 +173,7 @@ class BLEL2CAPTransport:
 
             self._stop_evt.clear()
 
-            s = _new_coc_socket()
-            _bind_le_listen(s, psm=self._psm, bdaddr_type=self._bdaddr_type)
-            s.listen(self._backlog)
+            s = open_listener(psm=self._psm, backlog=self._backlog)
             self.mtu = _probe_negotiated_mtu(s, default=MTU_BLE)
 
             self._server_sock = s
@@ -321,10 +244,22 @@ class BLEL2CAPTransport:
             if existing and existing.sock.fileno() != -1:
                 return
 
-            sock = _new_coc_socket()
-            _bind_le_outbound(sock, bdaddr_type=self._bdaddr_type)
-            _connect_le_coc(sock, self._le_addr(bd_addr))
-            mtu = _probe_negotiated_mtu(sock, default=self.mtu)
+        try:
+            sock = open_outbound(bd_addr, psm=self._psm, addr_type=self._bdaddr_type)
+        except OSError:
+            raise
+
+        mtu = _probe_negotiated_mtu(sock, default=self.mtu)
+
+        with self._lock:
+            existing = self._conns.get(bd_addr)
+            if existing and existing.sock.fileno() != -1:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                return
+
             self.mtu = min(self.mtu, mtu) if self.mtu else mtu
 
             t = threading.Thread(
@@ -523,23 +458,24 @@ class BLEL2CAPTransport:
 
 
 if __name__ == "__main__":
+    from src.transport.ble_coc import bind_outbound, new_socket
+
     print(f"Python {sys.version_info.major}.{sys.version_info.minor} OK (>= 3.14)")
     print(f"socket.BDADDR_LE_PUBLIC = {socket.BDADDR_LE_PUBLIC}")
     print(f"socket.BDADDR_LE_RANDOM = {getattr(socket, 'BDADDR_LE_RANDOM', 'n/a')}")
 
     print(f"LE listen PSM=0x{PSM_BLE:04X} bdaddr_type=BDADDR_LE_PUBLIC")
 
-    s = _new_coc_socket()
+    s = open_listener(psm=PSM_BLE, backlog=1)
     try:
-        _bind_le_listen(s, psm=PSM_BLE, bdaddr_type=socket.BDADDR_LE_PUBLIC)
         mtu = _probe_negotiated_mtu(s, default=MTU_BLE)
         print(f"LE listen bind OK — BT_MODE=LE_FLOWCTL, mtu={mtu}")
     finally:
         s.close()
 
-    c = _new_coc_socket()
+    c = new_socket()
     try:
-        _bind_le_outbound(c, bdaddr_type=socket.BDADDR_LE_PUBLIC)
+        bind_outbound(c)
         print("LE outbound bind OK — BT_MODE=LE_FLOWCTL (psm=0 auto)")
     finally:
         c.close()
