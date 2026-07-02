@@ -143,7 +143,10 @@ def run_chat(
             time.sleep(1.0)
         role = "RELAY" if node.is_relay() else "LEAF"
         n = len(node.peers())
-        ChatLog.interrupt(f"local {node.local_bd_addr} · {role} · {n} peer(s)")
+        ChatLog.interrupt(
+            f"transport {cfg.transport_kind} · PSM 0x{cfg.psm:04X} · "
+            f"local {node.local_bd_addr} · {role} · {n} peer(s)"
+        )
         if targets:
             ChatLog.interrupt(f"dial: {', '.join(targets)}")
         elif n == 0:
