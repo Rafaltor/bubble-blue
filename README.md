@@ -64,15 +64,22 @@ This layer is responsible for maintaining neighborhood state and distributing th
 ## Software requirements
 
 - Linux user space with BlueZ (or compatible Bluetooth stack)
-- Python 3.x for orchestration, tooling, and experiments
+- **Python 3.14+** on boards using BLE L2CAP CoC (`BUBBLE_BLUE_TRANSPORT=ble_l2cap`); Python 3.12+ for BT Classic only
+- Python deps: `python3.14 -m pip install --user -r requirements.txt` (system `cryptography` is built for another Python and will panic on 3.14)
 - A C/C++ toolchain (gcc/clang) if building native components or helpers
 
 ## Installation
 
 1. Clone the repository.
 2. Copy `.env.example` to `.env` and set a shared group key (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
-3. Install BlueZ tools (`hciconfig`, `bluetoothctl`) and ensure Bluetooth is up.
-4. Run the node (requires `sudo` for L2CAP on most boards):
+3. Install Python dependencies for your runtime (required on Python 3.14 — system packages target 3.12):
+
+```bash
+python3.14 -m pip install --user -r requirements.txt
+```
+
+4. Install BlueZ tools (`hciconfig`, `bluetoothctl`) and ensure Bluetooth is up.
+5. Run the node (requires `sudo` for L2CAP on most boards):
 
 ```bash
 # Show local BD_ADDR and config

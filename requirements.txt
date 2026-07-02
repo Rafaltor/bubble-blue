@@ -1,0 +1,8 @@
+# Core (bb_node.py, crypto stack). Install for the Python you run on boards:
+#   python3.14 -m pip install --user -r requirements.txt
+cryptography>=42.0.0
+cffi>=2.0.0
+
+# Optional: sim web UI (sim/webapp/server.py)
+# fastapi>=0.100.0
+# uvicorn>=0.23.0
