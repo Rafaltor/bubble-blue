@@ -44,7 +44,7 @@ if not hasattr(socket, "BDADDR_LE_PUBLIC"):
         "(Python 3.14+ build with LE L2CAP support)"
     )
 
-from config import MTU_BLE, PSM_BLE, ble_bdaddr_type_socket, load_ble_bdaddr_type_label, load_config  # noqa: E402
+from config import MTU_BLE, PSM_BLE, load_config  # noqa: E402
 from src.transport.fragmentation import (  # noqa: E402
     HEADER_SIZE,
     Reassembler,
@@ -154,18 +154,6 @@ def _connect_le_coc(
         raise OSError(err, os.strerror(err))
 
 
-def _peer_bdaddr_types_to_try(preferred: int) -> list[int]:
-    """Try preferred remote LE type, then the alternate (Arduino often needs random)."""
-    public = getattr(socket, "BDADDR_LE_PUBLIC", None)
-    random = getattr(socket, "BDADDR_LE_RANDOM", None)
-    if public is None or random is None:
-        return [preferred]
-    alternate = random if preferred == public else public
-    if alternate == preferred:
-        return [preferred]
-    return [preferred, alternate]
-
-
 def _probe_negotiated_mtu(sock: socket.socket, *, default: int) -> int:
     """Read BT_SNDMTU/BT_RCVMTU when the platform exposes them."""
     for name in ("BT_SNDMTU", "BT_RCVMTU", "BT_MTU"):
@@ -221,9 +209,8 @@ class BLEL2CAPTransport:
         self._bdaddr_type = (
             int(bdaddr_type)
             if bdaddr_type is not None
-            else ble_bdaddr_type_socket()
+            else int(socket.BDADDR_LE_PUBLIC)
         )
-        self._bdaddr_type_label = load_ble_bdaddr_type_label()
 
         self.on_receive: Callable[[str, bytes], None] = on_receive or (lambda _a, _d: None)
         self.on_peer_connected = on_peer_connected
@@ -277,7 +264,7 @@ class BLEL2CAPTransport:
         _tlog(
             self._node,
             f"BLE L2CAP listen src={self._cfg.local_bd_addr} psm=0x{self._psm:04X} "
-            f"mtu={self.mtu} bdaddr_type={self._bdaddr_type_label}",
+            f"mtu={self.mtu} bdaddr_type={self._bdaddr_type}",
             quiet=self._quiet,
         )
         if self._allowed_peers is not None:
@@ -329,40 +316,14 @@ class BLEL2CAPTransport:
             return
 
         is_new = False
-        last_err: OSError | None = None
         with self._lock:
             existing = self._conns.get(bd_addr)
             if existing and existing.sock.fileno() != -1:
                 return
 
-            sock: socket.socket | None = None
-            for remote_type in _peer_bdaddr_types_to_try(self._bdaddr_type):
-                candidate = _new_coc_socket()
-                try:
-                    _bind_le_outbound(candidate, bdaddr_type=self._bdaddr_type)
-                    _connect_le_coc(
-                        candidate,
-                        (bd_addr.upper(), self._psm, 0, remote_type),
-                    )
-                    sock = candidate
-                    break
-                except OSError as e:
-                    last_err = e
-                    try:
-                        candidate.close()
-                    except OSError:
-                        pass
-                    _tlog(
-                        self._node,
-                        f"BLE L2CAP connect try dst={bd_addr} remote_type={remote_type} "
-                        f"failed: {e}",
-                        quiet=self._quiet,
-                    )
-
-            if sock is None:
-                assert last_err is not None
-                raise last_err
-
+            sock = _new_coc_socket()
+            _bind_le_outbound(sock, bdaddr_type=self._bdaddr_type)
+            _connect_le_coc(sock, self._le_addr(bd_addr))
             mtu = _probe_negotiated_mtu(sock, default=self.mtu)
             self.mtu = min(self.mtu, mtu) if self.mtu else mtu
 

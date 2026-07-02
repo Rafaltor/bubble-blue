@@ -32,7 +32,7 @@ def _require_crypto_deps() -> None:
 
 _require_crypto_deps()
 
-from config import BubbleBlueConfig, config_warnings, load_ble_bdaddr_type_label, load_config, print_config
+from config import BubbleBlueConfig, config_warnings, load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_commands import (
     CHAT_HELP,
@@ -145,7 +145,6 @@ def run_chat(
         n = len(node.peers())
         ChatLog.interrupt(
             f"transport {cfg.transport_kind} · PSM 0x{cfg.psm:04X} · "
-            f"ble_addr {load_ble_bdaddr_type_label() if cfg.transport_kind == 'ble_l2cap' else 'n/a'} · "
             f"local {node.local_bd_addr} · {role} · {n} peer(s)"
         )
         if targets:
