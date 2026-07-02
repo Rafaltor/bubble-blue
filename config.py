@@ -16,7 +16,7 @@ PKT_REKEY   = 0x05
 
 # L2CAP protocol service multiplexors
 PSM_BT_CLASSIC = 0x1001
-PSM_BLE = 0x0080  # LE dynamic PSM range (distinct from BR/EDR)
+PSM_BLE = 0x0081  # LE CoC PSM (dynamic range 0x80–0xFF; validated on hardware)
 
 # Prudent L2CAP/CoC MTU per transport (full BB wire frame including header + tag).
 MTU_BT_CLASSIC = 1021

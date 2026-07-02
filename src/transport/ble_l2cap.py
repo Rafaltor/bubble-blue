@@ -6,9 +6,12 @@ Interchangeable with ``L2CAPTransport`` via ``make_transport("ble_l2cap")``.
 
 Differences from BT Classic ``l2cap.py``:
   1. ``SOCK_SEQPACKET`` + 4-tuple LE address ``(bd, psm, cid, bdaddr_type)``
-  2. ``PSM_BLE`` (0x0080) from config
-  3. Negotiated MTU (target ``MTU_BLE`` = 512), exposed as ``self.mtu``
-  4. Optional fragmentation (``fragmentation.py``) only when wire size > MTU
+  2. ``PSM_BLE`` (0x0081) from config — LE CoC listen PSM
+  3. BlueZ LE CoC bring-up (``coc_server`` / ``coc_client``): bind LE first,
+     then ``BT_MODE_LE_FLOWCTL`` + ``BT_SECURITY_MEDIUM``; outbound uses
+     ``bind(BDADDR_ANY, psm=0)`` before ``connect``
+  4. Negotiated MTU (target ``MTU_BLE`` = 512), exposed as ``self.mtu``
+  5. Optional fragmentation (``fragmentation.py``) only when wire size > MTU
 
 Normal chat (≤ max_payload) is sent **without** fragment headers. On receive,
 packets with ``FRAG_MARKER`` (0xFB) at byte 0 are reassembled per peer; all
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import errno
 import socket
+import struct
 import sys
 import threading
 from dataclasses import dataclass, replace
@@ -75,6 +79,45 @@ def _expected_socket_close(err: OSError, *, stopping: bool, replaced: bool) -> b
 
 def _should_initiate_connect(local_bd_addr: str, remote_bd_addr: str) -> bool:
     return local_bd_addr.upper() < remote_bd_addr.upper()
+
+
+def _new_coc_socket() -> socket.socket:
+    return socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+
+
+def _apply_le_flowctl(sock: socket.socket) -> None:
+    """
+    After a LE ``bind``, assert L2CAP LE flow-control mode and pairing level.
+
+    Matches the working ``coc_server`` / ``coc_client`` sequence on BlueZ 3.14+.
+    """
+    bt_mode = getattr(socket, "BT_MODE", None)
+    le_flowctl = getattr(socket, "BT_MODE_LE_FLOWCTL", None)
+    if bt_mode is not None and le_flowctl is not None:
+        sock.setsockopt(socket.SOL_BLUETOOTH, bt_mode, struct.pack("B", le_flowctl))
+
+    bt_security = getattr(socket, "BT_SECURITY", None)
+    sec_medium = getattr(socket, "BT_SECURITY_MEDIUM", None)
+    if bt_security is not None and sec_medium is not None:
+        sock.setsockopt(
+            socket.SOL_BLUETOOTH, bt_security, struct.pack("BB", sec_medium, 0)
+        )
+
+
+def _bind_le_listen(sock: socket.socket, *, psm: int, bdaddr_type: int) -> None:
+    """Server/listener: bind LE PSM on any local address, then LE_FLOWCTL."""
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((socket.BDADDR_ANY, psm, 0, bdaddr_type))
+    _apply_le_flowctl(sock)
+
+
+def _bind_le_outbound(sock: socket.socket, *, bdaddr_type: int) -> None:
+    """
+    Outbound client: bind local LE with ``psm=0`` (kernel auto-allocates 0x80–0xFF),
+    then LE_FLOWCTL — required before ``connect`` on CoC.
+    """
+    sock.bind((socket.BDADDR_ANY, 0, 0, bdaddr_type))
+    _apply_le_flowctl(sock)
 
 
 def _probe_negotiated_mtu(sock: socket.socket, *, default: int) -> int:
@@ -171,9 +214,8 @@ class BLEL2CAPTransport:
 
             self._stop_evt.clear()
 
-            s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(self._le_addr(self._cfg.local_bd_addr))
+            s = _new_coc_socket()
+            _bind_le_listen(s, psm=self._psm, bdaddr_type=self._bdaddr_type)
             s.listen(self._backlog)
             self.mtu = _probe_negotiated_mtu(s, default=MTU_BLE)
 
@@ -245,9 +287,8 @@ class BLEL2CAPTransport:
             if existing and existing.sock.fileno() != -1:
                 return
 
-            sock = socket.socket(
-                socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP
-            )
+            sock = _new_coc_socket()
+            _bind_le_outbound(sock, bdaddr_type=self._bdaddr_type)
             sock.connect(self._le_addr(bd_addr))
             mtu = _probe_negotiated_mtu(sock, default=self.mtu)
             self.mtu = min(self.mtu, mtu) if self.mtu else mtu
@@ -452,18 +493,22 @@ if __name__ == "__main__":
     print(f"socket.BDADDR_LE_PUBLIC = {socket.BDADDR_LE_PUBLIC}")
     print(f"socket.BDADDR_LE_RANDOM = {getattr(socket, 'BDADDR_LE_RANDOM', 'n/a')}")
 
-    cfg = replace(load_config(), transport_kind="ble_l2cap", psm=PSM_BLE)
-    addr = (cfg.local_bd_addr, PSM_BLE, 0, socket.BDADDR_LE_PUBLIC)
-    print(f"LE bind probe address: {addr}")
+    print(f"LE listen PSM=0x{PSM_BLE:04X} bdaddr_type=BDADDR_LE_PUBLIC")
 
-    s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+    s = _new_coc_socket()
     try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(addr)
+        _bind_le_listen(s, psm=PSM_BLE, bdaddr_type=socket.BDADDR_LE_PUBLIC)
         mtu = _probe_negotiated_mtu(s, default=MTU_BLE)
-        print(f"bind OK — negotiated/default mtu={mtu}")
+        print(f"LE listen bind OK — BT_MODE=LE_FLOWCTL, mtu={mtu}")
     finally:
         s.close()
+
+    c = _new_coc_socket()
+    try:
+        _bind_le_outbound(c, bdaddr_type=socket.BDADDR_LE_PUBLIC)
+        print("LE outbound bind OK — BT_MODE=LE_FLOWCTL (psm=0 auto)")
+    finally:
+        c.close()
 
     print(
         "\n✅ BLE L2CAP environment self-check passed "
