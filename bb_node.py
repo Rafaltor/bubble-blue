@@ -6,6 +6,32 @@ import subprocess
 import sys
 import time
 
+
+def _require_crypto_deps() -> None:
+    """Fail fast with a clear message when cryptography/cffi are missing for this interpreter."""
+    try:
+        import _cffi_backend  # noqa: F401
+        from cryptography.exceptions import InvalidTag  # noqa: F401
+    except Exception:
+        print(
+            f"\nBUBBLE-BLUE: cryptography/cffi not available for {sys.executable}\n\n"
+            "bb_node.py is usually run with sudo for L2CAP; packages installed via\n"
+            "  python3.14 -m pip install --user ...\n"
+            "live in ~/.local and are NOT visible to root.\n\n"
+            "Fix (from repo root):\n"
+            "  ./scripts/install_py314_deps.sh\n"
+            "  # or:\n"
+            "  sudo python3.14 -m pip install --break-system-packages --ignore-installed -r requirements.txt\n\n"
+            "Without sudo (local tests only):\n"
+            "  python3.14 -m pip install --user -r requirements.txt\n"
+            "  python3.14 bb_node.py --chat\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+
+
+_require_crypto_deps()
+
 from config import BubbleBlueConfig, config_warnings, load_config, print_config
 from src.api.bb_api import BBNode, merge_topology
 from src.api.chat_commands import (

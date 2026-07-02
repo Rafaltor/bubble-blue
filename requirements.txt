@@ -1,4 +1,13 @@
-# Core (bb_node.py, crypto stack). Install for the Python you run on boards:
+# Core (bb_node.py, crypto stack).
+#
+# bb_node.py is normally run with sudo (L2CAP). User-site installs (--user) are
+# NOT visible to root — install for the same interpreter sudo uses:
+#
+#   ./scripts/install_py314_deps.sh
+#   # or:
+#   sudo python3.14 -m pip install --break-system-packages --ignore-installed -r requirements.txt
+#
+# Without sudo (tests only):
 #   python3.14 -m pip install --user -r requirements.txt
 cryptography>=42.0.0
 cffi>=2.0.0

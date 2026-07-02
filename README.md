@@ -72,11 +72,15 @@ This layer is responsible for maintaining neighborhood state and distributing th
 
 1. Clone the repository.
 2. Copy `.env.example` to `.env` and set a shared group key (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
-3. Install Python dependencies for your runtime (required on Python 3.14 — system packages target 3.12):
+3. Install Python dependencies for **the same Python you run with sudo** (required on Python 3.14):
 
 ```bash
-python3.14 -m pip install --user -r requirements.txt
+./scripts/install_py314_deps.sh
+# equivalent:
+sudo python3.14 -m pip install --break-system-packages --ignore-installed -r requirements.txt
 ```
+
+`pip install --user` alone is not enough when using `sudo python3.14` — root does not see `~/.local`.
 
 4. Install BlueZ tools (`hciconfig`, `bluetoothctl`) and ensure Bluetooth is up.
 5. Run the node (requires `sudo` for L2CAP on most boards):
