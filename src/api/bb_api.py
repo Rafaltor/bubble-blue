@@ -417,6 +417,8 @@ class BBNode:
         if bd not in self._active_peers:
             return
         self._active_peers.discard(bd)
+        if self._hello_mgr is not None:
+            self._hello_mgr.on_peer_disconnected(bd)
         if self.on_peer_disconnected:
             self.on_peer_disconnected(bd)
 

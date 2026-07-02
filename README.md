@@ -31,6 +31,27 @@ The stack is organized into layered components:
 
 This layer is responsible for maintaining neighborhood state and distributing the minimal information needed for routing/forwarding decisions.
 
+## Mesh ouvert et bulles privées
+
+BUBBLE-BLUE sépare volontairement **deux plans** :
+
+| Plan | Rôle | Gouverné par |
+|------|------|--------------|
+| **Topologique** (beacon, scan, auto-connect, Hellos publics, CDS) | Découverte, adjacence L2CAP, élection RELAY/LEAF, forward opaque | **Ouvert** à tout nœud BB, quel que soit son groupe |
+| **Applicatif** (identité, chat, chiffrement) | Résolution d’identité (partie privée des Hellos), déchiffrement `PKT_DATA`, appartenance au groupe | **Clé de groupe** (`BUBBLE_BLUE_GROUP_KEY`) |
+
+**Beacon universel** — chaque nœud annonce un marqueur BB statique (Manufacturer Data `0xFFFF` + magic `BB`, voir `src/transport/advertising.py`). Tout observateur peut reconnaître un participant Bubble-Blue sans connaître sa clé.
+
+**Scan & auto-connect** — `PresenceScanner` (`src/control/presence_scanner.py`) détecte les candidats BB ; la couche transport établit les liens L2CAP sans liste d’adresses préconfigurée.
+
+**Hellos publics & CDS** — la partie publique des Hellos et l’algorithme CDS (Wu-Li / MPR) fonctionnent entre nœuds de groupes différents : un relais inter-groupe voit la topologie anonyme et peut **forwarder des paquets opaques** sans les déchiffrer.
+
+**Bulles privées** — seule la couche applicative est « fermée » : sans la bonne clé, un nœud logue au plus `paquet non déchiffrable` et **n’expulse jamais** le relais ; le forward multihop continue.
+
+**Override labo** — `BUBBLE_BLUE_GROUP_MEMBERS`, `BUBBLE_BLUE_TOPOLOGY` et `--topology` restent des **restrictions explicites** pour cadrer une expérience (ligne A—M—B, pairs offline, etc.). En production opportuniste, un `.env` réduit à clé + transport suffit.
+
+Protocole de validation 3 boards (deux temps) : [docs/CONFIGURATION.md](docs/CONFIGURATION.md#mesh-ouvert-et-bulles-privées).
+
 ### Forwarding plane
 
 - Multihop forwarding of BUBBLE-BLUE packets based on control-plane state.
@@ -89,14 +110,17 @@ sudo python3.14 -m pip install --break-system-packages --ignore-installed -r req
 # Show local BD_ADDR and config
 python3 config.py
 
-# Discover nearby controllers
+# Discover nearby controllers (BB beacons included when ManufacturerData is present)
 sudo python3 bb_node.py --scan 8
 
-# Interactive mesh chat (configure peers in .env or --topology)
+# Interactive mesh chat — open mesh: key + transport only in .env
+# Lab override: list peers in GROUP_MEMBERS or --topology
 sudo python3 bb_node.py --chat
 ```
 
-**Two-node minimum:** same `BUBBLE_BLUE_GROUP_KEY` on both boards; each board lists the other's BD_ADDR in `BUBBLE_BLUE_GROUP_MEMBERS` (or use `--topology` on one side). Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+**Minimal open-mesh setup:** same transport on every board; `BUBBLE_BLUE_GROUP_KEY` defines the **private bubble** (who can decrypt chat). Peer lists (`GROUP_MEMBERS`, `--topology`) are optional **lab restrictions** — see [Mesh ouvert et bulles privées](docs/CONFIGURATION.md#mesh-ouvert-et-bulles-privées).
+
+**Two-node lab (explicit peers):** same group key; each board lists the other's BD_ADDR in `BUBBLE_BLUE_GROUP_MEMBERS` (or use `--topology`). Details: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Repository structure
 
@@ -118,8 +142,9 @@ Runnable stack on Linux + BlueZ:
 - **Entrypoint:** `bb_node.py` (`--chat`, `--topology`, `--scan`, `--send`)
 - **API:** `src/api/bb_api.py` (`BBNode`)
 - **Planes:** L2CAP transport, Hello/CDS control, PKT_DATA forwarder, AES-GCM group crypto
+- **Open mesh layer:** universal BB beacon (`LEAdvertiser`), periodic presence scan (`PresenceScanner`), cross-group Hello/CDS
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for environment variables and deployment patterns.
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for environment variables, open-mesh vs lab overrides, and the 3-board validation protocol.
 
 ## Security notes
 

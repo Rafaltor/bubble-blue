@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from src.control.hello import build_hello, parse_hello_private, parse_hello_public
+from src.control.hello import build_hello, known_neighbors_same_group, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
 from src.forwarding.cds import CDSAlgorithm, compute_cds
 
@@ -42,7 +42,7 @@ def build_merged_table(
             group_key,
             addr,
             seq=i + 1,
-            known_neighbors=neighbor_map[addr],
+            known_neighbors=known_neighbors_same_group(group_key, neighbor_map[addr]),
             local_public_key=b"\x00" * 31 + bytes([i + 1]),
             anon_id_key=group_key,
             ts_ms=1_000 + i,

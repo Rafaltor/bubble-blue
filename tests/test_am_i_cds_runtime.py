@@ -24,6 +24,7 @@ if _ROOT not in sys.path:
 from src.control.hello import (  # noqa: E402
     build_hello,
     compute_anon_id,
+    known_neighbors_same_group,
     parse_hello_private,
     parse_hello_public,
 )
@@ -40,7 +41,7 @@ _CHARLIE = "00:11:22:33:44:55"
 def _hello_from(src_bd: str, neighbors: list[str], seq: int) -> bytes:
     pubkey = b"\x00" * 31 + bytes([seq])
     return build_hello(
-        _GK, src_bd.upper(), seq=seq, known_neighbors=[n.upper() for n in neighbors],
+        _GK, src_bd.upper(), seq=seq, known_neighbors=known_neighbors_same_group(_GK, neighbors),
         local_public_key=pubkey, anon_id_key=_GK, ts_ms=1_000 + seq,
     )
 

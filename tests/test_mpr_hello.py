@@ -13,6 +13,7 @@ from config import load_config  # noqa: E402
 from src.control.hello import (  # noqa: E402
     build_hello,
     compute_anon_id,
+    known_neighbors_same_group,
     parse_hello_private,
     parse_hello_public,
 )
@@ -64,8 +65,13 @@ def _make_manager(local_bd: str, peers: list[str]) -> tuple[HelloManager, _FakeT
 def _hello_from(src_bd: str, neighbors: list[str], seq: int = 1) -> bytes:
     pubkey = BBKeyStore.from_group_key(_GK, src_bd.upper()).local_public_key
     return build_hello(
-        _GK, src_bd.upper(), seq=seq, known_neighbors=[n.upper() for n in neighbors],
-        local_public_key=pubkey, anon_id_key=_GK, ts_ms=1_000 + seq,
+        _GK,
+        src_bd.upper(),
+        seq=seq,
+        known_neighbors=known_neighbors_same_group(_GK, neighbors),
+        local_public_key=pubkey,
+        anon_id_key=_GK,
+        ts_ms=1_000 + seq,
     )
 
 
@@ -85,37 +91,37 @@ def test_hello_manager_announces_local_mpr() -> None:
     pub = parse_hello_public(transport.sent[0][1])
     mpr = set(pub["mpr_anon_ids"])
     assert mpr == {compute_anon_id(_GK, _Y)}, f"expected MPR={{Y}}, got {mpr}"
-    # The advertised MPR must be a subset of the advertised neighbors.
     assert mpr <= set(pub["neighbor_anon_ids"])
 
 
 def test_announced_mpr_activates_rule_b() -> None:
     """A peer in the smallest-id neighbor's announced MPR set relays (rule b)."""
-    # Choose the central node to be the GLOBAL-MIN id so it is Y* for its peers.
     addrs = [_X, _Y, _Z]
     by_id = sorted(addrs, key=lambda a: int.from_bytes(compute_anon_id(_GK, a), "big"))
     center, p1, p2 = by_id[0], by_id[1], by_id[2]
     a_center, a_p1, a_p2 = (compute_anon_id(_GK, center), compute_anon_id(_GK, p1), compute_anon_id(_GK, p2))
 
-    # Merged view (am_i_cds needs each node's own advertised list present): full
-    # triangle so all three are mutually adjacent. center advertises p1 as its MPR.
     merged = NeighborTable()
     hellos = {
-        center: ([p1, p2], [a_p1]),  # center elects p1 as MPR
+        center: ([p1, p2], [a_p1]),
         p1: ([center, p2], None),
         p2: ([center, p1], None),
     }
     for src_bd, (nbrs, mprs) in hellos.items():
         pubkey = BBKeyStore.from_group_key(_GK, src_bd.upper()).local_public_key
         pkt = build_hello(
-            _GK, src_bd.upper(), seq=1, known_neighbors=[n.upper() for n in nbrs],
-            local_public_key=pubkey, anon_id_key=_GK, mpr_anon_ids=mprs, ts_ms=2_000,
+            _GK,
+            src_bd.upper(),
+            seq=1,
+            known_neighbors=known_neighbors_same_group(_GK, nbrs),
+            local_public_key=pubkey,
+            anon_id_key=_GK,
+            mpr_anon_ids=mprs,
+            ts_ms=2_000,
         )
         merged.update_from_hello(parse_hello_public(pkt), parse_hello_private(pkt, _GK))
 
-    # p1 is in center's (smallest-id neighbor) announced MPR → RELAY via rule (b).
     assert am_i_cds(a_p1, merged, {a_center, a_p2}, CDSAlgorithm.MPR) is True
-    # p2 is NOT in center's announced MPR → does not relay.
     assert am_i_cds(a_p2, merged, {a_center, a_p1}, CDSAlgorithm.MPR) is False
 
 

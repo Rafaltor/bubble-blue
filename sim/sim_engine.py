@@ -132,11 +132,16 @@ class SimEngine:
         """
         One discrete Hello cycle: every node sends Hellos, then roles refresh.
 
+        Two sub-rounds per step: the first learns peer ``anon_id`` values from
+        received Hellos; the second advertises those learned ids (list A). Real
+        hardware needs at least one received Hello before a peer is announcable.
+
         Delivery is synchronous (SimBus.deliver), so all Hellos propagate before
         role recomputation within this call.
         """
-        for bd in sorted(self.nodes):
-            self.nodes[bd].hello_mgr._send_hellos()
+        for _ in range(2):
+            for bd in sorted(self.nodes):
+                self.nodes[bd].hello_mgr._send_hellos()
         for bd in sorted(self.nodes):
             self.nodes[bd].refresh_role()
 

@@ -603,7 +603,7 @@ def _build_linear_topology_table(group_key: bytes, addrs: list[str]) -> Neighbor
     """
     Build a merged NeighborTable for a line A-B-C-D-E from Hello exchanges.
     """
-    from src.control.hello import build_hello, parse_hello_private, parse_hello_public
+    from src.control.hello import build_hello, known_neighbors_same_group, parse_hello_private, parse_hello_public
     from src.control.neighbors import NeighborTable
 
     merged = NeighborTable()
@@ -619,7 +619,7 @@ def _build_linear_topology_table(group_key: bytes, addrs: list[str]) -> Neighbor
             group_key,
             addr,
             seq=i + 1,
-            known_neighbors=neighbors,
+            known_neighbors=known_neighbors_same_group(group_key, neighbors),
             local_public_key=b"\x00" * 31 + bytes([i + 1]),
             ts_ms=1_000 + i,
         )
@@ -636,7 +636,7 @@ def _build_mesh_topology_table(
     neighbor_map: dict[str, list[str]],
 ) -> NeighborTable:
     """Build NeighborTable from per-node neighbor lists (e.g. full triangle)."""
-    from src.control.hello import build_hello, parse_hello_private, parse_hello_public
+    from src.control.hello import build_hello, known_neighbors_same_group, parse_hello_private, parse_hello_public
     from src.control.neighbors import NeighborTable
 
     merged = NeighborTable()
@@ -646,7 +646,7 @@ def _build_mesh_topology_table(
             group_key,
             addr,
             seq=i + 1,
-            known_neighbors=neighbors,
+            known_neighbors=known_neighbors_same_group(group_key, neighbors),
             local_public_key=b"\x00" * 31 + bytes([i + 1]),
             ts_ms=1_000 + i,
         )
@@ -926,6 +926,7 @@ if __name__ == "__main__":
     # NOT a local recomputation. Triangle A,B,C where A (global-min) advertises
     # B as its only MPR. Then B relays (rule b via A's announce), C does not.
     from src.control.hello import build_hello as _bh
+    from src.control.hello import known_neighbors_same_group as _kn
     from src.control.hello import parse_hello_private as _ppriv
     from src.control.hello import parse_hello_public as _ppub
     from src.control.neighbors import NeighborTable as _NT
@@ -940,7 +941,7 @@ if __name__ == "__main__":
         (c_addr, [a_addr, b_addr], None),
     ):
         pkt = _bh(
-            group_key, src_addr, seq=1, known_neighbors=nbrs,
+            group_key, src_addr, seq=1, known_neighbors=_kn(group_key, nbrs),
             local_public_key=pubkey, mpr_anon_ids=mprs, ts_ms=5_000,
         )
         rt.update_from_hello(_ppub(pkt), _ppriv(pkt, group_key))
@@ -956,11 +957,11 @@ if __name__ == "__main__":
     # Conservative behavior: if Y*'s MPR Hello hasn't been received, do not relay.
     rt_blind = _NT()
     pkt_b = _bh(
-        group_key, b_addr, seq=1, known_neighbors=[a_addr, c_addr],
+        group_key, b_addr, seq=1, known_neighbors=_kn(group_key, [a_addr, c_addr]),
         local_public_key=pubkey, ts_ms=6_000,
     )
     pkt_c = _bh(
-        group_key, c_addr, seq=1, known_neighbors=[a_addr, b_addr],
+        group_key, c_addr, seq=1, known_neighbors=_kn(group_key, [a_addr, b_addr]),
         local_public_key=pubkey, ts_ms=6_000,
     )
     # Note: no Hello from A → get_mpr() has no entry for Y*=A.

@@ -16,6 +16,7 @@ from src.security.packet import bd_addr_to_bytes, bytes_to_bd_addr
 
 ANON_ID_SIZE = 8
 X25519_PUBLIC_KEY_SIZE = 32
+KnownNeighbor = tuple[bytes, str]  # (learned anon_id, bd_addr for private zip)
 _PRIVATE_HELLO_VERSION = 0x01
 _PRIVATE_HELLO_VERSION_EPOCH = 0x02
 
@@ -34,12 +35,22 @@ _HELLO_PUBLIC_PREFIX = struct.Struct("!B8sLQB")
 
 
 def compute_anon_id(group_key: bytes, bd_addr: str) -> bytes:
-    """Return 8-byte anonymous ID: HMAC-SHA256(group_key, bd_addr)[:8]."""
+    """Return 8-byte anonymous ID for **this node only**: HMAC-SHA256(group_key, bd_addr)[:8]."""
     if len(group_key) != AES_KEY_SIZE:
         raise ValueError(f"group_key must be {AES_KEY_SIZE} bytes (got {len(group_key)})")
     addr_b = bd_addr_to_bytes(bd_addr)
     digest = hmac.new(group_key, addr_b, hashlib.sha256).digest()
     return digest[:ANON_ID_SIZE]
+
+
+def known_neighbors_same_group(group_key: bytes, bd_addrs: list[str]) -> list[KnownNeighbor]:
+    """
+    Build ``(anon_id, bd_addr)`` pairs when all nodes share one bootstrap key.
+
+    Tests and sim oracle tables only — runtime Hello uses anon_ids **learned**
+    from received Hellos, never recomputed for remote peers.
+    """
+    return [(compute_anon_id(group_key, bd), bd.upper()) for bd in bd_addrs]
 
 
 def _pack_private_plaintext(
@@ -143,7 +154,7 @@ def build_hello(
     group_key: bytes,
     local_bd_addr: str,
     seq: int,
-    known_neighbors: list[str],
+    known_neighbors: list[KnownNeighbor],
     local_public_key: bytes,
     *,
     ts_ms: int | None = None,
@@ -154,12 +165,12 @@ def build_hello(
     """
     Build a BB Hello packet (public cleartext + group-encrypted private part).
 
+    ``known_neighbors``: ``(anon_id, bd_addr)`` pairs — anon_ids are **learned**
+    from received Hellos (never recomputed here). Public and private neighbor
+    lists are zipped in the same order (AAD covers both + MPR block).
+
     ``group_key``: current epoch group key (encrypts the private part).
-    ``anon_id_key``: bootstrap PSK for stable ``anon_id`` (defaults to ``group_key``).
-    ``epoch``: monotonic group epoch advertised in the private part (gossip trigger).
-    ``mpr_anon_ids``: anon_ids (8B each) elected as multipoint relays, advertised
-        in cleartext in the public MPR block. Must be a subset of the advertised
-        neighbor anon_ids. Defaults to None → n_mpr = 0.
+    ``anon_id_key``: bootstrap PSK for **local** ``anon_id`` only.
     """
     if not (0 <= int(seq) <= 0xFFFFFFFF):
         raise ValueError("seq must fit in uint32")
@@ -169,7 +180,15 @@ def build_hello(
 
     aid_key = anon_id_key if anon_id_key is not None else group_key
     anon_id = compute_anon_id(aid_key, local_bd_addr)
-    neighbor_anon_ids = [compute_anon_id(aid_key, n) for n in known_neighbors]
+
+    neighbor_anon_ids: list[bytes] = []
+    neighbor_bd_addrs: list[str] = []
+    for aid, bd in known_neighbors:
+        if len(aid) != ANON_ID_SIZE:
+            raise ValueError(f"neighbor anon_id must be {ANON_ID_SIZE} bytes (got {len(aid)})")
+        neighbor_anon_ids.append(bytes(aid))
+        neighbor_bd_addrs.append(str(bd).upper())
+
     n_pub = len(neighbor_anon_ids)
     if n_pub > 255:
         raise ValueError("too many public neighbors (max 255)")
@@ -196,7 +215,7 @@ def build_hello(
 
     # Private part — BD addresses + X25519 pubkey; visible only to group members.
     priv_plain = _pack_private_plaintext(
-        local_bd_addr, known_neighbors, local_public_key, epoch=int(epoch)
+        local_bd_addr, neighbor_bd_addrs, local_public_key, epoch=int(epoch)
     )
     private_enc = _encrypt_private(group_key, priv_plain, aad=public)
     if len(private_enc) > 0xFFFF:
@@ -303,7 +322,8 @@ if __name__ == "__main__":
     print("✅ compute_anon_id: OK")
 
     local_pubkey = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    pkt = build_hello(group_key, local, seq=7, known_neighbors=[n1, n2], local_public_key=local_pubkey)
+    nbrs_ac = known_neighbors_same_group(group_key, [n1, n2])
+    pkt = build_hello(group_key, local, seq=7, known_neighbors=nbrs_ac, local_public_key=local_pubkey)
     pub = parse_hello_public(pkt)
     assert pub["seq"] == 7
     assert len(pub["neighbor_anon_ids"]) == 2
@@ -331,7 +351,7 @@ if __name__ == "__main__":
         group_key,
         local,
         seq=8,
-        known_neighbors=[n1, n2],
+        known_neighbors=nbrs_ac,
         local_public_key=local_pubkey,
         mpr_anon_ids=[aid_n1],
     )
@@ -362,7 +382,7 @@ if __name__ == "__main__":
             group_key,
             local,
             seq=9,
-            known_neighbors=[n1, n2],
+            known_neighbors=nbrs_ac,
             local_public_key=local_pubkey,
             mpr_anon_ids=[foreign],
         )

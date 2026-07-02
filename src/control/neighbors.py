@@ -5,7 +5,14 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from src.control.hello import ANON_ID_SIZE, build_hello, compute_anon_id, parse_hello_private, parse_hello_public
+from src.control.hello import (
+    ANON_ID_SIZE,
+    build_hello,
+    compute_anon_id,
+    known_neighbors_same_group,
+    parse_hello_private,
+    parse_hello_public,
+)
 
 
 @dataclass
@@ -222,7 +229,7 @@ if __name__ == "__main__":
 
     # A receives Hello from B (B sees neighbors A, C)
     pkt_b = build_hello(
-        group_key, addr_b, seq=1, known_neighbors=[addr_a, addr_c],
+        group_key, addr_b, seq=1, known_neighbors=known_neighbors_same_group(group_key, [addr_a, addr_c]),
         local_public_key=local_pubkey, ts_ms=1_000,
     )
     pub_b = parse_hello_public(pkt_b)
@@ -245,7 +252,7 @@ if __name__ == "__main__":
 
     # B receives Hello from A (A sees neighbor B)
     pkt_a = build_hello(
-        group_key, addr_a, seq=2, known_neighbors=[addr_b],
+        group_key, addr_a, seq=2, known_neighbors=known_neighbors_same_group(group_key, [addr_b]),
         local_public_key=local_pubkey, ts_ms=2_000,
     )
     pub_a = parse_hello_public(pkt_a)
@@ -261,7 +268,7 @@ if __name__ == "__main__":
 
     # C receives Hello from B
     pkt_b2 = build_hello(
-        group_key, addr_b, seq=3, known_neighbors=[addr_a, addr_c],
+        group_key, addr_b, seq=3, known_neighbors=known_neighbors_same_group(group_key, [addr_a, addr_c]),
         local_public_key=local_pubkey, ts_ms=3_000,
     )
     pub_b2 = parse_hello_public(pkt_b2)
@@ -288,7 +295,7 @@ if __name__ == "__main__":
     # MPR advertised in a Hello is stored per sender and readable via get_mpr().
     table_mpr = NeighborTable()
     pkt_mpr = build_hello(
-        group_key, addr_b, seq=4, known_neighbors=[addr_a, addr_c],
+        group_key, addr_b, seq=4, known_neighbors=known_neighbors_same_group(group_key, [addr_a, addr_c]),
         local_public_key=local_pubkey, mpr_anon_ids=[aid_a], ts_ms=4_000,
     )
     pub_mpr = parse_hello_public(pkt_mpr)

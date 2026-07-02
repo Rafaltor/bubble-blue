@@ -49,6 +49,7 @@ class HelloManager:
         self._interval_s = max(1, int(cfg.hello_interval_s))
         self._timeout_ms = int(cfg.neighbor_timeout_s) * 1000
         self._peer_epochs: dict[str, int] = {}
+        self._learned_anon_ids: dict[str, bytes] = {}
         self._rekey_catchup: Callable[[str], None] | None = None
 
         self.anon_id = compute_anon_id(self._bootstrap_key, self._local_bd)
@@ -120,8 +121,11 @@ class HelloManager:
         return self.anon_id
 
     def anon_id_for(self, bd_addr: str) -> bytes:
-        """8-byte anonymous ID for a group member BD address (bootstrap PSK)."""
-        return compute_anon_id(self._bootstrap_key, bd_addr.strip().upper())
+        """Learned 8-byte anon_id for an L2CAP peer (from received Hellos)."""
+        bd = bd_addr.strip().upper()
+        if bd not in self._learned_anon_ids:
+            raise KeyError(f"no learned anon_id for peer {bd} (Hello not yet received)")
+        return self._learned_anon_ids[bd]
 
     def _parse_hello_member(self, data: bytes) -> dict[str, Any] | None:
         """Decrypt Hello private part with current or bootstrap group key."""
@@ -132,9 +136,10 @@ class HelloManager:
         return None
 
     def on_receive(self, peer_bd_addr: str, data: bytes) -> None:
-        """Parse and ingest a received Hello packet (topology only — not L2CAP peers)."""
-        _ = peer_bd_addr
+        """Parse and ingest a received Hello packet."""
+        peer_bd = peer_bd_addr.strip().upper()
         pub = parse_hello_public(data)
+        self._learned_anon_ids[peer_bd] = bytes(pub["anon_id"])
         priv = self._parse_hello_member(data)
         self.table.update_from_hello(pub, priv)
         if priv is not None:
@@ -153,6 +158,10 @@ class HelloManager:
                     self._rekey_catchup(bd_u)
         self.refresh_cds_role(verbose=not self._quiet)
 
+    def on_peer_disconnected(self, peer_bd_addr: str) -> None:
+        """Drop learned anon_id for a peer that left the L2CAP mesh."""
+        self._learned_anon_ids.pop(peer_bd_addr.strip().upper(), None)
+
     def get_resolved_members(self) -> list[dict[str, Any]]:
         """Group members with resolved anon_id → BD address mappings."""
         return self.table.get_resolved_members()
@@ -169,8 +178,9 @@ class HelloManager:
         Only transport.connections() — never Hello-advertised neighbors.
         """
         return frozenset(
-            compute_anon_id(self._bootstrap_key, bd_addr)
-            for bd_addr in self._transport.connections()
+            self._learned_anon_ids[bd.upper()]
+            for bd in self._transport.connections()
+            if bd.upper() in self._learned_anon_ids
         )
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
@@ -192,31 +202,31 @@ class HelloManager:
         self._cds_algorithm = algorithm
         self.refresh_cds_role(verbose=False)
 
-    def _known_neighbor_bd_addrs(self) -> list[str]:
-        """BD addresses with active L2CAP to us (advertised in our Hello)."""
-        addrs: set[str] = {bd.upper() for bd in self._transport.connections()}
-        if self._cfg.remote_bd_addr not in ("00:00:00:00:00:00", self._local_bd):
-            addrs.add(self._cfg.remote_bd_addr.upper())
-        addrs.discard(self._local_bd)
-        return sorted(addrs)
+    def _known_neighbor_pairs(self) -> list[tuple[bytes, str]]:
+        """
+        L2CAP peers whose anon_id was learned from a received Hello.
+
+        Peers connected but not yet heard from are omitted (preprint list A).
+        """
+        out: list[tuple[bytes, str]] = []
+        for bd in sorted(self._transport.connections()):
+            bd_u = bd.upper()
+            aid = self._learned_anon_ids.get(bd_u)
+            if aid is None:
+                continue
+            out.append((aid, bd_u))
+        return out
 
     def _send_hellos(self) -> None:
         peers = list(self._transport.connections())
         if not peers:
             return
 
-        neighbors = self._known_neighbor_bd_addrs()
+        neighbors = self._known_neighbor_pairs()
 
         # Advertise our own MPR set so peers can apply MPR-CDS rule (b) at runtime.
         mpr = compute_local_mpr(self.table, self.anon_id)
-        # build_hello requires mpr_anon_ids ⊆ the neighbor anon_ids it advertises,
-        # else it raises ValueError. Those neighbor anon_ids are derived from
-        # `neighbors` via the SAME anon_id_key (bootstrap key) build_hello uses, so
-        # we recompute them here and keep only MPR ids that match an advertised
-        # neighbor; any MPR id without a matching advertised neighbor is dropped.
-        advertised_neighbor_aids = {
-            compute_anon_id(self._bootstrap_key, bd) for bd in neighbors
-        }
+        advertised_neighbor_aids = {aid for aid, _ in neighbors}
         mpr_filtered = sorted(advertised_neighbor_aids & mpr)
 
         seq = self._next_seq()
