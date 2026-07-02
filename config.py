@@ -150,6 +150,39 @@ def _load_transport_kind() -> str:
     return "bt_classic"
 
 
+def load_ble_bdaddr_type_label() -> str:
+    """
+    Local LE address type for BLE L2CAP CoC bind (``public`` or ``random``).
+
+    Arduino UNO Q / some controllers need ``random``; Rubik Pi usually ``public``.
+    Set ``BUBBLE_BLUE_BLE_ADDR_TYPE=random`` on the Arduino board.
+    """
+    raw = os.environ.get("BUBBLE_BLUE_BLE_ADDR_TYPE", "public").strip().lower()
+    if raw in ("random", "le_random"):
+        return "random"
+    if raw not in ("public", "le_public", ""):
+        print(
+            f"[BB] WARNING: unknown BUBBLE_BLUE_BLE_ADDR_TYPE={raw!r}, using public",
+            flush=True,
+        )
+    return "public"
+
+
+def ble_bdaddr_type_socket(*, label: str | None = None) -> int:
+    """Resolve ``load_ble_bdaddr_type_label()`` to ``socket.BDADDR_LE_*``."""
+    kind = (label or load_ble_bdaddr_type_label()).strip().lower()
+    if kind == "random":
+        if not hasattr(socket, "BDADDR_LE_RANDOM"):
+            raise RuntimeError(
+                "BUBBLE_BLUE_BLE_ADDR_TYPE=random but socket.BDADDR_LE_RANDOM "
+                "is not available on this Python build"
+            )
+        return int(socket.BDADDR_LE_RANDOM)
+    if not hasattr(socket, "BDADDR_LE_PUBLIC"):
+        raise RuntimeError("socket.BDADDR_LE_PUBLIC is not available on this Python build")
+    return int(socket.BDADDR_LE_PUBLIC)
+
+
 def mtu_for_transport(transport_kind: str) -> int:
     """L2CAP/CoC MTU for a full on-wire BB frame (routing header + ciphertext + tag)."""
     k = transport_kind.strip().lower()
@@ -291,6 +324,11 @@ def format_config(cfg: BubbleBlueConfig) -> str:
             f"- Node name            : {cfg.node_name}",
             f"- Transport            : {cfg.transport_kind}",
             f"- L2CAP PSM            : 0x{cfg.psm:04X} ({cfg.psm})",
+            *(
+                [f"- BLE addr type        : {load_ble_bdaddr_type_label()}"]
+                if cfg.transport_kind == "ble_l2cap"
+                else []
+            ),
             f"- Local BD address     : {cfg.local_bd_addr}",
             f"- Remote BD address    : {cfg.remote_bd_addr}",
             f"- Hello interval (s)   : {cfg.hello_interval_s}",
