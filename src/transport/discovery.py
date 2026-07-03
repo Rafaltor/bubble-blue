@@ -28,6 +28,10 @@ _MFG_VALUE_RE = re.compile(
     r"ManufacturerData(?:\s+Value|\s*\.Value)?\s*:\s*(?:0x)?([0-9A-Fa-f]+)",
     re.IGNORECASE,
 )
+_MFG_VALUE_EMPTY_RE = re.compile(
+    r"ManufacturerData(?:\s+Value|\s*\.Value)?\s*:\s*$",
+    re.IGNORECASE,
+)
 _MFG_INLINE_RE = re.compile(
     r"ManufacturerData\s*:\s*0x([0-9A-Fa-f]+)(?:\s*\(\d+\))?\s*(?:[, ]\s*(?:0x)?([0-9A-Fa-f]+))?",
     re.IGNORECASE,
@@ -74,6 +78,47 @@ def parse_manufacturer_data_hex(hex_text: str) -> bytes:
     if len(cleaned) % 2:
         raise ValueError(f"odd-length manufacturer hex: {hex_text!r}")
     return bytes.fromhex(cleaned)
+
+
+def _hexdump_line_bytes(line: str) -> bytes | None:
+    """
+    Parse one hexdump continuation line (``42 42 01                    BB.``).
+
+    Tokenizes on whitespace; keeps only tokens of exactly two hex digits,
+    stopping at the first non-conforming token (ASCII column).
+    """
+    tokens = line.split()
+    hex_parts: list[str] = []
+    for tok in tokens:
+        if len(tok) == 2 and all(c in "0123456789abcdefABCDEF" for c in tok):
+            hex_parts.append(tok)
+        else:
+            break
+    if not hex_parts:
+        return None
+    return bytes.fromhex("".join(hex_parts))
+
+
+def _flush_pending_mfg_hex(
+    *,
+    pending_key: int | None,
+    accum: bytearray,
+    target: dict[int, bytes],
+) -> None:
+    if pending_key is not None and accum:
+        target[pending_key] = bytes(accum)
+
+
+def new_devices_from_scan_output(text: str) -> set[str]:
+    """BD addresses announced with ``[NEW] Device …`` during a scan window."""
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        if "[NEW]" not in raw.upper():
+            continue
+        bd = _device_bd_from_line(raw)
+        if bd:
+            seen.add(bd)
+    return seen
 
 
 def _device_bd_from_line(line: str) -> str | None:
@@ -168,36 +213,60 @@ def parse_bluetoothctl_info(
     """Parse ``bluetoothctl info <bd>`` for address type and manufacturer data."""
     info = BluetoothctlInfo()
     pending_mfg_key: int | None = None
+    consuming_mfg_hex = False
+    mfg_hex_accum = bytearray()
+
+    def _finish_mfg_hex_consumption() -> None:
+        nonlocal consuming_mfg_hex, pending_mfg_key, mfg_hex_accum
+        _flush_pending_mfg_hex(
+            pending_key=pending_mfg_key,
+            accum=mfg_hex_accum,
+            target=info.manufacturer_data,
+        )
+        pending_mfg_key = None
+        mfg_hex_accum = bytearray()
+        consuming_mfg_hex = False
 
     for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+        if not stripped:
+            if consuming_mfg_hex:
+                _finish_mfg_hex_consumption()
             continue
         try:
-            header = _DEVICE_HEADER_ADDR_TYPE_RE.match(line)
+            if consuming_mfg_hex:
+                chunk = _hexdump_line_bytes(line)
+                if chunk is not None:
+                    mfg_hex_accum.extend(chunk)
+                    continue
+                _finish_mfg_hex_consumption()
+                # fall through — non-hex line may be a new field
+
+            header = _DEVICE_HEADER_ADDR_TYPE_RE.match(stripped)
             if header:
                 info.bd_addr = header.group("bd").upper()
                 info.addr_type = header.group("addr_type").lower()
                 continue
 
-            m = _BD_ADDR_RE.search(line)
-            if info.bd_addr is None and m and line.lower().startswith("device"):
+            m = _BD_ADDR_RE.search(stripped)
+            if info.bd_addr is None and m and stripped.lower().startswith("device"):
                 info.bd_addr = m.group("bd").upper()
 
-            addr_type = _ADDR_TYPE_RE.search(line)
+            addr_type = _ADDR_TYPE_RE.search(stripped)
             if addr_type:
                 info.addr_type = addr_type.group(1).lower()
 
-            if line.startswith("Name:"):
-                val = line.split(":", 1)[1].strip()
+            if stripped.startswith("Name:"):
+                val = stripped.split(":", 1)[1].strip()
                 if val:
                     info.name = val
-            elif line.startswith("Alias:"):
-                val = line.split(":", 1)[1].strip()
+            elif stripped.startswith("Alias:"):
+                val = stripped.split(":", 1)[1].strip()
                 if val and info.name is None:
                     info.name = val
 
-            inline = _MFG_INLINE_RE.search(line)
+            inline = _MFG_INLINE_RE.search(stripped)
             if inline:
                 company_id = int(inline.group(1), 16)
                 value_hex = inline.group(2)
@@ -207,12 +276,17 @@ def parse_bluetoothctl_info(
                     pending_mfg_key = company_id
                 continue
 
-            key_match = _MFG_KEY_RE.search(line)
+            key_match = _MFG_KEY_RE.search(stripped)
             if key_match:
                 pending_mfg_key = int(key_match.group(1), 16)
                 continue
 
-            val_match = _MFG_VALUE_RE.search(line)
+            if _MFG_VALUE_EMPTY_RE.match(stripped):
+                consuming_mfg_hex = True
+                mfg_hex_accum = bytearray()
+                continue
+
+            val_match = _MFG_VALUE_RE.search(stripped)
             if val_match:
                 payload = parse_manufacturer_data_hex(val_match.group(1))
                 company_id = pending_mfg_key
@@ -225,8 +299,11 @@ def parse_bluetoothctl_info(
                 continue
         except Exception as exc:
             if log is not None:
-                log(f"info parse skip ({exc}): {line!r}")
+                log(f"info parse skip ({exc}): {stripped!r}")
             continue
+
+    if consuming_mfg_hex:
+        _finish_mfg_hex_consumption()
 
     return info
 

@@ -57,6 +57,23 @@ Device BB:BB:BB:BB:BB:02 (random)
     ManufacturerData Value: ffff424201
 """
 
+# TODO: recaler sur capture board si le format bluetoothctl diffère.
+INFO_MULTILINE_HEX_FIXTURE = """
+Device 14:B5:CD:E2:12:4F (public)
+    Name: rubik2
+    Address: 14:B5:CD:E2:12:4F
+    AddressType: public
+    Paired: yes
+    Bonded: yes
+    ManufacturerData Key: 0xffff (65535)
+    ManufacturerData Value:
+      42 42 01                                         BB.
+"""
+
+CACHED_DEVICE_SCAN_FIXTURE = """
+[CHG] Device 14:B5:CD:E2:12:4F RSSI: -60
+"""
+
 
 def test_parse_manufacturer_data_hex() -> None:
     assert parse_manufacturer_data_hex("424201") == BB_BEACON_MAGIC + b"\x01"
@@ -81,6 +98,13 @@ def test_parse_bluetoothctl_scan_output_fixture() -> None:
     assert any("42420" in msg or "garbled" in msg for msg in logs)
 
 
+def test_parse_bluetoothctl_info_multiline_hexdump() -> None:
+    info = parse_bluetoothctl_info(INFO_MULTILINE_HEX_FIXTURE)
+    assert info.bd_addr == "14:B5:CD:E2:12:4F"
+    assert info.addr_type == "public"
+    assert info.manufacturer_data[BB_BEACON_COMPANY_ID] == BB_BEACON_MAGIC + b"\x01"
+
+
 def test_parse_bluetoothctl_info_fixture() -> None:
     pub = parse_bluetoothctl_info(INFO_PUBLIC_FIXTURE)
     assert pub.bd_addr == "11:22:33:44:55:66"
@@ -98,6 +122,34 @@ def test_is_bb_beacon_record() -> None:
     assert is_bb_beacon_record(records["11:22:33:44:55:66"])
     assert is_bb_beacon_record(records["BB:BB:BB:BB:BB:02"])
     assert not is_bb_beacon_record(records["AA:BB:CC:DD:EE:01"])
+
+
+def test_presence_scanner_cached_device_via_info() -> None:
+    info_calls: list[str] = []
+
+    def info_runner(bd: str) -> str:
+        info_calls.append(bd)
+        if bd == "14:B5:CD:E2:12:4F":
+            return INFO_MULTILINE_HEX_FIXTURE
+        return ""
+
+    seen: list[tuple[str, str]] = []
+    scanner = PresenceScanner(
+        scan_window_s=0.1,
+        scan_period_s=0.2,
+        quiet=True,
+        on_candidate=lambda bd, addr_type, _ts: seen.append((bd, addr_type)),
+        scan_runner=lambda _t: CACHED_DEVICE_SCAN_FIXTURE,
+        info_runner=info_runner,
+    )
+
+    found = scanner.scan_once(now=1000.0)
+    assert len(found) == 1
+    assert found[0].bd_addr == "14:B5:CD:E2:12:4F"
+    assert found[0].addr_type == "public"
+    assert seen == [("14:B5:CD:E2:12:4F", "public")]
+    assert info_calls == ["14:B5:CD:E2:12:4F"]
+    scanner.stop()
 
 
 def test_presence_scanner_scan_once_and_ttl() -> None:
@@ -157,10 +209,14 @@ if __name__ == "__main__":
     print("✅ parse_manufacturer_data_hex")
     test_parse_bluetoothctl_scan_output_fixture()
     print("✅ parse_bluetoothctl_scan_output")
+    test_parse_bluetoothctl_info_multiline_hexdump()
+    print("✅ parse_bluetoothctl_info multiline hexdump")
     test_parse_bluetoothctl_info_fixture()
     print("✅ parse_bluetoothctl_info")
     test_is_bb_beacon_record()
     print("✅ is_bb_beacon_record")
+    test_presence_scanner_cached_device_via_info()
+    print("✅ cached device via info fallback")
     test_presence_scanner_scan_once_and_ttl()
     print("✅ PresenceScanner scan_once + TTL")
     test_presence_scanner_thread_loop()

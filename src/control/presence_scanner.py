@@ -18,9 +18,12 @@ from dataclasses import dataclass
 from src.transport.advertising import match_bb_beacon_manufacturer_data
 from src.transport.discovery import (
     ScanDeviceRecord,
+    new_devices_from_scan_output,
     parse_bluetoothctl_info,
     parse_bluetoothctl_scan_output,
 )
+
+INFO_LOOKUP_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,13 @@ class PresenceCandidate:
 
 def _is_bb_candidate(record: ScanDeviceRecord) -> bool:
     return any(match_bb_beacon_manufacturer_data(payload) for payload in record.manufacturer_data.values())
+
+
+def _is_bb_info(info: object) -> bool:
+    mfg = getattr(info, "manufacturer_data", None)
+    if not isinstance(mfg, dict):
+        return False
+    return any(match_bb_beacon_manufacturer_data(payload) for payload in mfg.values())
 
 
 class PresenceScanner:
@@ -155,21 +165,70 @@ class PresenceScanner:
             now_ms=int(now_mono * 1000),
             log=self._log,
         )
+        new_devices = new_devices_from_scan_output(text)
         found: list[PresenceCandidate] = []
+        matched: set[str] = set()
+
+        with self._lock:
+            prior_candidates = set(self._candidates)
+
+        # (a) Fast path: BB beacon visible in scan stdout.
         for bd, record in records.items():
             if not _is_bb_candidate(record):
                 continue
-            addr_type = self._resolve_addr_type(bd, record)
-            candidate = PresenceCandidate(bd_addr=bd, addr_type=addr_type, last_seen=now_mono)
-            with self._lock:
-                self._candidates[bd] = candidate
-            found.append(candidate)
-            if self._on_candidate is not None:
-                try:
-                    self._on_candidate(bd, addr_type, now_mono)
-                except Exception as exc:
-                    self._log(f"on_candidate error for {bd}: {exc}")
+            matched.add(bd)
+            found.append(self._register_candidate(bd, self._resolve_addr_type(bd, record), now_mono))
+
+        # Refresh known candidates seen again without re-querying info.
+        for bd in records:
+            if bd in prior_candidates and bd not in matched:
+                with self._lock:
+                    old = self._candidates.get(bd)
+                    if old is not None:
+                        self._candidates[bd] = PresenceCandidate(
+                            bd_addr=bd,
+                            addr_type=old.addr_type,
+                            last_seen=now_mono,
+                        )
+
+        # (b) Cached / RSSI-only devices: bluetoothctl info fallback (cap per pass).
+        info_queue: list[str] = []
+        for bd in records:
+            if bd in matched or bd in prior_candidates:
+                continue
+            if bd in new_devices:
+                info_queue.insert(0, bd)
+            else:
+                info_queue.append(bd)
+
+        info_calls = 0
+        for bd in info_queue:
+            if info_calls >= INFO_LOOKUP_LIMIT:
+                break
+            info_calls += 1
+            try:
+                info = parse_bluetoothctl_info(self._info_runner(bd), log=self._log)
+            except Exception as exc:
+                self._log(f"info parse failed for {bd}: {exc}")
+                continue
+            if not _is_bb_info(info):
+                continue
+            addr_type = (info.addr_type or "unknown").lower()
+            matched.add(bd)
+            found.append(self._register_candidate(bd, addr_type, now_mono))
+
         return found
+
+    def _register_candidate(self, bd: str, addr_type: str, now_mono: float) -> PresenceCandidate:
+        candidate = PresenceCandidate(bd_addr=bd, addr_type=addr_type, last_seen=now_mono)
+        with self._lock:
+            self._candidates[bd] = candidate
+        if self._on_candidate is not None:
+            try:
+                self._on_candidate(bd, addr_type, now_mono)
+            except Exception as exc:
+                self._log(f"on_candidate error for {bd}: {exc}")
+        return candidate
 
     def _resolve_addr_type(self, bd_addr: str, record: ScanDeviceRecord) -> str:
         try:
