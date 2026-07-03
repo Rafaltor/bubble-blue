@@ -541,12 +541,24 @@ class BBNode:
         bd = bd_addr.upper()
         if bd in self._active_peers:
             return
-        self._active_peers.add(bd)
         if self._cfg and self._cfg.transport_kind == "ble_l2cap":
+            now = time.monotonic()
+            with self._lock:
+                quarantine_until = self._protocol_quarantine_until.get(bd, 0.0)
+            if now < quarantine_until:
+                remaining_s = quarantine_until - now
+                self._dispatch_log(
+                    f"connexion entrante refusée (quarantaine {remaining_s:.0f}s restants): {bd}"
+                )
+                transport = self._transport
+                if transport is not None and hasattr(transport, "disconnect"):
+                    transport.disconnect(bd)
+                return
             with self._lock:
                 self._peer_admission_deadline[bd] = (
                     time.monotonic() + PROTOCOL_HELLO_GRACE_MULT * self._cfg.hello_interval_s
                 )
+        self._active_peers.add(bd)
         if self.on_peer_connected:
             self.on_peer_connected(bd)
 

@@ -138,6 +138,61 @@ def test_presence_candidate_feeds_connect_targets() -> None:
         node.stop()
 
 
+def test_incoming_connection_refused_during_quarantine() -> None:
+    cfg = _ble_cfg()
+    fake_transport = MagicMock()
+    fake_transport.connections.return_value = []
+    fake_transport.disconnect = MagicMock()
+    fake_hello = MagicMock()
+    fake_hello.is_relay = False
+    fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
+    fake_hello.has_learned_public_hello.return_value = False
+
+    with (
+        patch("src.api.bb_api.load_config", return_value=cfg),
+        patch("src.api.bb_api.make_transport", return_value=fake_transport),
+        patch("src.api.bb_api.HelloManager", return_value=fake_hello),
+        patch("src.api.bb_api.PacketForwarder") as mock_fwd_cls,
+        patch("src.api.bb_api.PresenceScanner") as mock_scanner_cls,
+    ):
+        mock_fwd_cls.return_value = MagicMock()
+        mock_scanner_cls.return_value = MagicMock()
+
+        node = BBNode(setup_pairing_agent=False)
+        logs: list[str] = []
+        node.on_message = lambda _s, _t: None
+        node.on_log = lambda m, _e: logs.append(m)
+        node.start()
+        node._connect_stop.set()
+        if node._connect_thread is not None:
+            node._connect_thread.join(timeout=1.0)
+
+        node._dispatch_peer_connected(_ADDR_PEER)
+        node._peer_admission_deadline[_ADDR_PEER] = time.monotonic() - 1.0
+        node._check_protocol_admission()
+
+        streak_after_expulsion = node._protocol_quarantine_streak[_ADDR_PEER]
+        node._dispatch_peer_disconnected(_ADDR_PEER)
+        fake_transport.disconnect.reset_mock()
+
+        node._dispatch_peer_connected(_ADDR_PEER)
+        assert fake_transport.disconnect.called
+        assert _ADDR_PEER not in node._peer_admission_deadline
+        assert _ADDR_PEER not in node._active_peers
+        assert node._protocol_quarantine_streak[_ADDR_PEER] == streak_after_expulsion
+        assert any("connexion entrante refusée" in m for m in logs)
+
+        node._protocol_quarantine_until[_ADDR_PEER] = time.monotonic() - 1.0
+        fake_transport.disconnect.reset_mock()
+        logs.clear()
+
+        node._dispatch_peer_connected(_ADDR_PEER)
+        assert _ADDR_PEER in node._peer_admission_deadline
+        assert _ADDR_PEER in node._active_peers
+        assert not any("connexion entrante refusée" in m for m in logs)
+        node.stop()
+
+
 def test_mute_stops_scanner_and_transport() -> None:
     cfg = _ble_cfg()
     fake_transport = MagicMock()
@@ -172,6 +227,8 @@ if __name__ == "__main__":
     print("✅ decrypt_fail does not quarantine")
     test_protocol_silence_expels_and_quarantines()
     print("✅ protocol silence expels + quarantine")
+    test_incoming_connection_refused_during_quarantine()
+    print("✅ incoming refused during quarantine")
     test_presence_candidate_feeds_connect_targets()
     print("✅ presence candidate feeds connect targets")
     test_mute_stops_scanner_and_transport()

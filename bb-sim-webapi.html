@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Simulateur Web API</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --surface2: #eef1f4;
+    --border: #d8dee6;
+    --accent: #0052cc;
+    --green: #1e7e34;
+    --red: #c0392b;
+    --yellow: #b88700;
+    --text: #1a2340;
+    --text-muted: #5a6378;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    padding: 2.5rem 3rem 3rem;
+    overflow-y: auto;
+  }
+
+  .slide-num {
+    font-size: 0.7rem; color: var(--accent);
+    letter-spacing: 0.15em; text-transform: uppercase;
+    margin-bottom: 0.5rem; font-weight: 600;
+  }
+  h1 { font-size: 3rem; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 0.4rem; }
+  .subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.75rem; max-width: 52rem; line-height: 1.5; }
+
+  h3 {
+    font-size: 0.78rem; color: var(--accent);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 0.75rem; padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+  .grid-3 { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+  @media (max-width: 1100px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+  }
+  .card-title {
+    font-size: 0.72rem; font-weight: 600; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin-bottom: 0.65rem;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+  th {
+    background: var(--surface2); padding: 0.5rem 0.7rem; text-align: left;
+    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+    border: 1px solid var(--border); font-weight: 600;
+  }
+  td { padding: 0.45rem 0.7rem; border: 1px solid var(--border); vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(26, 35, 64, 0.03); }
+  .cell-good { color: var(--green); font-weight: 600; }
+  .cell-warn { color: var(--yellow); }
+  .cell-neutral { color: var(--text-muted); }
+
+  code, .mono { font-family: var(--mono); font-size: 0.9em; }
+
+  .box-list { list-style: none; }
+  .box-list li {
+    font-size: 0.74rem; color: var(--text-muted);
+    padding: 0.28rem 0 0.28rem 1.1rem; position: relative; line-height: 1.45;
+  }
+  .box-list li::before { content: '→'; position: absolute; left: 0; color: var(--accent); font-size: 0.7rem; }
+  .box-list li strong { color: var(--text); }
+  .box-list li.good { color: var(--green); }
+  .box-list li.warn { color: var(--yellow); }
+
+  .codeblock {
+    background: #111827; color: #c5cdd8;
+    font-family: var(--mono); font-size: 0.68rem; line-height: 1.55;
+    border-radius: 8px; padding: 0.85rem 1rem; margin-top: 0.5rem;
+    white-space: pre; overflow-x: auto;
+  }
+
+  .step-row { display: grid; grid-template-columns: 2rem 1fr; gap: 0.7rem; margin-bottom: 0.65rem; align-items: start; }
+  .step-num {
+    width: 1.75rem; height: 1.75rem; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.8rem;
+  }
+  .step-body { font-size: 0.78rem; line-height: 1.5; color: var(--text); }
+
+  .tag {
+    display: inline-block; font-size: 0.62rem; font-weight: 600;
+    padding: 0.1rem 0.45rem; border-radius: 99px; letter-spacing: 0.04em;
+    vertical-align: middle; margin-left: 0.25rem;
+  }
+  .tag-green { background: rgba(30,126,52,0.12); color: var(--green); }
+  .tag-blue { background: rgba(0,82,204,0.1); color: var(--accent); }
+  .tag-yellow { background: rgba(184,135,0,0.14); color: var(--yellow); }
+
+  .verdict {
+    background: var(--surface); border-left: 4px solid var(--accent);
+    border-radius: 0 8px 8px 0; padding: 1rem 1.25rem;
+    font-size: 0.84rem; line-height: 1.55;
+  }
+  .verdict-label {
+    font-size: 0.68rem; font-weight: 700; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.35rem;
+  }
+
+  svg text { font-family: var(--sans); }
+  svg .svgmono { font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<div class="slide-num">BUBBLE-BLUE · Simulation &amp; démo</div>
+<h1>Simulateur Web API</h1>
+<p class="subtitle">
+  Interface navigateur + API REST pour comparer <strong>Wu-Li 1999</strong> et <strong>MPR-CDS</strong> sur des topologies aléatoires,
+  sans cartes Bluetooth. Le calcul est délégué au <strong>vrai code BB</strong> (<code>HelloManager</code>, <code>PacketForwarder</code>, <code>cds.py</code>) —
+  seul le transport L2CAP est remplacé par un bus géométrique 2D.
+</p>
+
+<!-- Architecture -->
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Branchement sur le stack BB</div>
+    <svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg" aria-label="Architecture simulateur">
+      <defs>
+        <marker id="arr" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+          <polygon points="0 0, 7 3.5, 0 7" fill="#0052cc"/>
+        </marker>
+      </defs>
+      <!-- Browser -->
+      <rect x="8" y="12" width="120" height="44" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="68" y="30" text-anchor="middle" fill="#93c5fd" font-weight="700" font-size="9">Navigateur</text>
+      <text x="68" y="44" text-anchor="middle" fill="#64748b" class="svgmono" font-size="6.5">index.html</text>
+      <text x="68" y="54" text-anchor="middle" fill="#64748b" class="svgmono" font-size="6">fetch JSON only</text>
+      <!-- FastAPI -->
+      <rect x="160" y="12" width="130" height="44" rx="6" fill="#312e81" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="225" y="30" text-anchor="middle" fill="#c7d2fe" font-weight="700" font-size="9">FastAPI</text>
+      <text x="225" y="44" text-anchor="middle" fill="#a5b4fc" class="svgmono" font-size="6.5">sim/webapp/server.py</text>
+      <text x="225" y="54" text-anchor="middle" fill="#64748b" class="svgmono" font-size="6">:8000 localhost</text>
+      <!-- Sim modules -->
+      <rect x="320" y="12" width="232" height="44" rx="6" fill="#14532d" stroke="#22c55e" stroke-width="1.5"/>
+      <text x="436" y="28" text-anchor="middle" fill="#86efac" font-weight="700" font-size="9">sim.* (orchestration)</text>
+      <text x="436" y="42" text-anchor="middle" fill="#bbf7d0" class="svgmono" font-size="6">SimEngine · ForwardingSimEngine</text>
+      <text x="436" y="52" text-anchor="middle" fill="#64748b" class="svgmono" font-size="6">topology_gen · metrics_roles</text>
+      <line x1="128" y1="34" x2="158" y2="34" stroke="#0052cc" stroke-width="1.5" marker-end="url(#arr)"/>
+      <line x1="290" y1="34" x2="318" y2="34" stroke="#0052cc" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- SimTransport layer -->
+      <rect x="24" y="78" width="512" height="36" rx="6" fill="#0c4a6e" stroke="#0ea5e9" stroke-width="1.5" stroke-dasharray="5 3"/>
+      <text x="40" y="96" fill="#7dd3fc" font-weight="700" font-size="8">SimBus + SimTransport</text>
+      <text x="40" y="108" fill="#94a3b8" class="svgmono" font-size="6.5">remplace L2CAP — voisins = distance ≤ R (disque unitaire 2D)</text>
+      <text x="400" y="100" fill="#fbbf24" class="svgmono" font-size="6.5">connections() · send() · on_receive</text>
+      <!-- Real BB stack per node -->
+      <rect x="24" y="128" width="160" height="72" rx="6" fill="#422006" stroke="#f59e0b" stroke-width="1.5"/>
+      <text x="104" y="146" text-anchor="middle" fill="#fcd34d" font-weight="700" font-size="8">HelloManager</text>
+      <text x="104" y="160" text-anchor="middle" fill="#fde68a" class="svgmono" font-size="6">src/control/</text>
+      <text x="104" y="172" text-anchor="middle" fill="#94a3b8" font-size="6">Hellos · CDS · MPR annoncé</text>
+      <text x="104" y="184" text-anchor="middle" fill="#94a3b8" class="svgmono" font-size="5.5">refresh_cds_role() → is_relay</text>
+      <rect x="200" y="128" width="160" height="72" rx="6" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="280" y="146" text-anchor="middle" fill="#93c5fd" font-weight="700" font-size="8">PacketForwarder</text>
+      <text x="280" y="160" text-anchor="middle" fill="#bfdbfe" class="svgmono" font-size="6">src/forwarding/</text>
+      <text x="280" y="172" text-anchor="middle" fill="#94a3b8" font-size="6">flood PKT_DATA · TTL · relay</text>
+      <text x="280" y="184" text-anchor="middle" fill="#94a3b8" class="svgmono" font-size="5.5">même code que bb_node.py</text>
+      <rect x="376" y="128" width="160" height="72" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
+      <text x="456" y="146" text-anchor="middle" fill="#e2e8f0" font-weight="700" font-size="8">cds.py + keys + epoch</text>
+      <text x="456" y="160" text-anchor="middle" fill="#94a3b8" class="svgmono" font-size="6">am_i_cds · MPR · BBKeyStore</text>
+      <text x="456" y="172" text-anchor="middle" fill="#94a3b8" font-size="6">algorithme sélectionnable</text>
+      <text x="456" y="184" text-anchor="middle" fill="#86efac" class="svgmono" font-size="5.5">WU_LI_1999 · MPR</text>
+      <line x1="280" y1="78" x2="104" y2="126" stroke="#64748b" stroke-width="1" marker-end="url(#arr)"/>
+      <line x1="280" y1="78" x2="280" y2="126" stroke="#64748b" stroke-width="1" marker-end="url(#arr)"/>
+      <line x1="280" y1="78" x2="456" y2="126" stroke="#64748b" stroke-width="1" marker-end="url(#arr)"/>
+      <!-- N nodes -->
+      <text x="280" y="212" text-anchor="middle" fill="#64748b" font-size="7">× N nœuds — un SimNode = un vrai HelloManager + transport injecté</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Ce qui est réel vs simulé</div>
+    <table>
+      <thead>
+        <tr><th>Couche</th><th>Production (<code>bb_node.py</code>)</th><th>Simulateur</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Radio / L2CAP</strong></td>
+          <td class="cell-neutral"><code>L2CAPTransport</code> BlueZ, threads</td>
+          <td class="cell-warn"><code>SimBus</code> — géométrie 2D, livraison synchrone</td>
+        </tr>
+        <tr>
+          <td><strong>Hello / CDS</strong></td>
+          <td class="cell-good"><code>HelloManager</code></td>
+          <td class="cell-good"><strong>identique</strong> (pas de thread <code>.start()</code>)</td>
+        </tr>
+        <tr>
+          <td><strong>Forwarding</strong></td>
+          <td class="cell-good"><code>PacketForwarder</code></td>
+          <td class="cell-good"><strong>identique</strong> sur <code>SimTransport</code></td>
+        </tr>
+        <tr>
+          <td><strong>Algorithme CDS</strong></td>
+          <td class="cell-warn">Wu-Li par défaut</td>
+          <td class="cell-good">Wu-Li <strong>et</strong> MPR comparables côte à côte</td>
+        </tr>
+        <tr>
+          <td><strong>Topologie</strong></td>
+          <td class="cell-neutral">Liens L2CAP réels + Hello mutuel</td>
+          <td class="cell-neutral">Graphe géométrique aléatoire connecté</td>
+        </tr>
+        <tr>
+          <td><strong>UI / calcul</strong></td>
+          <td class="cell-neutral">Terminal <code>--chat</code></td>
+          <td class="cell-good">Navigateur — <strong>zéro algo en JS</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Flow + API -->
+<div class="grid-3">
+  <div class="card">
+    <div class="card-title">Déroulement d'une simulation</div>
+    <div class="step-row">
+      <div class="step-num">1</div>
+      <div class="step-body"><strong>Topologie</strong> — <code>topology_gen.generate_connected_geometric</code> place N nœuds dans un carré ; deux nœuds sont voisins si distance ≤ <code>radius</code> (degré moyen cible via <code>target_degree</code>).</div>
+    </div>
+    <div class="step-row">
+      <div class="step-num">2</div>
+      <div class="step-body"><strong>Convergence Hello</strong> — <code>SimEngine</code> crée N × <code>SimNode</code> ; chaque <code>step()</code> envoie des Hellos sur le bus puis appelle <code>refresh_cds_role()</code> jusqu'à point fixe (ou cycle MPR détecté).</div>
+    </div>
+    <div class="step-row">
+      <div class="step-num">3</div>
+      <div class="step-body"><strong>Rôles RELAY/LEAF</strong> — lus depuis <code>hello_mgr.is_relay</code> (même source que le forwarder hardware). Comparaison Wu-Li vs MPR via <code>metrics_roles.compare_one</code>.</div>
+    </div>
+    <div class="step-row">
+      <div class="step-num">4</div>
+      <div class="step-body"><strong>Broadcast (option)</strong> — <code>ForwardingSimEngine</code> injecte un <code>PKT_DATA</code> via le vrai <code>PacketForwarder.send_broadcast</code> ; les relais forwardent ; métriques = unicast DATA et vagues de propagation.</div>
+    </div>
+    <div class="step-row">
+      <div class="step-num">5</div>
+      <div class="step-body"><strong>JSON → navigateur</strong> — positions, arêtes, rôles, taille CDS, coût flood. Le front (<code>sim/webapp/static/index.html</code>) ne fait que dessiner et animer.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Endpoints REST <span class="tag tag-blue">FastAPI</span></div>
+    <table>
+      <thead>
+        <tr><th>Route</th><th>Rôle</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>GET /</code></td>
+          <td>Sert l'UI statique (canvas topologie + panneaux Wu-Li / MPR)</td>
+        </tr>
+        <tr>
+          <td><code>GET /api/topology</code></td>
+          <td>Nœuds (x,y), arêtes, area, seed — sans CDS</td>
+        </tr>
+        <tr>
+          <td><code>GET /api/simulate</code></td>
+          <td>Topologie + métriques + rôles <strong>Wu-Li</strong> et <strong>MPR</strong> + Δ taille CDS</td>
+        </tr>
+        <tr>
+          <td><code>GET /api/broadcast</code></td>
+          <td>Flood depuis une source : vagues TTL, nœuds atteints, coût unicast DATA</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size:0.7rem;color:var(--text-muted);margin-top:0.6rem;line-height:1.45;">
+      Paramètres communs : <code>n_nodes</code>, <code>radius</code>, <code>seed</code>, <code>target_degree</code>, <code>max_steps</code>.
+      Les builders <code>build_*_response</code> sont testés sans HTTP (<code>test_webapp_api.py</code>).
+    </p>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Lancer la démo</div>
+    <div class="codeblock"># depuis la racine du repo
+pip install fastapi uvicorn   # voir requirements.txt
+
+python3 -m sim.webapp.server
+# → http://127.0.0.1:8000
+
+# accès distant (ex. Rubik Pi) :
+ssh -L 8000:localhost:8000 user@rubikpi
+# puis ouvrir http://localhost:8000 sur le laptop</div>
+    <ul class="box-list" style="margin-top:0.75rem;">
+      <li class="good">Pas de Bluetooth requis pour la démo CDS / flood</li>
+      <li class="good">Reproductible : même <code>seed</code> → même topologie</li>
+      <li class="warn">Résultats indicatifs — pas un substitut au test 3 boards</li>
+      <li>Tests sim : <code>python3 sim/test_sim_validation.py</code></li>
+    </ul>
+  </div>
+</div>
+
+<!-- Fichiers clés -->
+<div class="grid-2" style="margin-bottom:1.25rem;">
+  <div class="card">
+    <div class="card-title">Fichiers du dépôt</div>
+    <table>
+      <thead>
+        <tr><th>Fichier</th><th>Responsabilité</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>sim/webapp/server.py</code></td><td>API REST — orchestration uniquement, pas d'algo</td></tr>
+        <tr><td><code>sim/webapp/static/index.html</code></td><td>UI — fetch + SVG, aucun CDS en JavaScript</td></tr>
+        <tr><td><code>sim/sim_engine.py</code></td><td>N × HelloManager réel, cycles Hello discrets</td></tr>
+        <tr><td><code>sim/sim_transport.py</code></td><td>Bus géométrique — remplace <code>l2cap.py</code></td></tr>
+        <tr><td><code>sim/forwarding_sim.py</code></td><td>PacketForwarder réel + mesure broadcast</td></tr>
+        <tr><td><code>sim/topology_gen.py</code></td><td>Graphes aléatoires connectés</td></tr>
+        <tr><td><code>sim/metrics_roles.py</code></td><td>Comparaison Wu-Li / MPR, convergence</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Intérêt pour le projet</div>
+    <ul class="box-list">
+      <li class="good"><strong>Valider les algorithmes CDS</strong> (Wu-Li vs MPR) à grande échelle sans flasher des boards</li>
+      <li class="good"><strong>Même code que la prod</strong> — pas de « simulateur parallèle » qui diverge</li>
+      <li class="good"><strong>Démo visuelle</strong> pour comparer taille du backbone et coût de flood</li>
+      <li class="warn">Le runtime hardware reste sur Wu-Li seul ; la sim permet d'<strong>explorer MPR</strong> avant branchement prod</li>
+      <li>Complète <code>bb-stack-technique.html</code> (stack) et les tests unitaires <code>tests/</code></li>
+    </ul>
+    <div class="verdict" style="margin-top:0.85rem;">
+      <div class="verdict-label">En une phrase (pour la direction)</div>
+      Le simulateur Web est une <strong>coquille géométrique</strong> autour du stack BUBBLE-BLUE existant :
+      on remplace uniquement le Bluetooth par un modèle radio 2D, et on expose le tout via une API
+      pour comparer visuellement les stratégies de relais et le coût de diffusion — sans matériel.
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
