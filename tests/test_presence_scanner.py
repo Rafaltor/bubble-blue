@@ -13,6 +13,7 @@ from src.transport.advertising import BB_BEACON_COMPANY_ID, BB_BEACON_MAGIC, mat
 from src.transport.discovery import (  # noqa: E402
     _strip_ctl,
     new_devices_from_scan_output,
+    parse_bluetoothctl_devices_output,
     parse_bluetoothctl_info,
     parse_bluetoothctl_scan_output,
     parse_manufacturer_data_hex,
@@ -75,6 +76,39 @@ Device 14:B5:CD:E2:12:4F (public)
 CACHED_DEVICE_SCAN_FIXTURE = """
 [CHG] Device 14:B5:CD:E2:12:4F RSSI: -60
 """
+
+PAIRED_PEER_A = "14:B5:CD:E2:12:4F"
+PAIRED_PEER_B = "40:D9:5A:8B:69:3F"
+
+INFO_PAIRED_B_FIXTURE = """
+Device 40:D9:5A:8B:69:3F (random)
+    Name: rubik1
+    Address: 40:D9:5A:8B:69:3F
+    AddressType: random
+    Paired: yes
+    Bonded: yes
+    ManufacturerData Key: 0xffff (65535)
+    ManufacturerData Value: ffff424201
+"""
+
+PAIRED_DEVICES_FIXTURE = f"""
+Device {PAIRED_PEER_A} rubik2
+Device {PAIRED_PEER_B} rubik1
+"""
+
+
+def _dense_rssi_only_scan_fixture(*, noise_count: int = 178) -> str:
+    lines: list[str] = []
+    for i in range(noise_count):
+        hi = (i // 256) & 0xFF
+        lo = i & 0xFF
+        bd = f"AA:BB:CC:{hi:02X}:{lo:02X}:00"
+        lines.append(f"[CHG] Device {bd} RSSI: -70")
+    lines.append(f"[CHG] Device {PAIRED_PEER_A} RSSI: -55")
+    lines.append(f"[CHG] Device {PAIRED_PEER_B} RSSI: -58")
+    lines.append("[NEW] Device 0F:DD:51:26:17:C8 stranger")
+    lines.append("[NEW] Device DE:AD:BE:EF:00:01 passerby")
+    return "\n".join(lines) + "\n"
 
 # Verbatim excerpt from ``bluetoothctl --timeout 6 scan le`` (ANSI escapes literal).
 REAL_SCAN_CAPTURE_RAW = (
@@ -179,6 +213,7 @@ def test_presence_scanner_cached_device_via_info() -> None:
         on_candidate=lambda bd, addr_type, _ts: seen.append((bd, addr_type)),
         scan_runner=lambda _t: CACHED_DEVICE_SCAN_FIXTURE,
         info_runner=info_runner,
+        paired_runner=lambda: "",
     )
 
     found = scanner.scan_once(now=1000.0)
@@ -205,6 +240,7 @@ def test_presence_scanner_scan_once_and_ttl() -> None:
         on_candidate=lambda bd, addr_type, ts: seen.append((bd, addr_type, ts)),
         scan_runner=lambda _t: SCAN_FIXTURE,
         info_runner=lambda bd: info_map.get(bd, ""),
+        paired_runner=lambda: "",
     )
 
     t0 = time.monotonic()
@@ -235,11 +271,122 @@ def test_presence_scanner_thread_loop() -> None:
         on_candidate=lambda bd, _t, _ts: seen.append(bd),
         scan_runner=lambda _t: SCAN_FIXTURE,
         info_runner=lambda bd: INFO_PUBLIC_FIXTURE if bd == "11:22:33:44:55:66" else INFO_RANDOM_FIXTURE,
+        paired_runner=lambda: "",
     )
     scanner.start()
     time.sleep(0.25)
     scanner.stop()
     assert "11:22:33:44:55:66" in seen
+
+
+def test_parse_bluetoothctl_devices_output() -> None:
+    paired = parse_bluetoothctl_devices_output(PAIRED_DEVICES_FIXTURE)
+    assert paired == {PAIRED_PEER_A, PAIRED_PEER_B}
+
+
+def test_dense_scan_paired_peers_detected_first_pass() -> None:
+    """~180 RSSI-only devices must not hide bonded BB peers (info cap=20)."""
+    dense_scan = _dense_rssi_only_scan_fixture(noise_count=178)
+    info_calls: list[str] = []
+    info_map = {
+        PAIRED_PEER_A: INFO_MULTILINE_HEX_FIXTURE,
+        PAIRED_PEER_B: INFO_PAIRED_B_FIXTURE,
+    }
+
+    def info_runner(bd: str) -> str:
+        info_calls.append(bd)
+        return info_map.get(bd, "")
+
+    seen: list[tuple[str, str]] = []
+    scanner = PresenceScanner(
+        scan_window_s=0.1,
+        scan_period_s=0.2,
+        quiet=True,
+        on_candidate=lambda bd, addr_type, _ts: seen.append((bd, addr_type)),
+        scan_runner=lambda _t: dense_scan,
+        info_runner=info_runner,
+        paired_runner=lambda: PAIRED_DEVICES_FIXTURE,
+    )
+
+    found = scanner.scan_once(now=500.0)
+    found_addrs = {c.bd_addr for c in found}
+    assert PAIRED_PEER_A in found_addrs
+    assert PAIRED_PEER_B in found_addrs
+    assert seen == [
+        (PAIRED_PEER_A, "public"),
+        (PAIRED_PEER_B, "random"),
+    ]
+    assert PAIRED_PEER_A in info_calls
+    assert PAIRED_PEER_B in info_calls
+    budget_calls = [bd for bd in info_calls if bd not in {PAIRED_PEER_A, PAIRED_PEER_B}]
+    assert len(budget_calls) <= 20
+    scanner.stop()
+
+
+def test_negative_cache_skips_info_within_ttl() -> None:
+    non_bb = "AA:BB:CC:DD:EE:99"
+    scan_fixture = f"[CHG] Device {non_bb} RSSI: -65\n"
+    info_calls: list[str] = []
+
+    def info_runner(bd: str) -> str:
+        info_calls.append(bd)
+        return ""
+
+    scanner = PresenceScanner(
+        scan_window_s=0.1,
+        scan_period_s=0.2,
+        quiet=True,
+        scan_runner=lambda _t: scan_fixture,
+        info_runner=info_runner,
+        paired_runner=lambda: "",
+    )
+
+    scanner.scan_once(now=1000.0)
+    assert info_calls == [non_bb]
+
+    info_calls.clear()
+    scanner.scan_once(now=1100.0)
+    assert non_bb not in info_calls
+
+    info_calls.clear()
+    scanner.scan_once(now=1121.0)
+    assert info_calls == [non_bb]
+
+    scanner.stop()
+
+
+def test_round_robin_covers_pool_over_passes() -> None:
+    devices = [f"CC:DD:EE:FF:00:{i:02X}" for i in range(45)]
+    scan_fixture = "\n".join(f"[CHG] Device {bd} RSSI: -70" for bd in devices) + "\n"
+
+    scanner = PresenceScanner(
+        scan_window_s=0.1,
+        scan_period_s=0.2,
+        quiet=True,
+        scan_runner=lambda _t: scan_fixture,
+        info_runner=lambda _bd: "",
+        paired_runner=lambda: "",
+    )
+
+    def run_pass(now: float) -> list[str]:
+        calls: list[str] = []
+
+        def tracking_runner(bd: str) -> str:
+            calls.append(bd)
+            return ""
+
+        scanner._info_runner = tracking_runner  # noqa: SLF001
+        scanner.scan_once(now=now)
+        return calls
+
+    first = run_pass(2000.0)
+    second = run_pass(2001.0)
+    assert len(first) == 20
+    assert len(second) == 20
+    assert set(first) == set(devices[:20])
+    assert set(first) & set(second) == set()
+    assert len(set(first) | set(second)) == 40
+    scanner.stop()
 
 
 if __name__ == "__main__":
@@ -261,3 +408,11 @@ if __name__ == "__main__":
     print("✅ PresenceScanner scan_once + TTL")
     test_presence_scanner_thread_loop()
     print("✅ PresenceScanner thread loop")
+    test_parse_bluetoothctl_devices_output()
+    print("✅ parse_bluetoothctl_devices_output")
+    test_dense_scan_paired_peers_detected_first_pass()
+    print("✅ dense scan paired peers first pass")
+    test_negative_cache_skips_info_within_ttl()
+    print("✅ negative cache TTL")
+    test_round_robin_covers_pool_over_passes()
+    print("✅ round-robin info budget")

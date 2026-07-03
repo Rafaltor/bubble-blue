@@ -374,6 +374,22 @@ def parse_bluetoothctl_info(
     return info
 
 
+def parse_bluetoothctl_devices_output(text: str) -> set[str]:
+    """Parse ``bluetoothctl devices [Paired|…]`` output (``Device XX:…`` lines)."""
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = _strip_ctl(raw)
+        parsed = _parse_device_line(line)
+        if parsed is not None:
+            seen.add(parsed[0])
+            continue
+        if line.strip().lower().startswith("device"):
+            m = _BD_ADDR_RE.search(line)
+            if m:
+                seen.add(m.group("bd").upper())
+    return seen
+
+
 def _parse_device_line(line: str) -> tuple[str, str | None] | None:
     """
     Parses bluetoothctl output lines such as:

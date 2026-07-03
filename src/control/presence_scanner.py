@@ -19,11 +19,13 @@ from src.transport.advertising import match_bb_beacon_manufacturer_data
 from src.transport.discovery import (
     ScanDeviceRecord,
     new_devices_from_scan_output,
+    parse_bluetoothctl_devices_output,
     parse_bluetoothctl_info,
     parse_bluetoothctl_scan_output,
 )
 
 INFO_LOOKUP_LIMIT = 20
+NEGATIVE_CACHE_TTL_S = 120.0
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class PresenceScanner:
         log: Callable[[str], None] | None = None,
         scan_runner: Callable[[float], str] | None = None,
         info_runner: Callable[[str], str] | None = None,
+        paired_runner: Callable[[], str] | None = None,
     ) -> None:
         self._scan_window_s = max(0.1, float(scan_window_s))
         self._scan_period_s = max(self._scan_window_s, float(scan_period_s))
@@ -73,8 +76,11 @@ class PresenceScanner:
         self._log = log or (lambda msg: None if quiet else print(f"[PRESENCE] {msg}", flush=True))
         self._scan_runner = scan_runner or self._default_scan_runner
         self._info_runner = info_runner or self._default_info_runner
-        self._lock = threading.Lock()
+        self._paired_runner = paired_runner or self._default_paired_runner
+        self._lock = threading.RLock()
         self._candidates: dict[str, PresenceCandidate] = {}
+        self._negative_cache_until: dict[str, float] = {}
+        self._round_robin_cursor = 0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
@@ -94,6 +100,16 @@ class PresenceScanner:
     def _default_info_runner(bd_addr: str) -> str:
         result = subprocess.run(
             ["bluetoothctl", "info", bd_addr],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout or ""
+
+    @staticmethod
+    def _default_paired_runner() -> str:
+        result = subprocess.run(
+            ["bluetoothctl", "devices", "Paired"],
             check=False,
             capture_output=True,
             text=True,
@@ -165,12 +181,12 @@ class PresenceScanner:
             now_ms=int(now_mono * 1000),
             log=self._log,
         )
-        new_devices = new_devices_from_scan_output(text)
         found: list[PresenceCandidate] = []
         matched: set[str] = set()
 
         with self._lock:
             prior_candidates = set(self._candidates)
+            self._purge_negative_cache_locked(now_mono)
 
         # (a) Fast path: BB beacon visible in scan stdout.
         for bd, record in records.items():
@@ -191,33 +207,74 @@ class PresenceScanner:
                             last_seen=now_mono,
                         )
 
-        # (b) Cached / RSSI-only devices: bluetoothctl info fallback (cap per pass).
-        info_queue: list[str] = []
-        for bd in records:
-            if bd in matched or bd in prior_candidates:
-                continue
-            if bd in new_devices:
-                info_queue.insert(0, bd)
-            else:
-                info_queue.append(bd)
+        paired = parse_bluetoothctl_devices_output(self._paired_runner())
 
-        info_calls = 0
-        for bd in info_queue:
-            if info_calls >= INFO_LOOKUP_LIMIT:
-                break
-            info_calls += 1
-            try:
-                info = parse_bluetoothctl_info(self._info_runner(bd), log=self._log)
-            except Exception as exc:
-                self._log(f"info parse failed for {bd}: {exc}")
+        def _needs_info(bd: str) -> bool:
+            if bd in matched or bd in prior_candidates:
+                return False
+            with self._lock:
+                if self._is_negatively_cached_locked(bd, now_mono):
+                    return False
+            return True
+
+        # (b) Paired peers seen this window — checked first, outside the budget.
+        for bd in sorted(bd for bd in records if bd in paired and _needs_info(bd)):
+            if self._try_info_for_bb(bd, now_mono, matched, found):
                 continue
-            if not _is_bb_info(info):
-                continue
-            addr_type = (info.addr_type or "unknown").lower()
-            matched.add(bd)
-            found.append(self._register_candidate(bd, addr_type, now_mono))
+
+        # (c) Round-robin over remaining devices within INFO_LOOKUP_LIMIT.
+        pool = sorted(bd for bd in records if _needs_info(bd))
+        if pool:
+            with self._lock:
+                start = self._round_robin_cursor % len(pool)
+            selected: list[str] = []
+            for offset in range(min(INFO_LOOKUP_LIMIT, len(pool))):
+                selected.append(pool[(start + offset) % len(pool)])
+            with self._lock:
+                self._round_robin_cursor = (start + len(selected)) % len(pool)
+            for bd in selected:
+                self._try_info_for_bb(bd, now_mono, matched, found)
 
         return found
+
+    def _try_info_for_bb(
+        self,
+        bd: str,
+        now_mono: float,
+        matched: set[str],
+        found: list[PresenceCandidate],
+    ) -> bool:
+        if bd in matched:
+            return True
+        try:
+            info = parse_bluetoothctl_info(self._info_runner(bd), log=self._log)
+        except Exception as exc:
+            self._log(f"info parse failed for {bd}: {exc}")
+            return False
+        if not _is_bb_info(info):
+            with self._lock:
+                self._negative_cache_until[bd] = now_mono + NEGATIVE_CACHE_TTL_S
+            return False
+        addr_type = (info.addr_type or "unknown").lower()
+        with self._lock:
+            self._negative_cache_until.pop(bd, None)
+        matched.add(bd)
+        found.append(self._register_candidate(bd, addr_type, now_mono))
+        return True
+
+    def _purge_negative_cache_locked(self, now_mono: float) -> None:
+        expired = [bd for bd, until in self._negative_cache_until.items() if now_mono >= until]
+        for bd in expired:
+            del self._negative_cache_until[bd]
+
+    def _is_negatively_cached_locked(self, bd: str, now_mono: float) -> bool:
+        until = self._negative_cache_until.get(bd)
+        if until is None:
+            return False
+        if now_mono >= until:
+            del self._negative_cache_until[bd]
+            return False
+        return True
 
     def _register_candidate(self, bd: str, addr_type: str, now_mono: float) -> PresenceCandidate:
         candidate = PresenceCandidate(bd_addr=bd, addr_type=addr_type, last_seen=now_mono)
