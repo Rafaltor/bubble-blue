@@ -41,6 +41,8 @@ _DEVICE_HEADER_ADDR_TYPE_RE = re.compile(
     r"^\s*Device\s+(?P<bd>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s*\((?P<addr_type>[a-zA-Z-]+)\)",
     re.IGNORECASE,
 )
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_READLINE_CTL_RE = re.compile(r"[\x01\x02]")
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,14 @@ class BluetoothctlInfo:
     name: str | None = None
     addr_type: str | None = None
     manufacturer_data: dict[int, bytes] = field(default_factory=dict)
+
+
+def _strip_ctl(line: str) -> str:
+    """Remove ANSI escapes, readline control chars, and carriage returns."""
+    cleaned = line.replace("\r", "")
+    cleaned = _ANSI_ESCAPE_RE.sub("", cleaned)
+    cleaned = _READLINE_CTL_RE.sub("", cleaned)
+    return cleaned
 
 
 def parse_manufacturer_data_hex(hex_text: str) -> bytes:
@@ -109,13 +119,52 @@ def _flush_pending_mfg_hex(
         target[pending_key] = bytes(accum)
 
 
+class _MfgHexdumpConsumer:
+    """Shared multiline hexdump state for scan stdout and ``bluetoothctl info``."""
+
+    __slots__ = ("_accum", "_pending_key")
+
+    def __init__(self) -> None:
+        self._pending_key: int | None = None
+        self._accum = bytearray()
+
+    @property
+    def active(self) -> bool:
+        return self._pending_key is not None
+
+    def start(self, company_id: int) -> None:
+        self._pending_key = company_id
+        self._accum = bytearray()
+
+    def reset(self) -> None:
+        self._pending_key = None
+        self._accum = bytearray()
+
+    def feed(self, line: str) -> bool:
+        """Consume one hexdump continuation line; return True if bytes were appended."""
+        chunk = _hexdump_line_bytes(line)
+        if chunk is None:
+            return False
+        self._accum.extend(chunk)
+        return True
+
+    def flush_into(self, target: dict[int, bytes]) -> None:
+        _flush_pending_mfg_hex(
+            pending_key=self._pending_key,
+            accum=self._accum,
+            target=target,
+        )
+        self.reset()
+
+
 def new_devices_from_scan_output(text: str) -> set[str]:
     """BD addresses announced with ``[NEW] Device …`` during a scan window."""
     seen: set[str] = set()
     for raw in text.splitlines():
-        if "[NEW]" not in raw.upper():
+        line = _strip_ctl(raw)
+        if "[NEW]" not in line.upper():
             continue
-        bd = _device_bd_from_line(raw)
+        bd = _device_bd_from_line(line)
         if bd:
             seen.add(bd)
     return seen
@@ -153,13 +202,34 @@ def parse_bluetoothctl_scan_output(
     """
     records: dict[str, ScanDeviceRecord] = {}
     pending_mfg_key: dict[str, int] = {}
+    pending_mfg_value = _MfgHexdumpConsumer()
+    pending_value_bd: str | None = None
+
+    def _flush_scan_mfg_value() -> None:
+        nonlocal pending_value_bd
+        if pending_value_bd is not None and pending_mfg_value.active:
+            rec = _record_for(records, pending_value_bd)
+            pending_mfg_value.flush_into(rec.manufacturer_data)
+        pending_value_bd = None
+        pending_mfg_value.reset()
 
     for raw in text.splitlines():
-        line = raw.rstrip("\n")
+        line = _strip_ctl(raw.rstrip("\n"))
         if not line.strip():
+            if pending_value_bd is not None:
+                _flush_scan_mfg_value()
             continue
         try:
             bd = _device_bd_from_line(line)
+
+            if pending_value_bd is not None:
+                if bd is not None:
+                    _flush_scan_mfg_value()
+                elif pending_mfg_value.feed(line):
+                    continue
+                else:
+                    _flush_scan_mfg_value()
+
             if bd is None:
                 continue
 
@@ -187,6 +257,13 @@ def parse_bluetoothctl_scan_output(
                 pending_mfg_key[bd] = int(key_match.group(1), 16)
                 continue
 
+            if _MFG_VALUE_EMPTY_RE.search(line):
+                company_id = pending_mfg_key.pop(bd, None)
+                if company_id is not None:
+                    pending_value_bd = bd
+                    pending_mfg_value.start(company_id)
+                continue
+
             val_match = _MFG_VALUE_RE.search(line)
             if val_match:
                 company_id = pending_mfg_key.pop(bd, None)
@@ -202,6 +279,9 @@ def parse_bluetoothctl_scan_output(
                 log(f"scan parse skip ({exc}): {line!r}")
             continue
 
+    if pending_value_bd is not None:
+        _flush_scan_mfg_value()
+
     return records
 
 
@@ -213,35 +293,20 @@ def parse_bluetoothctl_info(
     """Parse ``bluetoothctl info <bd>`` for address type and manufacturer data."""
     info = BluetoothctlInfo()
     pending_mfg_key: int | None = None
-    consuming_mfg_hex = False
-    mfg_hex_accum = bytearray()
-
-    def _finish_mfg_hex_consumption() -> None:
-        nonlocal consuming_mfg_hex, pending_mfg_key, mfg_hex_accum
-        _flush_pending_mfg_hex(
-            pending_key=pending_mfg_key,
-            accum=mfg_hex_accum,
-            target=info.manufacturer_data,
-        )
-        pending_mfg_key = None
-        mfg_hex_accum = bytearray()
-        consuming_mfg_hex = False
+    mfg_consumer = _MfgHexdumpConsumer()
 
     for raw in text.splitlines():
-        line = raw.rstrip("\n")
+        line = _strip_ctl(raw.rstrip("\n"))
         stripped = line.strip()
         if not stripped:
-            if consuming_mfg_hex:
-                _finish_mfg_hex_consumption()
+            if mfg_consumer.active:
+                mfg_consumer.flush_into(info.manufacturer_data)
             continue
         try:
-            if consuming_mfg_hex:
-                chunk = _hexdump_line_bytes(line)
-                if chunk is not None:
-                    mfg_hex_accum.extend(chunk)
+            if mfg_consumer.active:
+                if mfg_consumer.feed(line):
                     continue
-                _finish_mfg_hex_consumption()
-                # fall through — non-hex line may be a new field
+                mfg_consumer.flush_into(info.manufacturer_data)
 
             header = _DEVICE_HEADER_ADDR_TYPE_RE.match(stripped)
             if header:
@@ -281,9 +346,10 @@ def parse_bluetoothctl_info(
                 pending_mfg_key = int(key_match.group(1), 16)
                 continue
 
-            if _MFG_VALUE_EMPTY_RE.match(stripped):
-                consuming_mfg_hex = True
-                mfg_hex_accum = bytearray()
+            if _MFG_VALUE_EMPTY_RE.search(stripped):
+                if pending_mfg_key is not None:
+                    mfg_consumer.start(pending_mfg_key)
+                    pending_mfg_key = None
                 continue
 
             val_match = _MFG_VALUE_RE.search(stripped)
@@ -302,8 +368,8 @@ def parse_bluetoothctl_info(
                 log(f"info parse skip ({exc}): {stripped!r}")
             continue
 
-    if consuming_mfg_hex:
-        _finish_mfg_hex_consumption()
+    if mfg_consumer.active:
+        mfg_consumer.flush_into(info.manufacturer_data)
 
     return info
 

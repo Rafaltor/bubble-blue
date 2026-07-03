@@ -56,7 +56,7 @@ class PresenceScanner:
     def __init__(
         self,
         *,
-        scan_window_s: float = 3.0,
+        scan_window_s: float = 6.0,
         scan_period_s: float = 15.0,
         candidate_ttl_s: float = 60.0,
         on_candidate: Callable[[str, str, float], None] | None = None,

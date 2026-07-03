@@ -11,6 +11,8 @@ if _ROOT not in sys.path:
 from src.control.presence_scanner import PresenceScanner, is_bb_beacon_record  # noqa: E402
 from src.transport.advertising import BB_BEACON_COMPANY_ID, BB_BEACON_MAGIC, match_bb_beacon_manufacturer_data  # noqa: E402
 from src.transport.discovery import (  # noqa: E402
+    _strip_ctl,
+    new_devices_from_scan_output,
     parse_bluetoothctl_info,
     parse_bluetoothctl_scan_output,
     parse_manufacturer_data_hex,
@@ -74,10 +76,46 @@ CACHED_DEVICE_SCAN_FIXTURE = """
 [CHG] Device 14:B5:CD:E2:12:4F RSSI: -60
 """
 
+# Verbatim excerpt from ``bluetoothctl --timeout 6 scan le`` (ANSI escapes literal).
+REAL_SCAN_CAPTURE_RAW = (
+    "[\x1b[0;93mCHG\x1b[0m] Device 44:C8:3E:FD:9D:A1 RSSI: 0xffffffae (-82)\n"
+    "[\x1b[0;93mCHG\x1b[0m] Device 44:C8:3E:FD:9D:A1 ManufacturerData.Key: 0x0075 (117)\n"
+    "[\x1b[0;93mCHG\x1b[0m] Device 44:C8:3E:FD:9D:A1 ManufacturerData.Value:\n"
+    "  0b a0 7f 69 b1 73 60 b5                          ...i.s`.        \n"
+    "[\x1b[0;92mNEW\x1b[0m] \x1b[1;30mDevice 0F:DD:51:26:17:C8 0F-DD-51-26-17-C8\x1b[0m\n"
+)
+
+REAL_SCAN_CAPTURE_CLEAN = """
+[CHG] Device 44:C8:3E:FD:9D:A1 RSSI: 0xffffffae (-82)
+[CHG] Device 44:C8:3E:FD:9D:A1 ManufacturerData.Key: 0x0075 (117)
+[CHG] Device 44:C8:3E:FD:9D:A1 ManufacturerData.Value:
+  0b a0 7f 69 b1 73 60 b5                          ...i.s`.        
+[NEW] Device 0F:DD:51:26:17:C8 0F-DD-51-26-17-C8
+"""
+
 
 def test_parse_manufacturer_data_hex() -> None:
     assert parse_manufacturer_data_hex("424201") == BB_BEACON_MAGIC + b"\x01"
     assert parse_manufacturer_data_hex("0x424201") == BB_BEACON_MAGIC + b"\x01"
+
+
+def test_real_scan_capture_ansi_and_multiline_mfg() -> None:
+    raw = parse_bluetoothctl_scan_output(REAL_SCAN_CAPTURE_RAW)
+    clean = parse_bluetoothctl_scan_output(REAL_SCAN_CAPTURE_CLEAN)
+
+    expected_mfg = bytes.fromhex("0ba07f69b17360b5")
+    assert raw["44:C8:3E:FD:9D:A1"].manufacturer_data[0x0075] == expected_mfg
+    assert clean["44:C8:3E:FD:9D:A1"].manufacturer_data[0x0075] == expected_mfg
+    assert raw["0F:DD:51:26:17:C8"].name == "0F-DD-51-26-17-C8"
+    assert clean["0F:DD:51:26:17:C8"].name == "0F-DD-51-26-17-C8"
+    assert raw["44:C8:3E:FD:9D:A1"].manufacturer_data == clean["44:C8:3E:FD:9D:A1"].manufacturer_data
+    assert raw["0F:DD:51:26:17:C8"].name == clean["0F:DD:51:26:17:C8"].name
+
+    assert "0F:DD:51:26:17:C8" in new_devices_from_scan_output(REAL_SCAN_CAPTURE_RAW)
+    assert "0F:DD:51:26:17:C8" in new_devices_from_scan_output(REAL_SCAN_CAPTURE_CLEAN)
+
+    colored = "[\x1b[0;92mNEW\x1b[0m] \x1b[1;30mDevice AA:BB:CC:DD:EE:FF foo\x1b[0m"
+    assert _strip_ctl(colored) == "[NEW] Device AA:BB:CC:DD:EE:FF foo"
 
 
 def test_parse_bluetoothctl_scan_output_fixture() -> None:
@@ -207,6 +245,8 @@ def test_presence_scanner_thread_loop() -> None:
 if __name__ == "__main__":
     test_parse_manufacturer_data_hex()
     print("✅ parse_manufacturer_data_hex")
+    test_real_scan_capture_ansi_and_multiline_mfg()
+    print("✅ real scan capture ANSI + multiline mfg")
     test_parse_bluetoothctl_scan_output_fixture()
     print("✅ parse_bluetoothctl_scan_output")
     test_parse_bluetoothctl_info_multiline_hexdump()
