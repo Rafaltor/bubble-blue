@@ -42,7 +42,13 @@ if not hasattr(socket, "BDADDR_LE_PUBLIC"):
     )
 
 from config import MTU_BLE, PSM_BLE, load_config  # noqa: E402
-from src.transport.ble_coc import LE_ADDR_TYPE, open_listener, open_outbound  # noqa: E402
+from src.transport.advertising import LEAdvertiser  # noqa: E402
+from src.transport.ble_coc import (  # noqa: E402
+    LE_ADDR_TYPE,
+    le_addr_types_to_try,
+    open_listener,
+    open_outbound,
+)
 from src.transport.fragmentation import (  # noqa: E402
     HEADER_SIZE,
     Reassembler,
@@ -152,6 +158,17 @@ class BLEL2CAPTransport:
         self._server_sock: socket.socket | None = None
         self._server_thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
+        self._advertiser = LEAdvertiser(interface=interface, quiet=quiet)
+
+    def _rearm_advertising(self) -> None:
+        """Non-blocking advertising re-arm after connect/disconnect (legacy LE)."""
+        if not self._advertiser.running:
+            return
+        threading.Thread(
+            target=self._advertiser.ensure,
+            name="bb-adv-ensure",
+            daemon=True,
+        ).start()
 
     def _le_addr(self, bd_addr: str) -> tuple[str, int, int, int]:
         return (bd_addr.upper(), self._psm, 0, self._bdaddr_type)
@@ -172,6 +189,7 @@ class BLEL2CAPTransport:
                 return
 
             self._stop_evt.clear()
+            self._advertiser.start()
 
             s = open_listener(psm=self._psm, backlog=self._backlog)
             self.mtu = _probe_negotiated_mtu(s, default=MTU_BLE)
@@ -199,6 +217,7 @@ class BLEL2CAPTransport:
 
     def stop(self) -> None:
         self._stop_evt.set()
+        self._advertiser.stop()
 
         with self._lock:
             if self._server_sock:
@@ -218,7 +237,23 @@ class BLEL2CAPTransport:
 
         _tlog(self._node, "BLE L2CAP stopped", quiet=self._quiet)
 
-    def connect(self, bd_addr: str) -> None:
+    def mute(self) -> None:
+        """Stop LE advertising only (scanner muted separately via BBNode)."""
+        self._advertiser.mute()
+
+    def disconnect(self, bd_addr: str) -> None:
+        """Close an established peer link (does not block the caller)."""
+        bd_addr = bd_addr.upper()
+        with self._lock:
+            peer = self._conns.get(bd_addr)
+        if peer is None:
+            return
+        try:
+            peer.sock.close()
+        except OSError:
+            pass
+
+    def connect(self, bd_addr: str, *, addr_type: int | str | None = None) -> None:
         bd_addr = bd_addr.upper()
         local = self._cfg.local_bd_addr.upper()
         if bd_addr == local:
@@ -244,10 +279,17 @@ class BLEL2CAPTransport:
             if existing and existing.sock.fileno() != -1:
                 return
 
-        try:
-            sock = open_outbound(bd_addr, psm=self._psm, addr_type=self._bdaddr_type)
-        except OSError:
-            raise
+        last_err: OSError | None = None
+        sock: socket.socket | None = None
+        for try_type in le_addr_types_to_try(addr_type):
+            try:
+                sock = open_outbound(bd_addr, psm=self._psm, addr_type=try_type)
+                break
+            except OSError as e:
+                last_err = e
+        if sock is None:
+            assert last_err is not None
+            raise last_err
 
         mtu = _probe_negotiated_mtu(sock, default=self.mtu)
 
@@ -274,6 +316,9 @@ class BLEL2CAPTransport:
 
         if is_new and self.on_peer_connected:
             self.on_peer_connected(bd_addr)
+
+        if is_new:
+            self._rearm_advertising()
 
         _tlog(
             self._node,
@@ -383,6 +428,8 @@ class BLEL2CAPTransport:
             if self.on_peer_connected:
                 self.on_peer_connected(peer_bd_addr)
 
+            self._rearm_advertising()
+
             _tlog(
                 self._node,
                 f"BLE L2CAP accept src={peer_bd_addr} dst={self._cfg.local_bd_addr} "
@@ -454,6 +501,7 @@ class BLEL2CAPTransport:
             if removed and self.on_peer_disconnected:
                 self.on_peer_disconnected(peer_bd_addr)
             if removed:
+                self._rearm_advertising()
                 _tlog(self._node, f"BLE L2CAP disconnect peer={peer_bd_addr}", quiet=self._quiet)
 
 

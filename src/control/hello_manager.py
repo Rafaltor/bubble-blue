@@ -127,6 +127,10 @@ class HelloManager:
             raise KeyError(f"no learned anon_id for peer {bd} (Hello not yet received)")
         return self._learned_anon_ids[bd]
 
+    def has_learned_public_hello(self, bd_addr: str) -> bool:
+        """True after a well-formed public Hello was received from this L2CAP peer."""
+        return bd_addr.strip().upper() in self._learned_anon_ids
+
     def _parse_hello_member(self, data: bytes) -> dict[str, Any] | None:
         """Decrypt Hello private part with current or bootstrap group key."""
         for key in (self._epoch_store.current_group_key(), self._bootstrap_key):

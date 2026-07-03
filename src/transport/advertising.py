@@ -198,6 +198,15 @@ class LEAdvertiser:
     def running(self) -> bool:
         return self._started
 
+    def ensure(self) -> None:
+        """Re-arm the advertising instance if the controller dropped it."""
+        if not self._started:
+            return
+        try:
+            self._ensure_instance(force=False)
+        except Exception as exc:
+            self._log(f"ensure error: {exc}")
+
     def _prepare_controller(self) -> None:
         self._run(self._hci_index, "power on")
         self._run(self._hci_index, "le on")

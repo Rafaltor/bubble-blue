@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from config import PKT_DATA, PKT_HELLO, PKT_REKEY, PKT_SUBGROUP, BubbleBlueConfig, load_config
 from src.control.hello_manager import HelloManager
+from src.control.presence_scanner import PresenceScanner
 from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
 from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
@@ -16,6 +17,10 @@ from src.transport.base import ManagedTransport
 from src.transport.factory import make_transport
 
 LogFn = Callable[[str, bool], None]
+
+PROTOCOL_HELLO_GRACE_MULT = 3
+PROTOCOL_QUARANTINE_BASE_S = 30.0
+PROTOCOL_QUARANTINE_CAP_S = 600.0
 
 
 def topology_from_env() -> frozenset[str] | None:
@@ -91,6 +96,13 @@ class BBNode:
         self._connect_backoff_until: dict[str, float] = {}
         self._connect_streak: dict[str, int] = {}
         self._active_peers: set[str] = set()
+        self._presence_scanner: PresenceScanner | None = None
+        self._discovered_candidates: dict[str, str] = {}
+        self._peer_addr_types: dict[str, str] = {}
+        self._peer_admission_deadline: dict[str, float] = {}
+        self._admitted_peers: set[str] = set()
+        self._protocol_quarantine_until: dict[str, float] = {}
+        self._protocol_quarantine_streak: dict[str, int] = {}
 
         if setup_pairing_agent:
             self._pairing_proc = self._setup_ble_pairing_agent()
@@ -113,13 +125,15 @@ class BBNode:
                 interface=self._interface,
                 remote_bd_addr=self._remote_bd_addr,
             )
-            allowlist = self._connect_targets()
-            if l2cap_accept_all:
+            allowlist = self._restrictive_allowlist()
+            if allowlist is not None:
+                allowed_peers = allowlist
+            elif l2cap_accept_all:
                 allowed_peers = None
-            elif allowlist:
-                allowed_peers = frozenset(allowlist)
             else:
                 allowed_peers = None
+
+            node_self = self
 
             holder: dict[str, HelloManager | PacketForwarder | None] = {
                 "hello": None,
@@ -132,7 +146,10 @@ class BBNode:
                 if data[0] == PKT_HELLO:
                     hm = holder["hello"]
                     if hm is not None:
+                        had = hm.has_learned_public_hello(peer)
                         hm.on_receive(peer, data)
+                        if not had and hm.has_learned_public_hello(peer):
+                            node_self._mark_peer_admitted(peer)
                     return
                 if data[0] in (PKT_DATA, PKT_SUBGROUP, PKT_REKEY):
                     fwd = holder["fwd"]
@@ -179,20 +196,29 @@ class BBNode:
             self._forwarder = fwd
             self._started = True
 
+            if self._cfg.transport_kind == "ble_l2cap":
+                self._presence_scanner = PresenceScanner(
+                    quiet=self._quiet,
+                    on_candidate=self._on_presence_candidate,
+                )
+                self._presence_scanner.start()
+
             self._active_peers = {p.upper() for p in transport.connections()}
             self._connect_peers()
-            if allowlist:
-                self._connect_stop.clear()
-                self._connect_thread = threading.Thread(
-                    target=self._connect_loop,
-                    name="bb-connect",
-                    daemon=True,
-                )
-                self._connect_thread.start()
+            self._connect_stop.clear()
+            self._connect_thread = threading.Thread(
+                target=self._connect_loop,
+                name="bb-connect",
+                daemon=True,
+            )
+            self._connect_thread.start()
 
     def stop(self) -> None:
         self._connect_stop.set()
         with self._lock:
+            if self._presence_scanner is not None:
+                self._presence_scanner.stop()
+                self._presence_scanner = None
             if self._hello_mgr is not None:
                 self._hello_mgr.stop()
             if self._transport is not None:
@@ -202,6 +228,12 @@ class BBNode:
             self._forwarder = None
             self._started = False
             self._active_peers.clear()
+            self._discovered_candidates.clear()
+            self._peer_addr_types.clear()
+            self._peer_admission_deadline.clear()
+            self._admitted_peers.clear()
+            self._protocol_quarantine_until.clear()
+            self._protocol_quarantine_streak.clear()
 
         if self._pairing_proc is not None:
             try:
@@ -209,6 +241,16 @@ class BBNode:
             except OSError:
                 pass
             self._pairing_proc = None
+
+    def mute(self) -> None:
+        """Stop presence scan and LE advertising (beacon); L2CAP links stay up."""
+        with self._lock:
+            if self._presence_scanner is not None:
+                self._presence_scanner.stop()
+                self._presence_scanner = None
+            transport = self._transport
+        if transport is not None and hasattr(transport, "mute"):
+            transport.mute()
 
     def send(self, text: str) -> None:
         """Broadcast chat message (dst = FF:FF:FF:FF:FF:FF) on all L2CAP links."""
@@ -318,8 +360,8 @@ class BBNode:
             raise RuntimeError("no L2CAP peers connected")
         return peers[0]
 
-    def _connect_targets(self) -> set[str]:
-        """Peers to dial: --topology, then .env group members, then --peer."""
+    def _restrictive_allowlist(self) -> frozenset[str] | None:
+        """Lab override: topology ∪ GROUP_MEMBERS (None = open discovery)."""
         if self._cfg is None:
             cfg = load_config(
                 interface=self._interface,
@@ -328,16 +370,100 @@ class BBNode:
         else:
             cfg = self._cfg
         local = cfg.local_bd_addr.upper()
-        targets: set[str] = set()
+        addrs: set[str] = set()
         if self._topology:
-            targets.update(self._topology)
+            addrs.update(self._topology)
         for bd in cfg.group_members:
-            targets.add(bd.upper())
+            addrs.add(bd.upper())
         remote = (self._remote_bd_addr or cfg.remote_bd_addr).upper()
         if remote not in ("00:00:00:00:00:00", local):
-            targets.add(remote)
+            addrs.add(remote)
+        addrs.discard(local)
+        return frozenset(addrs) if addrs else None
+
+    def _connect_targets(self) -> set[str]:
+        """Peers to dial: allowlist ∪ discovered BB candidates (filtered if lab)."""
+        if self._cfg is None:
+            cfg = load_config(
+                interface=self._interface,
+                remote_bd_addr=self._remote_bd_addr,
+            )
+        else:
+            cfg = self._cfg
+        local = cfg.local_bd_addr.upper()
+        allow = self._restrictive_allowlist()
+        targets: set[str] = set()
+        if allow is not None:
+            targets.update(allow)
+        with self._lock:
+            for bd, _addr_type in self._discovered_candidates.items():
+                if allow is None or bd in allow:
+                    targets.add(bd)
         targets.discard(local)
         return targets
+
+    def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
+        bd = bd_addr.upper()
+        with self._lock:
+            if time.monotonic() < self._protocol_quarantine_until.get(bd, 0.0):
+                return
+            allow = self._restrictive_allowlist()
+            if allow is not None and bd not in allow:
+                return
+            first = bd not in self._discovered_candidates
+            self._discovered_candidates[bd] = addr_type
+            self._peer_addr_types[bd] = addr_type
+        if first:
+            self._dispatch_log(f"candidat découvert: {bd} ({addr_type})")
+
+    def _mark_peer_admitted(self, bd_addr: str) -> None:
+        bd = bd_addr.upper()
+        with self._lock:
+            if bd in self._admitted_peers:
+                return
+            self._admitted_peers.add(bd)
+            self._peer_admission_deadline.pop(bd, None)
+            self._protocol_quarantine_streak.pop(bd, None)
+            self._protocol_quarantine_until.pop(bd, None)
+        self._dispatch_log(f"peer admis: {bd}")
+
+    def _check_protocol_admission(self) -> None:
+        if self._hello_mgr is None or self._cfg is None:
+            return
+        if self._cfg.transport_kind != "ble_l2cap":
+            return
+        now = time.monotonic()
+        with self._lock:
+            pending = list(self._peer_admission_deadline.items())
+        for bd, deadline in pending:
+            if bd not in self._active_peers:
+                with self._lock:
+                    self._peer_admission_deadline.pop(bd, None)
+                continue
+            if self._hello_mgr.has_learned_public_hello(bd):
+                self._mark_peer_admitted(bd)
+                continue
+            if now >= deadline:
+                self._expel_peer_protocol_silence(bd)
+
+    def _expel_peer_protocol_silence(self, bd_addr: str) -> None:
+        bd = bd_addr.upper()
+        with self._lock:
+            self._peer_admission_deadline.pop(bd, None)
+            streak = self._protocol_quarantine_streak.get(bd, 0) + 1
+            self._protocol_quarantine_streak[bd] = streak
+            quarantine_s = min(
+                PROTOCOL_QUARANTINE_CAP_S,
+                PROTOCOL_QUARANTINE_BASE_S * (2 ** (streak - 1)),
+            )
+            self._protocol_quarantine_until[bd] = time.monotonic() + quarantine_s
+            self._discovered_candidates.pop(bd, None)
+            self._peer_addr_types.pop(bd, None)
+        self._dispatch_log(f"peer expulsé (silence protocolaire): {bd}")
+        self._dispatch_log(f"quarantaine {bd}: {quarantine_s:.0f}s")
+        transport = self._transport
+        if transport is not None and hasattr(transport, "disconnect"):
+            transport.disconnect(bd)
 
     def _connect_peers(self) -> None:
         if self._transport is None:
@@ -354,10 +480,16 @@ class BBNode:
                 continue
             if now < self._connect_backoff_until.get(bd, 0.0):
                 continue
+            if now < self._protocol_quarantine_until.get(bd, 0.0):
+                continue
             if local >= bd:
                 continue
+            addr_type = self._peer_addr_types.get(bd)
             try:
-                self._transport.connect(bd)
+                if self._cfg and self._cfg.transport_kind == "ble_l2cap":
+                    self._transport.connect(bd, addr_type=addr_type)
+                else:
+                    self._transport.connect(bd)
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
@@ -396,6 +528,7 @@ class BBNode:
     def _connect_loop(self) -> None:
         while not self._connect_stop.wait(4.0):
             try:
+                self._check_protocol_admission()
                 self._connect_peers()
             except Exception as e:  # noqa: BLE001
                 self._dispatch_log(f"connect loop: {e}")
@@ -409,6 +542,11 @@ class BBNode:
         if bd in self._active_peers:
             return
         self._active_peers.add(bd)
+        if self._cfg and self._cfg.transport_kind == "ble_l2cap":
+            with self._lock:
+                self._peer_admission_deadline[bd] = (
+                    time.monotonic() + PROTOCOL_HELLO_GRACE_MULT * self._cfg.hello_interval_s
+                )
         if self.on_peer_connected:
             self.on_peer_connected(bd)
 
@@ -417,12 +555,16 @@ class BBNode:
         if bd not in self._active_peers:
             return
         self._active_peers.discard(bd)
+        with self._lock:
+            self._peer_admission_deadline.pop(bd, None)
+            self._admitted_peers.discard(bd)
         if self._hello_mgr is not None:
             self._hello_mgr.on_peer_disconnected(bd)
         if self.on_peer_disconnected:
             self.on_peer_disconnected(bd)
 
     def _dispatch_decrypt_fail(self, src: str) -> None:
+        # Foreign-group relay: decrypt failure must never expel or quarantine.
         if self.on_decrypt_fail:
             self.on_decrypt_fail(src.upper())
 

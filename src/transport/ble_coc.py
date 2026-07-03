@@ -28,6 +28,32 @@ def require_le_coc() -> None:
         )
 
 
+def addr_type_from_label(label: str) -> int:
+    """Map bluetoothctl ``AddressType`` to ``socket.BDADDR_LE_*``."""
+    require_le_coc()
+    normalized = label.strip().lower()
+    if normalized in ("random", "static-random", "rpa", "random-static"):
+        return int(socket.BDADDR_LE_RANDOM)
+    return int(socket.BDADDR_LE_PUBLIC)
+
+
+def le_addr_types_to_try(preferred: int | str | None = None) -> list[int]:
+    """Candidate addr types for outbound connect (preferred first)."""
+    require_le_coc()
+    public = int(socket.BDADDR_LE_PUBLIC)
+    random = int(socket.BDADDR_LE_RANDOM)
+    ordered: list[int] = []
+    if preferred is not None:
+        if isinstance(preferred, str):
+            ordered.append(addr_type_from_label(preferred))
+        else:
+            ordered.append(int(preferred))
+    for candidate in (public, random):
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
 def le_addr(bd_addr: str, *, psm: int, addr_type: int = LE_ADDR_TYPE) -> tuple[str, int, int, int]:
     return (bd_addr.upper(), int(psm), 0, int(addr_type))
 
