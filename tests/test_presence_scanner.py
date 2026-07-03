@@ -389,6 +389,62 @@ def test_round_robin_covers_pool_over_passes() -> None:
     scanner.stop()
 
 
+def test_idle_check_switches_period() -> None:
+    idle = [False]
+    scanner = PresenceScanner(
+        scan_window_s=0.1,
+        scan_period_s=15.0,
+        steady_period_s=60.0,
+        quiet=True,
+        idle_check=lambda: idle[0],
+        scan_runner=lambda _t: "",
+        paired_runner=lambda: "",
+    )
+    assert scanner._period_s() == 15.0  # noqa: SLF001
+    idle[0] = True
+    assert scanner._period_s() == 60.0  # noqa: SLF001
+    scanner.stop()
+
+
+def test_defer_next_pass_skips_scan() -> None:
+    scanner = PresenceScanner(
+        scan_window_s=0.01,
+        scan_period_s=0.05,
+        quiet=True,
+        scan_runner=lambda _t: "",
+        paired_runner=lambda: "",
+    )
+    with scanner._lock:  # noqa: SLF001
+        scanner._defer_scan_until = 200.0
+    assert scanner._consume_defer_wait(195.0) == 5.0  # noqa: SLF001
+    assert scanner._consume_defer_wait(200.0) == 0.0  # noqa: SLF001
+    scanner.stop()
+
+
+def test_defer_next_pass_integration() -> None:
+    scan_calls: list[int] = []
+
+    scanner = PresenceScanner(
+        scan_window_s=0.01,
+        scan_period_s=0.08,
+        quiet=True,
+        scan_runner=lambda _t: (scan_calls.append(1) or ""),
+        paired_runner=lambda: "",
+    )
+    scanner.start()
+    time.sleep(0.025)
+    baseline = len(scan_calls)
+    scanner.defer_next_pass(0.12)
+    time.sleep(0.1)
+    during_defer = len(scan_calls)
+    time.sleep(0.15)
+    after_defer = len(scan_calls)
+    scanner.stop()
+    assert baseline >= 1
+    assert during_defer == baseline
+    assert after_defer > baseline
+
+
 if __name__ == "__main__":
     test_parse_manufacturer_data_hex()
     print("✅ parse_manufacturer_data_hex")
@@ -416,3 +472,9 @@ if __name__ == "__main__":
     print("✅ negative cache TTL")
     test_round_robin_covers_pool_over_passes()
     print("✅ round-robin info budget")
+    test_idle_check_switches_period()
+    print("✅ idle_check period switch")
+    test_defer_next_pass_skips_scan()
+    print("✅ defer_next_pass skip")
+    test_defer_next_pass_integration()
+    print("✅ defer_next_pass integration")

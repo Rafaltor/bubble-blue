@@ -11,7 +11,8 @@ Accessible à **tout nœud BB**, indépendamment de `BUBBLE_BLUE_GROUP_KEY` :
 | Mécanisme | Module | Comportement |
 |-----------|--------|--------------|
 | Beacon universel | `src/transport/advertising.py` (`LEAdvertiser`) | AD statique : Flags `0x06` + Manufacturer Data company `0xFFFF`, magic ASCII `BB`, version protocole `0x01` |
-| Scan périodique | `src/control/presence_scanner.py` (`PresenceScanner`) | Scan LE, filtre candidats BB via `BB_BEACON_MAGIC` |
+| Scan périodique | `src/control/presence_scanner.py` (`PresenceScanner`) | Scan LE 3 s, filtre candidats BB ; duty cycle adaptatif (15 s actif → 60 s une fois tous les candidats admis connectés) ; courtoisie post-connexion (10 s) |
+| Agent pairing | `src/transport/pairing_agent.py` (`PairingAgentSupervisor`) | `agent off` puis NoInputNoOutput (Just Works, évite MITM numérique ~20 s / Reason 0x13) |
 | Auto-connect | transport L2CAP / `BBNode` | Établissement de liens vers les candidats détectés (sans adresses préconfigurées) |
 | Hellos publics | `src/control/hello.py` | Partie publique lisible par tous ; anon_ids appris sur le fil (cross-group) |
 | CDS / RELAY | `src/control/hello_manager.py`, `src/forwarding/cds.py` | Élection RELAY/LEAF sur la topologie anonyme ; forward **opaque** des `PKT_DATA` |
@@ -210,3 +211,31 @@ sudo python3 bb_node.py --scan 8
 - **No peer list in lab mode** → node listens but never dials → `0 peer(s)` until the other side connects or beacon auto-connect kicks in.
 - **Allowlist too strict (`--topology`)** → incoming connection rejected if peer BD_ADDR not in topology (intentional for Temps 2 line topology).
 - **Confusing planes** → a foreign-group RELAY showing `paquet non déchiffrable` is **normal** ; it must still forward and stay in the mesh.
+
+## BLE coexistence (scan vs active links)
+
+On legacy controllers, a long LE scan window can starve connection supervision events and drop active L2CAP links (kernel default supervision timeout ≈ **420 ms** vs scan windows of several seconds).
+
+BUBBLE-BLUE mitigates this in software:
+
+| Mechanism | Default | Module |
+|-----------|---------|--------|
+| Scan window | **3 s** | `PresenceScanner.scan_window_s` |
+| Active discovery period | **15 s** | `scan_period_s` while unknown / unconnected candidates remain |
+| Steady period | **60 s** | `steady_period_s` when every non-quarantined discovered candidate is an admitted active peer (`idle_check` from `BBNode`) |
+| Post-connect courtesy | **10 s** | `defer_next_pass()` after each peer connect — skips the next scan pass if it would fall inside the deferral window (SMP, GATT, first Hello) |
+
+### Optional lab tweak (debugfs)
+
+If links still drop under heavy RF or very old controllers, raise the **central supervision timeout** (units of 10 ms):
+
+```bash
+# Default is often 42 (= 420 ms). Suggest 300 (= 3 s) for demanding labs:
+echo 300 | sudo tee /sys/kernel/debug/bluetooth/hci0/supervision_timeout
+```
+
+Requires debugfs mounted; replace `hci0` with your interface. This is **optional** when the adaptive scanner duty cycle is sufficient.
+
+### Pairing agent (Just Works)
+
+`PairingAgentSupervisor` keeps an interactive `bluetoothctl` with verified `NoInputNoOutput` default agent. **Do not** fire-and-forget `agent NoInputNoOutput` after `bluetoothctl` starts — it auto-registers `KeyboardDisplay` and silently rejects a later NoInputNoOutput, leading to numeric-comparison MITM and ~20 s disconnects (Reason **0x13**). Sequence: `agent off` → `agent NoInputNoOutput` → `default-agent` → `pairable on`.

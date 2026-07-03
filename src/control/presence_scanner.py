@@ -26,6 +26,8 @@ from src.transport.discovery import (
 
 INFO_LOOKUP_LIMIT = 20
 NEGATIVE_CACHE_TTL_S = 120.0
+STOP_JOIN_TIMEOUT_S = 3.0
+POST_CONNECT_DEFER_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -58,10 +60,12 @@ class PresenceScanner:
     def __init__(
         self,
         *,
-        scan_window_s: float = 6.0,
+        scan_window_s: float = 3.0,
         scan_period_s: float = 15.0,
+        steady_period_s: float = 60.0,
         candidate_ttl_s: float = 60.0,
         on_candidate: Callable[[str, str, float], None] | None = None,
+        idle_check: Callable[[], bool] | None = None,
         quiet: bool = False,
         log: Callable[[str], None] | None = None,
         scan_runner: Callable[[float], str] | None = None,
@@ -70,8 +74,10 @@ class PresenceScanner:
     ) -> None:
         self._scan_window_s = max(0.1, float(scan_window_s))
         self._scan_period_s = max(self._scan_window_s, float(scan_period_s))
+        self._steady_period_s = max(self._scan_window_s, float(steady_period_s))
         self._candidate_ttl_s = max(0.01, float(candidate_ttl_s))
         self._on_candidate = on_candidate
+        self._idle_check = idle_check
         self._quiet = quiet
         self._log = log or (lambda msg: None if quiet else print(f"[PRESENCE] {msg}", flush=True))
         self._scan_runner = scan_runner or self._default_scan_runner
@@ -81,6 +87,7 @@ class PresenceScanner:
         self._candidates: dict[str, PresenceCandidate] = {}
         self._negative_cache_until: dict[str, float] = {}
         self._round_robin_cursor = 0
+        self._defer_scan_until = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
@@ -129,15 +136,35 @@ class PresenceScanner:
         self._started = True
         self._log(
             f"started (window={self._scan_window_s}s period={self._scan_period_s}s "
-            f"ttl={self._candidate_ttl_s}s)"
+            f"steady={self._steady_period_s}s ttl={self._candidate_ttl_s}s)"
         )
+
+    def defer_next_pass(self, delay_s: float = POST_CONNECT_DEFER_S) -> None:
+        """Skip the next scan pass if it would start within *delay_s* (post-connect courtesy)."""
+        delay = max(0.0, float(delay_s))
+        with self._lock:
+            until = time.monotonic() + delay
+            self._defer_scan_until = max(self._defer_scan_until, until)
+
+    def _period_s(self) -> float:
+        if self._idle_check is not None and self._idle_check():
+            return self._steady_period_s
+        return self._scan_period_s
+
+    def _consume_defer_wait(self, now_mono: float) -> float:
+        with self._lock:
+            if now_mono < self._defer_scan_until:
+                wait = self._defer_scan_until - now_mono
+                self._defer_scan_until = 0.0
+                return wait
+        return 0.0
 
     def stop(self) -> None:
         if not self._started:
             return
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=self._scan_period_s + self._scan_window_s + 2.0)
+            self._thread.join(timeout=STOP_JOIN_TIMEOUT_S)
             self._thread = None
         self._started = False
         self._log("stopped")
@@ -162,6 +189,14 @@ class PresenceScanner:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            now_mono = time.monotonic()
+            defer_wait = self._consume_defer_wait(now_mono)
+            if defer_wait > 0.0:
+                self._log(f"deferring scan pass ({defer_wait:.1f}s post-connect courtesy)")
+                if self._stop.wait(defer_wait):
+                    break
+                continue
+
             started = time.monotonic()
             try:
                 self._scan_pass(started)
@@ -170,7 +205,7 @@ class PresenceScanner:
             with self._lock:
                 self._evict_stale_locked(time.monotonic())
             elapsed = time.monotonic() - started
-            wait_s = max(0.0, self._scan_period_s - elapsed)
+            wait_s = max(0.0, self._period_s() - elapsed)
             if self._stop.wait(wait_s):
                 break
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import errno
 import os
-import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -15,6 +14,7 @@ from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
 from src.transport.base import ManagedTransport
 from src.transport.factory import make_transport
+from src.transport.pairing_agent import PairingAgentSupervisor
 
 LogFn = Callable[[str, bool], None]
 
@@ -81,7 +81,7 @@ class BBNode:
         self._key_store = key_store
         self._quiet = quiet
         self._topology: frozenset[str] | None = None
-        self._pairing_proc: subprocess.Popen[str] | None = None
+        self._pairing_supervisor: PairingAgentSupervisor | None = None
 
         self._cfg: BubbleBlueConfig | None = None
         self._transport: ManagedTransport | None = None
@@ -105,7 +105,8 @@ class BBNode:
         self._protocol_quarantine_streak: dict[str, int] = {}
 
         if setup_pairing_agent:
-            self._pairing_proc = self._setup_ble_pairing_agent()
+            self._pairing_supervisor = PairingAgentSupervisor(quiet=quiet)
+            self._pairing_supervisor.start()
 
     def start(
         self,
@@ -200,6 +201,7 @@ class BBNode:
                 self._presence_scanner = PresenceScanner(
                     quiet=self._quiet,
                     on_candidate=self._on_presence_candidate,
+                    idle_check=self._presence_scanner_idle,
                 )
                 self._presence_scanner.start()
 
@@ -235,12 +237,23 @@ class BBNode:
             self._protocol_quarantine_until.clear()
             self._protocol_quarantine_streak.clear()
 
-        if self._pairing_proc is not None:
-            try:
-                self._pairing_proc.terminate()
-            except OSError:
-                pass
-            self._pairing_proc = None
+        if self._pairing_supervisor is not None:
+            self._pairing_supervisor.stop()
+            self._pairing_supervisor = None
+
+    def _presence_scanner_idle(self) -> bool:
+        """True when every non-quarantined discovered candidate is an admitted active peer."""
+        with self._lock:
+            now = time.monotonic()
+            candidates = {
+                bd
+                for bd in self._discovered_candidates
+                if now >= self._protocol_quarantine_until.get(bd, 0.0)
+            }
+            if not candidates:
+                return False
+            admitted_active = {bd for bd in self._admitted_peers if bd in self._active_peers}
+            return candidates <= admitted_active
 
     def mute(self) -> None:
         """Stop presence scan and LE advertising (beacon); L2CAP links stay up."""
@@ -559,6 +572,9 @@ class BBNode:
                     time.monotonic() + PROTOCOL_HELLO_GRACE_MULT * self._cfg.hello_interval_s
                 )
         self._active_peers.add(bd)
+        scanner = self._presence_scanner
+        if scanner is not None:
+            scanner.defer_next_pass()
         if self.on_peer_connected:
             self.on_peer_connected(bd)
 
@@ -585,25 +601,3 @@ class BBNode:
             # Chat mode: network retries are not errors (buffer while typing).
             is_err = err if err is not None else not self._quiet
             self.on_log(msg, is_err)
-
-    @staticmethod
-    def _setup_ble_pairing_agent() -> subprocess.Popen[str] | None:
-        try:
-            proc = subprocess.Popen(
-                ["bluetoothctl"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            return None
-        assert proc.stdin is not None
-        proc.stdin.write(
-            "agent NoInputNoOutput\n"
-            "default-agent\n"
-            "discoverable on\n"
-            "pairable on\n"
-        )
-        proc.stdin.flush()
-        return proc
