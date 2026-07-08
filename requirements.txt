@@ -12,6 +12,9 @@
 cryptography>=42.0.0
 cffi>=2.0.0
 
+# Timed simulation (sim/timed/, SimPy event clock)
+simpy>=4.1.0
+
 # Optional: sim web UI (sim/webapp/server.py)
 # fastapi>=0.100.0
 # uvicorn>=0.23.0
