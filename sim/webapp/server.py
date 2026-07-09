@@ -34,10 +34,17 @@ from sim.metrics_roles import (  # noqa: E402
 from sim.oracle_table import neighbor_map_from_positions  # noqa: E402
 from sim.sim_engine import SimEngine  # noqa: E402
 from src.forwarding.cds import CDSAlgorithm  # noqa: E402
+from sim.timed.scenario_mobility import run_timed_timeline  # noqa: E402
 from sim.topology_gen import (  # noqa: E402
     expected_mean_degree,
     generate_connected_geometric,
 )
+
+# Timed timeline caps: at most MAX_TIMED_FRAMES samples per response.
+# Effective sample_interval_s is raised so ceil(duration_s / interval) <= cap.
+MAX_TIMED_FRAMES = 500
+MAX_TIMED_DURATION_S = 300.0
+MIN_TIMED_SAMPLE_INTERVAL_S = 0.25
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _INDEX_HTML = _STATIC_DIR / "index.html"
@@ -263,6 +270,82 @@ def build_broadcast_response(
     }
 
 
+def _parse_timed_algorithm(algorithm: str) -> CDSAlgorithm:
+    key = algorithm.strip().lower()
+    if key == "wu_li":
+        return CDSAlgorithm.WU_LI_1999
+    if key == "mpr":
+        return CDSAlgorithm.MPR
+    raise ValueError(f"unknown algorithm: {algorithm!r} (expected 'wu_li' or 'mpr')")
+
+
+def _parse_mobility_model(mobility_model: str) -> str:
+    key = mobility_model.strip().lower()
+    if key in ("waypoint", "peloton"):
+        return key
+    raise ValueError(
+        f"unknown mobility_model: {mobility_model!r} (expected 'waypoint' or 'peloton')"
+    )
+
+
+def _cap_timed_sampling(
+    duration_s: float,
+    sample_interval_s: float,
+) -> tuple[float, float]:
+    """
+    Bound duration and sample interval so ``len(frames) <= MAX_TIMED_FRAMES``.
+
+    Raises ``sample_interval_s`` when needed; duration is capped at
+    ``MAX_TIMED_DURATION_S``.
+    """
+    duration = min(max(0.1, float(duration_s)), MAX_TIMED_DURATION_S)
+    interval = max(MIN_TIMED_SAMPLE_INTERVAL_S, float(sample_interval_s))
+    min_interval = duration / MAX_TIMED_FRAMES
+    if interval < min_interval:
+        interval = min_interval
+    return duration, interval
+
+
+def build_timed_response(
+    n_nodes: int,
+    radius: float,
+    seed: int,
+    target_degree: float,
+    duration_s: float,
+    sample_interval_s: float,
+    algorithm: str,
+    mobility_model: str,
+    *,
+    hello_interval_s: float = 5.0,
+    speed: float = 0.15,
+    speed_max: float | None = None,
+) -> dict[str, Any]:
+    """Pure JSON payload for ``/api/timed`` (no HTTP)."""
+    positions, area = resolve_topology_inputs(n_nodes, radius, seed, target_degree)
+    capped_duration, capped_interval = _cap_timed_sampling(duration_s, sample_interval_s)
+    algo = _parse_timed_algorithm(algorithm)
+    mob = _parse_mobility_model(mobility_model)
+
+    timeline = run_timed_timeline(
+        n_nodes,
+        area,
+        radius,
+        algo,
+        duration_s=capped_duration,
+        speed=speed,
+        speed_max=speed_max,
+        hello_interval_s=hello_interval_s,
+        seed=seed,
+        sample_interval_s=capped_interval,
+        mobility_model=mob,  # type: ignore[arg-type]
+        positions=positions,
+    )
+    timeline["meta"]["max_frames_cap"] = MAX_TIMED_FRAMES
+    timeline["meta"]["capped_duration_s"] = capped_duration
+    timeline["meta"]["capped_sample_interval_s"] = capped_interval
+    return timeline
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(_INDEX_HTML)
@@ -316,6 +399,40 @@ def api_broadcast(
             max_steps,
             source,
             ttl,
+        )
+    except TopologyNotConnectedError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/timed")
+def api_timed(
+    n_nodes: int = Query(15, ge=1, le=100),
+    radius: float = Query(1.0, gt=0),
+    seed: int = Query(0, ge=0),
+    target_degree: float = Query(5.0, gt=0),
+    duration_s: float = Query(60.0, ge=0.1, le=MAX_TIMED_DURATION_S),
+    sample_interval_s: float = Query(1.0, ge=MIN_TIMED_SAMPLE_INTERVAL_S, le=60.0),
+    algorithm: str = Query("wu_li"),
+    mobility_model: str = Query("waypoint"),
+    hello_interval_s: float = Query(5.0, ge=0.1, le=60.0),
+    speed: float = Query(0.15, ge=0.0, le=10.0),
+    speed_max: float | None = Query(None, ge=0.0, le=10.0),
+) -> dict[str, Any]:
+    try:
+        return build_timed_response(
+            n_nodes,
+            radius,
+            seed,
+            target_degree,
+            duration_s,
+            sample_interval_s,
+            algorithm,
+            mobility_model,
+            hello_interval_s=hello_interval_s,
+            speed=speed,
+            speed_max=speed_max,
         )
     except TopologyNotConnectedError as exc:
         raise HTTPException(status_code=422, detail=exc.detail) from exc

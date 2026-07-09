@@ -44,11 +44,23 @@ def _neighbor_map(bus: TimedBus, bds: list[str]) -> dict[str, list[str]]:
 
 
 def _n_edges(nmap: dict[str, list[str]]) -> int:
-    edges: set[tuple[str, str]] = set()
-    for a, neighbors in nmap.items():
-        for b in neighbors:
-            edges.add((min(a, b), max(a, b)))
-    return len(edges)
+    return len(_edges_from_nmap(nmap))
+
+
+def _edges_from_nmap(nmap: dict[str, list[str]]) -> list[list[str]]:
+    edges: list[list[str]] = []
+    for a in sorted(nmap):
+        for b in nmap[a]:
+            if a < b:
+                edges.append([a, b])
+    return edges
+
+
+def _positions_from_bus(bus: TimedBus, bds: list[str]) -> dict[str, list[float]]:
+    return {
+        bd: [float(bus._positions[bd][0]), float(bus._positions[bd][1])]  # noqa: SLF001
+        for bd in bds
+    }
 
 
 def _topology_from_radio(
@@ -143,6 +155,8 @@ class NetworkObserver:
                 "cds_valid": _cds_valid(self._engine, roles, nmap),
                 "uncovered_nodes": uncovered,
                 "n_edges": _n_edges(nmap),
+                "positions": _positions_from_bus(self._bus, bds),
+                "edges": _edges_from_nmap(nmap),
             }
         )
 
@@ -244,11 +258,6 @@ if __name__ == "__main__":
 
     summary = observer.summary()
     tail_summary = observer.summary(since_t=25.0)
-    print(f"static line-3 observer (t=0..{run_s}s, no mobility)")
-    print(f"  samples: {summary['n_samples']} (tail from t=25s: {tail_summary['n_samples']})")
-    print(f"  cds_valid_fraction (tail): {tail_summary['cds_valid_fraction']:.3f}")
-    print(f"  role_flips_total (tail): {tail_summary['role_flips_total']}")
-    print(f"  mean_uncovered (tail): {tail_summary['mean_uncovered']:.3f}")
 
     assert tail_summary["cds_valid_fraction"] >= 0.99, tail_summary
     assert tail_summary["mean_uncovered"] == 0.0, tail_summary
@@ -256,7 +265,9 @@ if __name__ == "__main__":
 
     tail = [s for s in observer.snapshots if s["t"] >= 25.0]
     assert tail, "expected samples in convergence tail"
+    assert all("positions" in s and "edges" in s for s in tail)
     tail_roles = [s["roles"] for s in tail]
     assert all(r == tail_roles[0] for r in tail_roles), "roles must stabilize (no flips)"
     assert tail_roles[0][B] == "RELAY"
-    print("\n✅ static sanity: tail cds_valid≈1, no flips, B stays RELAY")
+    print("✅ static sanity: tail cds_valid≈1, no flips, B stays RELAY")
+    print("✅ snapshot positions and edges captured")

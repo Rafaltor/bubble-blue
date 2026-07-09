@@ -6,6 +6,9 @@ observation into one reproducible run. ``compare_mobility`` runs the **same**
 initial layout and mobility seed under Wu-Li 1999 and MPR — the scientific
 comparison for *which CDS algorithm is more stable under mobility*.
 
+``run_timed_timeline`` returns frame-by-frame positions, edges, and roles for
+animation (same observer snapshots, JSON-serializable).
+
 Metrics come from :meth:`sim.timed.observer.NetworkObserver.summary` (optionally
 scoped with ``since_t`` to skip startup transients).
 """
@@ -13,16 +16,17 @@ scoped with ``since_t`` to skip startup transients).
 from __future__ import annotations
 
 import random
-from typing import Any
+from typing import Any, Literal
 
 from src.forwarding.cds import CDSAlgorithm
 
 from sim.topology_gen import Position, generate_connected_geometric
-from sim.timed.mobility import RandomWaypointMobility
-from sim.timed.observer import NetworkObserver
+from sim.timed.mobility import PelotonGroup, PelotonMobility, RandomWaypointMobility
+from sim.timed.observer import NetworkObserver, Snapshot
 from sim.timed.timed_engine import TimedEngine
 
 Metrics = dict[str, Any]
+MobilityModelName = Literal["waypoint", "peloton"]
 
 
 def _attach_mobility(
@@ -35,7 +39,39 @@ def _attach_mobility(
     pause_max_s: float,
     mobility_seed: int,
     update_interval_s: float,
+    mobility_model: MobilityModelName = "waypoint",
 ) -> None:
+    if speed_max <= 0.0:
+        return
+
+    if mobility_model == "peloton":
+        group = PelotonGroup(
+            engine.env,
+            area=area,
+            speed_min=speed_min,
+            speed_max=speed_max,
+            pause_min_s=pause_min_s,
+            pause_max_s=pause_max_s,
+            rng=random.Random(mobility_seed),
+            update_interval_s=update_interval_s,
+        )
+        for index, bd in enumerate(sorted(engine.nodes)):
+            mobile = PelotonMobility(
+                engine.env,
+                engine.bus,
+                bd,
+                area=area,
+                speed_min=speed_min,
+                speed_max=speed_max,
+                pause_min_s=pause_min_s,
+                pause_max_s=pause_max_s,
+                group=group,
+                rng=random.Random(mobility_seed * 10_007 + index),
+                update_interval_s=update_interval_s,
+            )
+            engine.env.process(mobile.walk_process())
+        return
+
     for index, bd in enumerate(sorted(engine.nodes)):
         mobile = RandomWaypointMobility(
             engine.env,
@@ -52,13 +88,24 @@ def _attach_mobility(
         engine.env.process(mobile.walk_process())
 
 
-def run_mobility_scenario(
+def _snapshot_to_frame(snap: Snapshot) -> dict[str, Any]:
+    return {
+        "t": snap["t"],
+        "positions": snap["positions"],
+        "edges": snap["edges"],
+        "roles": snap["roles"],
+        "relay_count": snap["relay_count"],
+        "cds_valid": snap["cds_valid"],
+        "uncovered_nodes": snap["uncovered_nodes"],
+    }
+
+
+def _setup_timed_scenario(
     n_nodes: int,
     area: float,
     radius: float,
     algorithm: CDSAlgorithm,
     *,
-    duration_s: float = 120.0,
     speed: float = 1.0,
     speed_max: float | None = None,
     hello_interval_s: float = 5.0,
@@ -71,25 +118,11 @@ def run_mobility_scenario(
     pause_max_s: float = 3.0,
     mobility_update_interval_s: float = 0.5,
     mobility_seed: int | None = None,
-    since_t: float | None = None,
+    mobility_model: MobilityModelName = "waypoint",
     positions: dict[str, Position] | None = None,
-) -> Metrics:
+) -> tuple[TimedEngine, NetworkObserver, dict[str, Any]]:
     """
-    Run one timed mobility experiment and return observer metrics.
-
-    Parameters
-    ----------
-    speed:
-        Constant waypoint speed when ``speed_max`` is omitted. ``speed=0``
-        disables mobility (static nodes).
-    positions:
-        Optional fixed initial layout; otherwise
-        ``generate_connected_geometric(n_nodes, area, radius, seed)``.
-    since_t:
-        If set, adds ``summary_tail`` from :meth:`NetworkObserver.summary`
-        with ``since_t`` (skip early convergence transients).
-    mobility_seed:
-        RNG seed for per-node waypoint RNGs (defaults to ``seed``).
+    Build TimedEngine + mobility + observer (process started, not yet run).
     """
     if positions is None:
         positions = generate_connected_geometric(n_nodes, area, radius, seed)
@@ -121,6 +154,7 @@ def run_mobility_scenario(
             pause_max_s=pause_max_s,
             mobility_seed=mob_seed,
             update_interval_s=mobility_update_interval_s,
+            mobility_model=mobility_model,
         )
 
     observer = NetworkObserver(
@@ -130,26 +164,170 @@ def run_mobility_scenario(
         sample_interval_s=sample_interval_s,
     )
     engine.env.process(observer.sample_process())
+
+    setup_meta = {
+        "n_nodes": len(positions),
+        "area": area,
+        "radius": radius,
+        "algorithm": algorithm.value,
+        "mobility_model": mobility_model,
+        "seed": seed,
+        "mobility_seed": mob_seed,
+        "mobility_on": mobility_on,
+        "speed_min": speed_min,
+        "speed_max": speed_hi,
+        "hello_interval_s": hello_interval_s,
+        "sample_interval_s": sample_interval_s,
+    }
+    return engine, observer, setup_meta
+
+
+def run_mobility_scenario(
+    n_nodes: int,
+    area: float,
+    radius: float,
+    algorithm: CDSAlgorithm,
+    *,
+    duration_s: float = 120.0,
+    speed: float = 1.0,
+    speed_max: float | None = None,
+    hello_interval_s: float = 5.0,
+    seed: int = 0,
+    jitter_frac: float = 0.1,
+    tx_latency_s: float = 0.003,
+    loss_prob: float = 0.0,
+    sample_interval_s: float = 1.0,
+    pause_min_s: float = 1.0,
+    pause_max_s: float = 3.0,
+    mobility_update_interval_s: float = 0.5,
+    mobility_seed: int | None = None,
+    mobility_model: MobilityModelName = "waypoint",
+    since_t: float | None = None,
+    positions: dict[str, Position] | None = None,
+) -> Metrics:
+    """
+    Run one timed mobility experiment and return observer metrics.
+
+    Parameters
+    ----------
+    speed:
+        Constant waypoint speed when ``speed_max`` is omitted. ``speed=0``
+        disables mobility (static nodes).
+    mobility_model:
+        ``"waypoint"`` (independent random waypoint) or ``"peloton"`` (shared
+        group center via :class:`~sim.timed.mobility.PelotonGroup`).
+    positions:
+        Optional fixed initial layout; otherwise
+        ``generate_connected_geometric(n_nodes, area, radius, seed)``.
+    since_t:
+        If set, adds ``summary_tail`` from :meth:`NetworkObserver.summary`
+        with ``since_t`` (skip early convergence transients).
+    mobility_seed:
+        RNG seed for per-node waypoint RNGs (defaults to ``seed``).
+    """
+    engine, observer, setup = _setup_timed_scenario(
+        n_nodes,
+        area,
+        radius,
+        algorithm,
+        speed=speed,
+        speed_max=speed_max,
+        hello_interval_s=hello_interval_s,
+        seed=seed,
+        jitter_frac=jitter_frac,
+        tx_latency_s=tx_latency_s,
+        loss_prob=loss_prob,
+        sample_interval_s=sample_interval_s,
+        pause_min_s=pause_min_s,
+        pause_max_s=pause_max_s,
+        mobility_update_interval_s=mobility_update_interval_s,
+        mobility_seed=mobility_seed,
+        mobility_model=mobility_model,
+        positions=positions,
+    )
     engine.run_for(duration_s)
 
     summary = observer.summary()
     out: Metrics = {
-        "algorithm": algorithm.value,
-        "seed": seed,
-        "mobility_seed": mob_seed,
-        "mobility_on": mobility_on,
-        "n_nodes": len(positions),
-        "area": area,
-        "radius": radius,
+        **setup,
         "duration_s": duration_s,
-        "speed_min": speed_min,
-        "speed_max": speed_hi,
         "simulated_time": engine.now,
         **summary,
     }
     if since_t is not None:
         out["summary_tail"] = observer.summary(since_t=since_t)
     return out
+
+
+def run_timed_timeline(
+    n_nodes: int,
+    area: float,
+    radius: float,
+    algorithm: CDSAlgorithm,
+    *,
+    duration_s: float = 120.0,
+    speed: float = 1.0,
+    speed_max: float | None = None,
+    hello_interval_s: float = 5.0,
+    seed: int = 0,
+    jitter_frac: float = 0.1,
+    tx_latency_s: float = 0.003,
+    loss_prob: float = 0.0,
+    sample_interval_s: float = 1.0,
+    pause_min_s: float = 1.0,
+    pause_max_s: float = 3.0,
+    mobility_update_interval_s: float = 0.5,
+    mobility_seed: int | None = None,
+    mobility_model: MobilityModelName = "waypoint",
+    positions: dict[str, Position] | None = None,
+) -> dict[str, Any]:
+    """
+    Run one timed scenario and return an animatable timeline (JSON-serializable).
+
+    Same deterministic setup as :func:`run_mobility_scenario`; frames are observer
+    snapshots with ``positions`` and ``edges`` included.
+    """
+    engine, observer, setup = _setup_timed_scenario(
+        n_nodes,
+        area,
+        radius,
+        algorithm,
+        speed=speed,
+        speed_max=speed_max,
+        hello_interval_s=hello_interval_s,
+        seed=seed,
+        jitter_frac=jitter_frac,
+        tx_latency_s=tx_latency_s,
+        loss_prob=loss_prob,
+        sample_interval_s=sample_interval_s,
+        pause_min_s=pause_min_s,
+        pause_max_s=pause_max_s,
+        mobility_update_interval_s=mobility_update_interval_s,
+        mobility_seed=mobility_seed,
+        mobility_model=mobility_model,
+        positions=positions,
+    )
+    engine.run_for(duration_s)
+
+    meta = {
+        "n_nodes": setup["n_nodes"],
+        "area": setup["area"],
+        "radius": setup["radius"],
+        "algorithm": setup["algorithm"],
+        "mobility_model": setup["mobility_model"],
+        "seed": setup["seed"],
+        "duration_s": duration_s,
+        "sample_interval_s": setup["sample_interval_s"],
+        "hello_interval_s": setup["hello_interval_s"],
+        "speed_min": setup["speed_min"],
+        "speed_max": setup["speed_max"],
+    }
+    frames = [_snapshot_to_frame(s) for s in observer.snapshots]
+    return {
+        "meta": meta,
+        "frames": frames,
+        "summary": observer.summary(),
+    }
 
 
 def compare_mobility(
@@ -235,20 +413,7 @@ if __name__ == "__main__":
     cmp_ = result["comparison"]
     wu = result["wu_li"]
     mpr = result["mpr"]
-    print("mobility comparison (Wu-Li vs MPR, seed=42)")
-    print(
-        f"  Wu-Li  role_flip_rate={wu['role_flip_rate']:.4f}  "
-        f"cds_valid={wu['cds_valid_fraction']:.3f}  "
-        f"mean_uncovered={wu['mean_uncovered']:.3f}"
-    )
-    print(
-        f"  MPR    role_flip_rate={mpr['role_flip_rate']:.4f}  "
-        f"cds_valid={mpr['cds_valid_fraction']:.3f}  "
-        f"mean_uncovered={mpr['mean_uncovered']:.3f}"
-    )
-    print(
-        f"  Δ      role_flip_rate={cmp_['role_flip_rate_delta']:+.4f}  "
-        f"cds_valid={cmp_['cds_valid_fraction_delta']:+.3f}  "
-        f"mean_uncovered={cmp_['mean_uncovered_delta']:+.3f}"
-    )
-    print("\n✅ scenario_mobility demo complete")
+    assert wu["cds_valid_fraction"] > 0.0
+    assert mpr["cds_valid_fraction"] > 0.0
+    assert "role_flip_rate_delta" in cmp_
+    print("✅ scenario_mobility demo complete")

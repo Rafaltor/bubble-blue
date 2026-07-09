@@ -19,6 +19,7 @@ from sim.topology_gen import expected_mean_degree  # noqa: E402
 from sim.webapp.server import (  # noqa: E402
     TopologyNotConnectedError,
     build_simulate_response,
+    build_timed_response,
     build_topology_response,
 )
 
@@ -140,6 +141,106 @@ def test_build_simulate_response_wu_li_parity() -> None:
     )
 
 
+_TIMED_PARAMS = dict(
+    n_nodes=10,
+    radius=12.0,
+    seed=17,
+    target_degree=5.0,
+    duration_s=20.0,
+    sample_interval_s=2.0,
+    algorithm="wu_li",
+    mobility_model="peloton",
+)
+
+
+def _positions_from_frame(frame: dict) -> dict[str, tuple[float, float]]:
+    return {bd: (xy[0], xy[1]) for bd, xy in frame["positions"].items()}
+
+
+def test_build_timed_response() -> None:
+    resp = build_timed_response(**_TIMED_PARAMS)
+    resp2 = build_timed_response(**_TIMED_PARAMS)
+
+    for key in ("meta", "frames", "summary"):
+        if key not in resp:
+            raise AssertionError(f"missing top-level key: {key}")
+
+    meta = resp["meta"]
+    for key in (
+        "n_nodes",
+        "area",
+        "radius",
+        "algorithm",
+        "mobility_model",
+        "seed",
+        "duration_s",
+        "sample_interval_s",
+        "hello_interval_s",
+        "speed_min",
+        "speed_max",
+    ):
+        if key not in meta:
+            raise AssertionError(f"meta missing {key}")
+
+    if meta["mobility_model"] != "peloton":
+        raise AssertionError(f"expected peloton, got {meta['mobility_model']}")
+    if meta["algorithm"] != CDSAlgorithm.WU_LI_1999.value:
+        raise AssertionError("expected wu_li algorithm in meta")
+
+    frames = resp["frames"]
+    if not frames:
+        raise AssertionError("frames must be non-empty")
+
+    n_nodes = meta["n_nodes"]
+    radius = meta["radius"]
+
+    for frame in frames:
+        for key in (
+            "t",
+            "positions",
+            "edges",
+            "roles",
+            "relay_count",
+            "cds_valid",
+            "uncovered_nodes",
+        ):
+            if key not in frame:
+                raise AssertionError(f"frame missing {key}")
+        if len(frame["positions"]) != n_nodes:
+            raise AssertionError(
+                f"positions count {len(frame['positions'])} != n_nodes {n_nodes}"
+            )
+        if len(frame["roles"]) != n_nodes:
+            raise AssertionError(
+                f"roles count {len(frame['roles'])} != n_nodes {n_nodes}"
+            )
+        for bd in frame["positions"]:
+            if bd not in frame["roles"]:
+                raise AssertionError(f"node {bd} in positions but not roles")
+
+        positions = _positions_from_frame(frame)
+        nmap = neighbor_map_from_positions(positions, radius)
+        adj = _adjacency_from_edges(frame["edges"])
+        for a, b in frame["edges"]:
+            if a >= b:
+                raise AssertionError(f"edge not canonical (a<b): {[a, b]}")
+            if b not in nmap.get(a, []):
+                raise AssertionError(f"edge {[a, b]} not in unit-disk neighbor map")
+        for bd in positions:
+            if set(nmap[bd]) != adj.get(bd, set()):
+                raise AssertionError(
+                    f"frame t={frame['t']}: edges for {bd} inconsistent with positions"
+                )
+
+    if resp["frames"] != resp2["frames"]:
+        raise AssertionError("identical params must yield identical frames (determinism)")
+
+    print(
+        f"✅ build_timed_response: {len(frames)} frames, "
+        f"peloton+wu_li, n_nodes={n_nodes}, deterministic"
+    )
+
+
 def test_topology_not_connected() -> None:
     bad = dict(n_nodes=60, radius=0.01, seed=0, target_degree=1.0)
     try:
@@ -170,6 +271,7 @@ def test_simulate_not_connected() -> None:
 if __name__ == "__main__":
     test_build_topology_response()
     test_build_simulate_response_wu_li_parity()
+    test_build_timed_response()
     test_topology_not_connected()
     test_simulate_not_connected()
     print("\n✅ webapp API builders match engine metrics (no HTTP, no uvicorn)")

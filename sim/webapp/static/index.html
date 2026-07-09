@@ -6,7 +6,8 @@
   <title>BUBBLE-BLUE — Simulateur CDS</title>
   <!--
     Rendu 100 % serveur-calculé : fetch + dessin/animation uniquement.
-    /api/simulate → rôles CDS ; /api/broadcast → vagues de propagation.
+    /api/simulate → rôles CDS ; /api/broadcast → vagues de propagation ;
+    /api/timed → frames terrain (positions, arêtes, rôles).
     Aucun algorithme CDS/MPR/flooding en JavaScript.
   -->
   <style>
@@ -37,14 +38,62 @@
     }
     header h1 { font-size: 1.15rem; font-weight: 600; }
     header p { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+    .control-deck {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.25rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+    .mode-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+    .mode-tab {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.45rem 0.9rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      background: var(--bg);
+      color: var(--muted);
+    }
+    .mode-tab:hover { color: var(--text); border-color: #475569; }
+    .mode-tab.active {
+      color: var(--text);
+      border-color: var(--relay);
+      background: rgba(34, 197, 94, 0.12);
+    }
+    .control-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      background: rgba(15, 23, 42, 0.45);
+    }
+    .control-block h3 {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-bottom: 0.65rem;
+    }
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem 1.25rem;
+      align-items: flex-end;
+    }
+    .mode-options { display: none; }
+    .mode-options.active { display: block; }
     .controls {
       display: flex;
       flex-wrap: wrap;
       gap: 1rem 1.5rem;
       align-items: flex-end;
-      padding: 1rem 1.25rem;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
     }
     .field { display: flex; flex-direction: column; gap: 0.35rem; min-width: 7rem; }
     .field label { font-size: 0.75rem; color: var(--muted); }
@@ -58,6 +107,15 @@
       font-family: ui-monospace, monospace;
     }
     .field input[type="range"] { width: 10rem; }
+    .field select {
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+    }
     .field .val {
       font-family: ui-monospace, monospace;
       font-size: 0.85rem;
@@ -100,11 +158,28 @@
       font-size: 0.85rem;
     }
     .anim-bar.visible { display: flex; }
-    .anim-bar .wave-indicator {
+    .anim-bar .wave-indicator,
+    .anim-bar .timed-indicator {
       font-family: ui-monospace, monospace;
       color: var(--accent);
       min-width: 8rem;
     }
+    .anim-bar .timed-indicator { min-width: 16rem; flex: 1; }
+    .anim-bar .playback-label { font-size: 0.72rem; color: var(--muted); }
+    .legend {
+      margin: 0 1.25rem 0.75rem;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: none;
+    }
+    .legend.visible { display: block; }
+    .legend strong { color: var(--text); font-weight: 500; }
+    .anim-mode-controls { display: contents; }
+    .anim-mode-controls[hidden] { display: none !important; }
     .panels {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -112,6 +187,10 @@
       padding: 1rem 1.25rem;
     }
     @media (max-width: 900px) { .panels { grid-template-columns: 1fr; } }
+    .panels.timed-mode { grid-template-columns: 1fr; }
+    .panels.timed-mode .panel-dual { display: none; }
+    #panel-timed { display: none; }
+    .panels.timed-mode #panel-timed { display: block; }
     .panel {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -203,64 +282,154 @@
     <p>Wu-Li 1999 vs MPR · topologie, élection et propagation calculées côté serveur Python</p>
   </header>
 
-  <div class="controls" id="controls">
-    <div class="field">
-      <label for="n_nodes">n_nodes <span class="val" id="n_nodes_val">15</span></label>
-      <input type="range" id="n_nodes" min="5" max="60" value="15" />
+  <div class="control-deck" id="control-deck">
+    <nav class="mode-tabs" role="tablist" aria-label="Mode de simulation">
+      <button type="button" class="mode-tab active" data-mode="cds" id="tab-cds">CDS statique</button>
+      <button type="button" class="mode-tab" data-mode="broadcast" id="tab-broadcast">Broadcast</button>
+      <button type="button" class="mode-tab" data-mode="timed" id="tab-timed">Terrain (mobilité)</button>
+    </nav>
+
+    <div class="control-block">
+      <h3>Topologie commune</h3>
+      <div class="control-row">
+        <div class="field">
+          <label for="n_nodes">n_nodes <span class="val" id="n_nodes_val">15</span></label>
+          <input type="range" id="n_nodes" min="5" max="60" value="15" />
+        </div>
+        <div class="field">
+          <label for="target_degree">target_degree <span class="val" id="target_degree_val">5</span></label>
+          <input type="range" id="target_degree" min="1" max="12" value="5" />
+        </div>
+        <div class="field">
+          <label for="radius">radius</label>
+          <input type="number" id="radius" value="1.0" step="0.1" min="0.1" />
+        </div>
+        <div class="field">
+          <label for="seed">seed</label>
+          <input type="number" id="seed" value="20" min="0" step="1" />
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="show_labels" checked /> labels bd (4 hex)
+        </label>
+      </div>
     </div>
-    <div class="field">
-      <label for="target_degree">target_degree <span class="val" id="target_degree_val">5</span></label>
-      <input type="range" id="target_degree" min="1" max="12" value="5" />
+
+    <div class="mode-options active" id="opts-cds" data-mode="cds">
+      <div class="control-block">
+        <h3>Élection CDS (Wu-Li vs MPR)</h3>
+        <div class="control-row">
+          <div class="field">
+            <label for="max_steps">max_steps <span class="val" id="max_steps_val">50</span></label>
+            <input type="range" id="max_steps" min="10" max="100" value="50" />
+          </div>
+          <div class="btns">
+            <button type="button" class="primary" id="btn_simulate">Simuler</button>
+            <button type="button" class="secondary" id="btn_random">Graine aléatoire</button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="field">
-      <label for="radius">radius</label>
-      <input type="number" id="radius" value="1.0" step="0.1" min="0.1" />
+
+    <div class="mode-options" id="opts-broadcast" data-mode="broadcast">
+      <div class="control-block">
+        <h3>Propagation broadcast</h3>
+        <div class="control-row">
+          <p style="font-size:0.8rem;color:var(--muted);max-width:28rem">
+            Source tirée au hasard (déterministe par seed). TTL = n_nodes.
+          </p>
+          <div class="btns">
+            <button type="button" class="accent" id="btn_broadcast">Lancer broadcast</button>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="field">
-      <label for="seed">seed</label>
-      <input type="number" id="seed" value="20" min="0" step="1" />
-    </div>
-    <div class="field">
-      <label for="max_steps">max_steps <span class="val" id="max_steps_val">50</span></label>
-      <input type="range" id="max_steps" min="10" max="100" value="50" />
-    </div>
-    <label class="toggle">
-      <input type="checkbox" id="show_labels" checked /> labels bd (4 hex)
-    </label>
-    <div class="btns">
-      <button type="button" class="primary" id="btn_simulate">Simuler</button>
-      <button type="button" class="secondary" id="btn_random">Graine aléatoire</button>
-      <button type="button" class="accent" id="btn_broadcast">Broadcast (source aléatoire)</button>
+
+    <div class="mode-options" id="opts-timed" data-mode="timed">
+      <div class="control-block">
+        <h3>Simulation temporisée (SimPy + mobilité)</h3>
+        <div class="control-row">
+          <div class="field">
+            <label for="timed_algorithm">algorithme CDS</label>
+            <select id="timed_algorithm">
+              <option value="wu_li">Wu-Li 1999</option>
+              <option value="mpr">MPR</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="mobility_model">modèle mobilité</label>
+            <select id="mobility_model">
+              <option value="waypoint">waypoint</option>
+              <option value="peloton">peloton</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="duration_s">duration_s</label>
+            <input type="number" id="duration_s" value="60" min="1" max="300" step="1" />
+          </div>
+          <div class="field">
+            <label for="mobility_speed">vitesse mobilité <span class="val" id="mobility_speed_val">0.15</span></label>
+            <input type="range" id="mobility_speed" min="0" max="100" value="15" step="1" />
+          </div>
+          <div class="btns">
+            <button type="button" class="primary" id="btn_timed">Lancer terrain</button>
+          </div>
+        </div>
+        <p style="font-size:0.72rem;color:var(--muted);margin-top:0.55rem">
+          Vitesse mobilité = déplacement simulé des nœuds (serveur). Plus bas → moins de trous rouges.
+        </p>
+      </div>
     </div>
   </div>
 
   <div class="anim-bar" id="anim-bar">
-    <button type="button" class="secondary" id="btn_play">▶ Lecture</button>
+    <span class="playback-label">Lecture</span>
+    <button type="button" class="secondary" id="btn_play">▶</button>
     <button type="button" class="secondary" id="btn_pause">⏸</button>
-    <button type="button" class="secondary" id="btn_prev-wave">⏮ Début</button>
-    <button type="button" class="secondary" id="btn_next-wave">⏭ Vague suivante</button>
-    <span class="wave-indicator" id="wave-indicator">Vague — / —</span>
-    <div class="field" style="min-width:auto">
-      <label for="anim_speed">vitesse <span class="val" id="anim_speed_val">800</span> ms/vague</label>
-      <input type="range" id="anim_speed" min="200" max="2000" step="100" value="800" />
+    <span id="broadcast-controls" class="anim-mode-controls" hidden>
+      <button type="button" class="secondary" id="btn_prev-wave">⏮ Début</button>
+      <button type="button" class="secondary" id="btn_next-wave">⏭ Vague +1</button>
+      <span class="wave-indicator" id="wave-indicator">Vague — / —</span>
+      <span style="color:var(--muted);font-size:0.8rem" id="broadcast-source-label"></span>
+    </span>
+    <span id="timed-controls" class="anim-mode-controls" hidden>
+      <div class="field" style="min-width:12rem;flex:1;max-width:22rem">
+        <label for="frame_scrub">frame <span class="val" id="frame_scrub_val">0</span></label>
+        <input type="range" id="frame_scrub" min="0" max="0" value="0" step="1" />
+      </div>
+      <span class="timed-indicator" id="timed-indicator">t=—s · RELAY — · uncovered —</span>
+    </span>
+    <div class="field" style="min-width:9rem">
+      <label for="anim_speed">lecture <span class="val" id="anim_speed_val">800</span> <span id="anim_speed_unit">ms</span></label>
+      <input type="range" id="anim_speed" min="100" max="2000" step="50" value="800" />
     </div>
-    <span style="color:var(--muted);font-size:0.8rem" id="broadcast-source-label"></span>
+    <span style="font-size:0.72rem;color:var(--muted)">← rapide · lent →</span>
   </div>
+
+  <p class="legend" id="legend-timed">
+    <strong>Légende terrain :</strong>
+    vert = RELAY · gris = LEAF couvert ·
+    anneau orange/rouge = LEAF sans voisin RELAY (trou de couverture).
+  </p>
 
   <div id="error-banner" role="alert"></div>
 
-  <div class="panels">
-    <div class="panel" id="panel-wu_li">
+  <div class="panels" id="panels">
+    <div class="panel panel-dual" id="panel-wu_li">
       <h2>Wu-Li 1999</h2>
       <div class="panel-meta" id="meta-wu_li">—</div>
       <div class="warn-banner" id="warn-wu_li"></div>
       <svg id="svg-wu_li" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
-    <div class="panel" id="panel-mpr">
+    <div class="panel panel-dual" id="panel-mpr">
       <h2>MPR (Jacquet 2004)</h2>
       <div class="panel-meta" id="meta-mpr">—</div>
       <div class="warn-banner" id="warn-mpr"></div>
       <svg id="svg-mpr" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div class="panel" id="panel-timed">
+      <h2>Terrain — simulation temporisée</h2>
+      <div class="panel-meta" id="meta-timed">—</div>
+      <svg id="svg-timed" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
   </div>
 
@@ -326,9 +495,12 @@
     const SVG_SIZE = 400;
 
     let broadcastData = null;
+    let timedData = null;
+    let cdsData = null;
     let waveIndex = 0;
+    let frameIndex = 0;
     let playTimer = null;
-    let viewMode = "cds"; // "cds" | "broadcast"
+    let viewMode = "cds"; // "cds" | "broadcast" | "timed"
 
     function $(id) { return document.getElementById(id); }
 
@@ -338,6 +510,7 @@
         ["target_degree", "target_degree_val"],
         ["max_steps", "max_steps_val"],
         ["anim_speed", "anim_speed_val"],
+        ["frame_scrub", "frame_scrub_val"],
       ];
       for (const [inputId, labelId] of pairs) {
         const inp = $(inputId);
@@ -346,6 +519,13 @@
         inp.addEventListener("input", sync);
         sync();
       }
+      const mob = $("mobility_speed");
+      const mobLab = $("mobility_speed_val");
+      const syncMob = () => {
+        mobLab.textContent = (parseInt(mob.value, 10) / 100).toFixed(2);
+      };
+      mob.addEventListener("input", syncMob);
+      syncMob();
     }
 
     function params() {
@@ -360,6 +540,32 @@
 
     function bdShort(bd) {
       return bd.replace(/:/g, "").slice(-4).toUpperCase();
+    }
+
+    function timedParams() {
+      const mob = parseInt($("mobility_speed").value, 10) / 100;
+      return {
+        n_nodes: $("n_nodes").value,
+        target_degree: $("target_degree").value,
+        radius: $("radius").value,
+        seed: $("seed").value,
+        duration_s: $("duration_s").value,
+        algorithm: $("timed_algorithm").value,
+        mobility_model: $("mobility_model").value,
+        speed: String(mob),
+        sample_interval_s: "1.0",
+      };
+    }
+
+    function switchToMode(mode) {
+      viewMode = mode;
+      document.querySelectorAll(".mode-tab").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.mode === mode);
+      });
+      document.querySelectorAll(".mode-options").forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.mode === mode);
+      });
+      applyViewMode();
     }
 
     function mapCoord(v, area, size) {
@@ -380,6 +586,32 @@
         x: mapCoord(n.x, topology.area, SVG_SIZE),
         y: mapCoord(n.y, topology.area, SVG_SIZE),
       };
+    }
+
+    /** Positions timed : dict bd → [x,y] dans [0, meta.area]. */
+    function frameXY(bd, frame, area) {
+      const pos = frame.positions[bd];
+      if (!pos) return null;
+      return {
+        x: mapCoord(pos[0], area, SVG_SIZE),
+        y: mapCoord(pos[1], area, SVG_SIZE),
+      };
+    }
+
+    function updateAnimBarMode() {
+      const showBar = viewMode === "broadcast" || viewMode === "timed";
+      $("anim-bar").classList.toggle("visible", showBar);
+      $("broadcast-controls").hidden = viewMode !== "broadcast";
+      $("timed-controls").hidden = viewMode !== "timed";
+      $("anim_speed_unit").textContent = "ms";
+    }
+
+    function applyViewMode() {
+      $("panels").classList.toggle("timed-mode", viewMode === "timed");
+      $("metrics").hidden = viewMode !== "cds";
+      $("broadcast-metrics").hidden = viewMode !== "broadcast";
+      $("legend-timed").classList.toggle("visible", viewMode === "timed");
+      updateAnimBarMode();
     }
 
     function clearSvg(svg) {
@@ -603,6 +835,119 @@
       return frame.cumU;
     }
 
+    function drawTimedFrame(svg, frame, meta) {
+      clearSvg(svg);
+      const area = meta.area;
+      const showLabels = $("show_labels").checked;
+      const roles = frame.roles || {};
+      const uncovered = new Set(frame.uncovered_nodes || []);
+
+      const edgesG = document.createElementNS(SVG_NS, "g");
+      edgesG.setAttribute("stroke", "#3b82f6");
+      edgesG.setAttribute("stroke-width", "1.2");
+      edgesG.setAttribute("opacity", "0.75");
+      for (const [a, b] of frame.edges || []) {
+        const pa = frameXY(a, frame, area);
+        const pb = frameXY(b, frame, area);
+        if (!pa || !pb) continue;
+        const line = document.createElementNS(SVG_NS, "line");
+        line.setAttribute("x1", pa.x);
+        line.setAttribute("y1", pa.y);
+        line.setAttribute("x2", pb.x);
+        line.setAttribute("y2", pb.y);
+        edgesG.appendChild(line);
+      }
+      svg.appendChild(edgesG);
+
+      const nodesG = document.createElementNS(SVG_NS, "g");
+      const bds = Object.keys(frame.positions || {}).sort();
+      for (const bd of bds) {
+        const pt = frameXY(bd, frame, area);
+        if (!pt) continue;
+        const cx = pt.x;
+        const cy = pt.y;
+        const role = roles[bd];
+        const isRelay = role === "RELAY";
+        const isUncovered = uncovered.has(bd);
+
+        if (isUncovered) {
+          const ring = document.createElementNS(SVG_NS, "circle");
+          ring.setAttribute("cx", cx);
+          ring.setAttribute("cy", cy);
+          ring.setAttribute("r", "13");
+          ring.setAttribute("fill", "none");
+          ring.setAttribute("stroke", frame.cds_valid ? "#f59e0b" : "#f87171");
+          ring.setAttribute("stroke-width", "2.5");
+          ring.setAttribute("opacity", "0.9");
+          nodesG.appendChild(ring);
+        }
+
+        const circle = document.createElementNS(SVG_NS, "circle");
+        circle.setAttribute("cx", cx);
+        circle.setAttribute("cy", cy);
+        circle.setAttribute("r", isRelay ? 9 : 8);
+        if (isRelay) {
+          circle.setAttribute("fill", "#22c55e");
+          circle.setAttribute("stroke", "#16a34a");
+          circle.setAttribute("stroke-width", "1.5");
+        } else {
+          circle.setAttribute("fill", "#0f172a");
+          circle.setAttribute("stroke", "#64748b");
+          circle.setAttribute("stroke-width", "2");
+        }
+        nodesG.appendChild(circle);
+
+        if (showLabels) {
+          const t = document.createElementNS(SVG_NS, "text");
+          t.setAttribute("x", cx);
+          t.setAttribute("y", cy - 12);
+          t.setAttribute("text-anchor", "middle");
+          t.setAttribute("fill", "#94a3b8");
+          t.setAttribute("font-size", "9");
+          t.setAttribute("font-family", "ui-monospace, monospace");
+          t.textContent = bdShort(bd);
+          nodesG.appendChild(t);
+        }
+      }
+      svg.appendChild(nodesG);
+    }
+
+    function updateTimedIndicator() {
+      if (!timedData || !timedData.frames || timedData.frames.length === 0) return;
+      const n = timedData.frames.length;
+      const idx = Math.max(0, Math.min(frameIndex, n - 1));
+      const frame = timedData.frames[idx];
+      const unc = (frame.uncovered_nodes || []).length;
+      const cdsOk = frame.cds_valid ? "✓" : "✗";
+      $("timed-indicator").textContent =
+        "t=" + Number(frame.t).toFixed(1) + "s · RELAY " + frame.relay_count +
+        " · uncovered " + unc + " · cds_valid " + cdsOk;
+      $("meta-timed").innerHTML =
+        "<strong>t=" + Number(frame.t).toFixed(1) + "s</strong> · frame " + (idx + 1) + "/" + n +
+        " · RELAY <strong>" + frame.relay_count + "</strong> · uncovered <strong>" + unc +
+        "</strong> · cds_valid <strong>" + cdsOk + "</strong>";
+      const scrub = $("frame_scrub");
+      scrub.max = String(Math.max(0, n - 1));
+      scrub.value = String(idx);
+      $("frame_scrub_val").textContent = String(idx);
+    }
+
+    function renderTimedFrame() {
+      if (!timedData || !timedData.frames || timedData.frames.length === 0) return;
+      const n = timedData.frames.length;
+      frameIndex = Math.max(0, Math.min(frameIndex, n - 1));
+      const frame = timedData.frames[frameIndex];
+      drawTimedFrame($("svg-timed"), frame, timedData.meta);
+      updateTimedIndicator();
+    }
+
+    function goToTimedFrame(idx) {
+      if (!timedData || !timedData.frames) return;
+      const n = timedData.frames.length;
+      frameIndex = Math.max(0, Math.min(idx, n > 0 ? n - 1 : 0));
+      renderTimedFrame();
+    }
+
     function maxWaveCount() {
       if (!broadcastData) return 0;
       return Math.max(broadcastData.wu_li.n_waves, broadcastData.mpr.n_waves);
@@ -641,6 +986,19 @@
     function startPlayback() {
       stopPlayback();
       const ms = parseInt($("anim_speed").value, 10) || 800;
+      if (viewMode === "timed") {
+        playTimer = setInterval(() => {
+          const n = timedData?.frames?.length || 0;
+          if (n === 0 || frameIndex >= n - 1) {
+            stopPlayback();
+            return;
+          }
+          frameIndex += 1;
+          renderTimedFrame();
+        }, ms);
+        return;
+      }
+      if (viewMode !== "broadcast") return;
       playTimer = setInterval(() => {
         const max = maxWaveCount();
         if (waveIndex >= max - 1) {
@@ -721,12 +1079,12 @@
     async function simulate() {
       hideError();
       stopPlayback();
-      viewMode = "cds";
-      $("anim-bar").classList.remove("visible");
+      switchToMode("cds");
       $("warn-wu_li").classList.remove("visible");
       $("warn-mpr").classList.remove("visible");
       $("meta-wu_li").textContent = "—";
       $("meta-mpr").textContent = "—";
+      $("meta-timed").textContent = "—";
       document.body.classList.add("loading");
       const q = new URLSearchParams(params());
       try {
@@ -737,6 +1095,7 @@
           showError("Erreur " + res.status + " : " + (detail.message || JSON.stringify(detail)));
           return;
         }
+        cdsData = body;
         drawTopology($("svg-wu_li"), body.topology, body.wu_li.roles, body.wu_li.roles == null);
         drawTopology($("svg-mpr"), body.topology, body.mpr.roles, body.mpr.roles == null);
         setWarn("wu_li", body.wu_li);
@@ -752,7 +1111,7 @@
     async function runBroadcast() {
       hideError();
       stopPlayback();
-      viewMode = "broadcast";
+      switchToMode("broadcast");
       document.body.classList.add("loading");
       const q = new URLSearchParams(params());
       q.set("source", "random");
@@ -767,7 +1126,6 @@
         }
         broadcastData = body;
         waveIndex = 0;
-        $("anim-bar").classList.add("visible");
         $("broadcast-source-label").textContent =
           "source " + bdShort(body.source) + " · ttl=" + body.ttl;
         $("warn-wu_li").classList.remove("visible");
@@ -781,12 +1139,62 @@
       }
     }
 
+    async function runTimed() {
+      hideError();
+      stopPlayback();
+      switchToMode("timed");
+      $("meta-timed").textContent = "chargement…";
+      document.body.classList.add("loading");
+      const q = new URLSearchParams(timedParams());
+      try {
+        const res = await fetch("/api/timed?" + q.toString());
+        const body = await res.json();
+        if (!res.ok) {
+          const detail = body.detail || body;
+          showError("Erreur " + res.status + " : " + (typeof detail === "object" ? (detail.message || JSON.stringify(detail)) : detail));
+          return;
+        }
+        timedData = body;
+        frameIndex = 0;
+        renderTimedFrame();
+      } catch (err) {
+        showError("Échec réseau : " + err.message);
+      } finally {
+        document.body.classList.remove("loading");
+      }
+    }
+
     $("btn_simulate").addEventListener("click", simulate);
     $("btn_random").addEventListener("click", () => {
       $("seed").value = Math.floor(Math.random() * 100000);
       simulate();
     });
     $("btn_broadcast").addEventListener("click", runBroadcast);
+    $("btn_timed").addEventListener("click", runTimed);
+    function renderCdsView() {
+      if (!cdsData) return;
+      drawTopology($("svg-wu_li"), cdsData.topology, cdsData.wu_li.roles, cdsData.wu_li.roles == null);
+      drawTopology($("svg-mpr"), cdsData.topology, cdsData.mpr.roles, cdsData.mpr.roles == null);
+      setWarn("wu_li", cdsData.wu_li);
+      setWarn("mpr", cdsData.mpr);
+      renderMetrics(cdsData);
+    }
+
+    document.querySelectorAll(".mode-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        stopPlayback();
+        switchToMode(tab.dataset.mode);
+        if (tab.dataset.mode === "cds") {
+          if (cdsData) renderCdsView();
+        } else if (tab.dataset.mode === "broadcast" && broadcastData) {
+          renderBroadcastFrame();
+        } else if (tab.dataset.mode === "timed" && timedData) {
+          renderTimedFrame();
+        } else if (tab.dataset.mode === "timed") {
+          $("meta-timed").textContent = "Lancez une simulation terrain.";
+        }
+      });
+    });
     $("btn_play").addEventListener("click", startPlayback);
     $("btn_pause").addEventListener("click", stopPlayback);
     $("btn_prev-wave").addEventListener("click", () => { stopPlayback(); goToWave(0); });
@@ -794,8 +1202,13 @@
       stopPlayback();
       goToWave(waveIndex + 1);
     });
+    $("frame_scrub").addEventListener("input", () => {
+      stopPlayback();
+      goToTimedFrame(parseInt($("frame_scrub").value, 10));
+    });
     $("show_labels").addEventListener("change", () => {
       if (viewMode === "broadcast" && broadcastData) renderBroadcastFrame();
+      else if (viewMode === "timed" && timedData) renderTimedFrame();
       else if (!$("metrics").hidden) simulate();
     });
     $("anim_speed").addEventListener("input", () => {
@@ -803,6 +1216,7 @@
     });
 
     bindSliders();
+    switchToMode("cds");
     simulate();
   </script>
 </body>
