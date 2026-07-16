@@ -4,7 +4,13 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
-from config import BubbleBlueConfig
+from config import (
+    ANNOUNCE_BURST_COUNT,
+    ANNOUNCE_BURST_GAP_S,
+    ANNOUNCE_INTERVAL_S,
+    BubbleBlueConfig,
+)
+from src.control.announce import build_announce
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
 from src.forwarding.cds import CDSAlgorithm, am_i_cds, compute_local_mpr
@@ -64,6 +70,7 @@ class HelloManager:
         self._seq_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._announce_thread: threading.Thread | None = None
         self._is_cds = False
         self.refresh_cds_role(verbose=False)
 
@@ -73,6 +80,10 @@ class HelloManager:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="bb-hello-mgr", daemon=True)
         self._thread.start()
+        self._announce_thread = threading.Thread(
+            target=self._announce_loop, name="bb-announce-mgr", daemon=True
+        )
+        self._announce_thread.start()
         if not self._quiet:
             print(
                 f"[APP] HelloManager started (anon_id={self.anon_id.hex()}, interval={self._interval_s}s)",
@@ -127,6 +138,20 @@ class HelloManager:
             raise KeyError(f"no learned anon_id for peer {bd} (Hello not yet received)")
         return self._learned_anon_ids[bd]
 
+    def anon_id_for_or_compute(self, bd_addr: str) -> bytes:
+        """
+        Prefer Hello-learned anon_id; else compute from bootstrap PSK.
+
+        Needed for PKT_REKEY_FLOOD cases when a peer is known only via
+        PKT_ANNOUNCE (no direct Hello yet). Bootstrap HMAC matches the
+        peer's self-advertised anon_id.
+        """
+        bd = bd_addr.strip().upper()
+        learned = self._learned_anon_ids.get(bd)
+        if learned is not None:
+            return learned
+        return compute_anon_id(self._bootstrap_key, bd)
+
     def has_learned_public_hello(self, bd_addr: str) -> bool:
         """True after a well-formed public Hello was received from this L2CAP peer."""
         return bd_addr.strip().upper() in self._learned_anon_ids
@@ -153,7 +178,7 @@ class HelloManager:
             if public_key is not None and bd_addr is not None:
                 bd_u = str(bd_addr).upper()
                 self._peer_epochs[bd_u] = peer_epoch
-                self._key_store.register_peer(bd_u, public_key)
+                self._key_store.register_peer_from_hello(bd_u, public_key)
                 if (
                     peer_epoch < self._epoch_store.current_epoch()
                     and not self._epoch_store.is_revoked_pubkey(public_key)
@@ -251,6 +276,48 @@ class HelloManager:
             except (OSError, RuntimeError) as e:
                 if not self._quiet:
                     print(f"[APP] Hello send failed peer={peer}: {e}", flush=True)
+
+    def emit_announce(self) -> None:
+        """
+        Flood one PKT_ANNOUNCE (bd_addr → local X25519 pubkey) under current group key.
+
+        Safe to call after successful epoch adoption; no-op if no L2CAP peers.
+        """
+        peers = list(self._transport.connections())
+        if not peers:
+            return
+        seq = self._next_seq()
+        try:
+            pkt = build_announce(
+                self._epoch_store.current_group_key(),
+                self._local_bd,
+                seq,
+                None,
+                self._epoch_store.current_epoch(),
+                self._key_store.local_public_key,
+                self._cfg.ttl_max,
+            )
+        except (ValueError, RuntimeError) as e:
+            if not self._quiet:
+                print(f"[APP] Announce build failed: {e}", flush=True)
+            return
+        for peer in peers:
+            try:
+                self._transport.send(peer, pkt)
+            except (OSError, RuntimeError) as e:
+                if not self._quiet:
+                    print(f"[APP] Announce send failed peer={peer}: {e}", flush=True)
+
+    def _announce_loop(self) -> None:
+        # Burst at startup so joiners learn pubkeys quickly, then periodic.
+        for _ in range(ANNOUNCE_BURST_COUNT):
+            if self._stop.is_set():
+                return
+            self.emit_announce()
+            if self._stop.wait(ANNOUNCE_BURST_GAP_S):
+                return
+        while not self._stop.wait(ANNOUNCE_INTERVAL_S):
+            self.emit_announce()
 
     def print_neighbor_tables(self) -> None:
         if self._quiet:

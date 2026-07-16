@@ -8,7 +8,15 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import PKT_ACK, PKT_DATA, PKT_HELLO, PKT_REKEY, PKT_SUBGROUP  # noqa: E402
+from config import (  # noqa: E402
+    PKT_ACK,
+    PKT_ANNOUNCE,
+    PKT_DATA,
+    PKT_HELLO,
+    PKT_REKEY,
+    PKT_REKEY_FLOOD,
+    PKT_SUBGROUP,
+)
 from src.transport.fragmentation import (  # noqa: E402
     FRAG_MARKER,
     HEADER_SIZE,
@@ -134,7 +142,15 @@ def _decode(fragment_wire: bytes) -> tuple[int, int, int]:
 
 def test_anti_collision_fragment_marker() -> None:
     """BB direct wires (PKT_* at byte 0) must never be mistaken for fragments."""
-    for pkt_type in (PKT_HELLO, PKT_DATA, PKT_ACK, PKT_SUBGROUP, PKT_REKEY):
+    for pkt_type in (
+        PKT_HELLO,
+        PKT_DATA,
+        PKT_ACK,
+        PKT_SUBGROUP,
+        PKT_REKEY,
+        PKT_ANNOUNCE,
+        PKT_REKEY_FLOOD,
+    ):
         wire = bytes([pkt_type]) + b"\x00" * 30
         assert not is_fragment_packet(wire), f"PKT 0x{pkt_type:02X} wire misclassified"
 

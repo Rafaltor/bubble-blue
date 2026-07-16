@@ -13,6 +13,13 @@ PKT_DATA  = 0x02
 PKT_ACK   = 0x03
 PKT_SUBGROUP = 0x04
 PKT_REKEY   = 0x05
+PKT_ANNOUNCE = 0x06
+PKT_REKEY_FLOOD = 0x07
+
+# Network-wide pubkey announce (complement to Hello private, 2-hop limited)
+ANNOUNCE_INTERVAL_S = 30
+ANNOUNCE_BURST_COUNT = 3
+ANNOUNCE_BURST_GAP_S = 2.0
 
 # L2CAP protocol service multiplexors
 PSM_BT_CLASSIC = 0x1001

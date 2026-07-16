@@ -1,0 +1,1421 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Audit couche sécurité</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --surface2: #eef1f4;
+    --border: #d8dee6;
+    --accent: #0052cc;
+    --green: #1e7e34;
+    --red: #c0392b;
+    --yellow: #b88700;
+    --text: #1a2340;
+    --text-muted: #5a6378;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+    --nav-bg: rgba(17, 24, 39, 0.95);
+    --nav-border: #2a3548;
+    --nav-text-muted: #8899aa;
+    --nav-width: 11.625rem;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  #nav {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: var(--nav-width);
+    display: flex; flex-direction: column; gap: 0.35rem;
+    background: var(--nav-bg);
+    border-right: 1px solid var(--nav-border);
+    padding: 1rem 0.75rem;
+    z-index: 1000;
+    overflow-y: auto;
+  }
+  #nav button {
+    background: none; border: none;
+    color: var(--nav-text-muted);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+    text-align: left; width: 100%;
+  }
+  #nav button:hover { color: #ffffff; }
+  #nav button.active { background: var(--accent); color: #ffffff; }
+  #slide-counter {
+    font-size: 0.7rem; color: var(--nav-text-muted);
+    margin-top: auto; padding: 0.75rem 0.5rem 0;
+    border-top: 1px solid var(--nav-border);
+    text-align: center;
+  }
+
+  .slide {
+    position: absolute; top: 0; left: var(--nav-width);
+    width: calc(100% - var(--nav-width)); height: 100%;
+    display: none;
+    padding: 2.5rem 3.5rem;
+    flex-direction: column;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .slide.active { display: flex; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .slide-num {
+    font-size: 0.7rem; color: var(--accent);
+    letter-spacing: 0.15em; text-transform: uppercase;
+    margin-bottom: 0.5rem; font-weight: 600;
+  }
+  h1 { font-size: 3.2rem; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.7rem; font-weight: 600; margin-bottom: 0.3rem; }
+  h3 {
+    font-size: 0.8rem; color: var(--accent);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 1.2rem; padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  .subtitle { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1.6rem; }
+
+  .title-slide { justify-content: center; }
+  .title-slide h1 { font-size: 4.2rem; }
+  .title-meta { display: flex; gap: 2rem; margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--border); }
+  .meta-item { display: flex; flex-direction: column; gap: 0.3rem; }
+  .meta-label { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .meta-value { font-size: 0.9rem; color: var(--accent); font-weight: 500; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-bottom: 1.2rem; }
+  table.compact { font-size: 0.68rem; margin-bottom: 0.75rem; }
+  table.compact th, table.compact td { padding: 0.38rem 0.55rem; }
+  th {
+    background: var(--surface2); padding: 0.55rem 0.8rem; text-align: left;
+    font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+    border: 1px solid var(--border); font-weight: 600;
+  }
+  td { padding: 0.5rem 0.8rem; border: 1px solid var(--border); vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(26, 35, 64, 0.04); }
+  .cell-good { color: var(--green); font-weight: 600; }
+  .cell-bad { color: var(--red); }
+  .cell-warn { color: var(--yellow); }
+  .cell-neutral { color: var(--text-muted); }
+
+  .compare-grid { display: grid; gap: 1rem; }
+  .compare-2 { grid-template-columns: 1fr 1fr; }
+  .compare-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .compare-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.1rem 1.25rem; position: relative;
+  }
+  .compare-box.winner { border-color: var(--green); }
+  .box-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.6rem; }
+  .box-list { list-style: none; }
+  .box-list li {
+    font-size: 0.74rem; color: var(--text-muted);
+    padding: 0.28rem 0 0.28rem 1.1rem; position: relative; line-height: 1.45;
+  }
+  .box-list li::before { content: '·'; position: absolute; left: 0.3rem; color: var(--accent); font-weight: 700; }
+  .box-list li strong { color: var(--text); }
+
+  code, .mono { font-family: var(--mono); font-size: 0.92em; }
+  .codeblock {
+    background: #111827; color: #c5cdd8;
+    font-family: var(--mono); font-size: 0.72rem; line-height: 1.55;
+    border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem;
+    white-space: pre; overflow-x: auto;
+  }
+
+  .tag {
+    display: inline-block; font-size: 0.62rem; font-weight: 600;
+    padding: 0.12rem 0.5rem; border-radius: 99px; letter-spacing: 0.05em;
+    vertical-align: middle;
+  }
+  .tag-green { background: rgba(30,126,52,0.12); color: var(--green); }
+  .tag-red { background: rgba(192,57,43,0.12); color: var(--red); }
+  .tag-yellow { background: rgba(184,135,0,0.14); color: var(--yellow); }
+  .tag-blue { background: rgba(0,82,204,0.1); color: var(--accent); }
+
+  .verdict {
+    background: var(--surface); border-left: 4px solid var(--accent);
+    border-radius: 0 8px 8px 0; padding: 1rem 1.3rem; margin-top: 0.4rem;
+    font-size: 0.85rem; line-height: 1.55;
+  }
+  .verdict strong { color: var(--accent); }
+
+  .step-row { display: grid; grid-template-columns: 2.2rem 1fr; gap: 0.8rem; margin-bottom: 0.85rem; align-items: start; }
+  .step-row.compact { margin-bottom: 0.55rem; }
+  .step-num {
+    width: 2rem; height: 2rem; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.85rem; margin-top: 0.1rem;
+  }
+  .step-body { font-size: 0.82rem; line-height: 1.5; color: var(--text); }
+  .step-body strong { color: var(--accent); }
+  .step-body .mono { background: var(--surface2); padding: 0.05rem 0.35rem; border-radius: 4px; font-size: 0.78em; }
+  .step-body .ans { display: block; margin-top: 0.2rem; color: var(--text-muted); font-size: 0.78rem; }
+
+  .diagram-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 0.85rem;
+  }
+  .diagram-title {
+    font-size: 0.72rem; font-weight: 600; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.6rem;
+  }
+  svg text { font-family: var(--sans); }
+  svg .svgmono { font-family: var(--mono); }
+  .split-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 1.25rem; align-items: start; }
+  .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 1rem; font-size: 0.72rem; }
+  .check-item { display: flex; align-items: center; gap: 0.45rem; color: var(--text-muted); }
+  .check-item .ok { color: var(--green); font-weight: 700; }
+  .badge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+  .badge {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.5rem 0.65rem; font-size: 0.68rem; text-align: center; line-height: 1.35;
+  }
+  .badge strong { display: block; color: var(--text); font-size: 0.72rem; margin-bottom: 0.15rem; }
+  .badge .tag { margin-top: 0.25rem; }
+
+  /* —— Crypto walkthrough interactif —— */
+  .crypto-walk {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem 1.25rem 1.1rem; flex: 1;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .mode-tabs { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+  .mode-tab {
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text-muted); font-family: var(--sans); font-size: 0.78rem; font-weight: 600;
+    padding: 0.45rem 1rem; border-radius: 8px; cursor: pointer; transition: all 0.2s;
+  }
+  .mode-tab:hover { border-color: var(--accent); color: var(--text); }
+  .mode-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .step-dots { display: flex; gap: 0.35rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .step-dot {
+    background: none; border: 2px solid var(--border); color: var(--text-muted);
+    font-family: var(--sans); font-size: 0.68rem; font-weight: 600;
+    width: 1.65rem; height: 1.65rem; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+  }
+  .step-dot:hover { border-color: var(--accent); color: var(--accent); }
+  .step-dot.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .step-dot.done { background: rgba(30,126,52,0.15); border-color: var(--green); color: var(--green); }
+  .step-dot-label { font-size: 0.72rem; color: var(--text-muted); margin-left: 0.35rem; margin-right: 0.75rem; }
+  .walk-body { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 1rem; flex: 1; min-height: 0; }
+  .walk-diagram {
+    background: #111827; border-radius: 10px; padding: 0.85rem 1rem;
+    position: relative; overflow: hidden;
+  }
+  .walk-diagram svg { width: 100%; height: auto; display: block; }
+  .walk-node {
+    transition: opacity 0.35s, filter 0.35s;
+  }
+  .walk-node.dim { opacity: 0.22; }
+  .walk-node.lit { opacity: 1; filter: drop-shadow(0 0 6px rgba(96,165,250,0.55)); }
+  .walk-node.lit-green { opacity: 1; filter: drop-shadow(0 0 6px rgba(34,197,94,0.55)); }
+  .walk-node.lit-red { opacity: 1; filter: drop-shadow(0 0 6px rgba(239,68,68,0.55)); }
+  .walk-arrow { transition: opacity 0.35s; }
+  .walk-arrow.dim { opacity: 0.15; }
+  .walk-arrow.lit { opacity: 1; }
+  .walk-panel { display: flex; flex-direction: column; gap: 0.65rem; }
+  .walk-title { font-size: 1rem; font-weight: 600; color: var(--text); line-height: 1.35; }
+  .walk-text { font-size: 0.8rem; color: var(--text-muted); line-height: 1.55; }
+  .walk-formula {
+    background: #111827; color: #c5cdd8; font-family: var(--mono); font-size: 0.68rem;
+    line-height: 1.6; border-radius: 8px; padding: 0.75rem 0.9rem; white-space: pre-wrap;
+  }
+  .walk-formula .hl { color: #93c5fd; font-weight: 600; }
+  .walk-formula .ok { color: #86efac; }
+  .walk-formula .err { color: #fca5a5; }
+  .walk-controls {
+    display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem; flex-wrap: wrap;
+  }
+  .walk-btn {
+    background: var(--accent); border: none; color: #fff;
+    font-family: var(--sans); font-size: 0.78rem; font-weight: 600;
+    padding: 0.5rem 1.1rem; border-radius: 8px; cursor: pointer;
+    transition: background 0.2s, opacity 0.2s;
+  }
+  .walk-btn:hover { background: #0047b3; }
+  .walk-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .walk-btn.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .walk-btn.secondary:hover { background: var(--border); }
+  .walk-toggle {
+    display: flex; align-items: center; gap: 0.45rem; font-size: 0.74rem;
+    color: var(--text-muted); cursor: pointer; user-select: none; margin-left: auto;
+  }
+  .walk-toggle input { accent-color: var(--red); width: 1rem; height: 1rem; cursor: pointer; }
+  .walk-param {
+    display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--text-muted);
+  }
+  .walk-param input {
+    width: 4.5rem; font-family: var(--mono); font-size: 0.72rem;
+    padding: 0.25rem 0.45rem; border: 1px solid var(--border); border-radius: 6px;
+  }
+  .walk-hint { font-size: 0.68rem; color: var(--text-muted); font-style: italic; margin-top: 0.25rem; }
+  .slide-crypto { padding-bottom: 1.5rem; }
+</style>
+</head>
+<body>
+
+<nav id="nav"></nav>
+
+<!-- SLIDE 1 — TITRE -->
+<section class="slide title-slide active">
+  <div class="slide-num">BUBBLE-BLUE · Audit sécurité</div>
+  <h1>Audit — Couche<br>sécurité BUBBLE-BLUE</h1>
+  <p class="subtitle" style="font-size:1rem; margin-top:0.8rem;">
+    Couverture des exigences · justification des choix · preuves fonctionnelles
+  </p>
+  <div class="title-meta">
+    <div class="meta-item"><span class="meta-label">Périmètre</span><span class="meta-value">Phase 1B (BT Classic)</span></div>
+    <div class="meta-item"><span class="meta-label">Overhead fixe</span><span class="meta-value">42 B / paquet</span></div>
+    <div class="meta-item"><span class="meta-label">Crypto</span><span class="meta-value">AES-256-GCM · X25519 · HKDF</span></div>
+    <div class="meta-item"><span class="meta-label">Statut</span><span class="meta-value">Implémenté + testé (unitaire, intégration, hardware)</span></div>
+  </div>
+</section>
+
+<!-- SLIDE 2 — RÉFÉRENTIELS -->
+<section class="slide">
+  <div class="slide-num">02 · Référentiels</div>
+  <h2>Référentiels d'exigences</h2>
+  <h3>Trois sources → un audit de couverture</h3>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Triangle de référence</div>
+    <svg viewBox="0 0 860 150" width="100%">
+      <defs>
+        <marker id="arr-ref" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#0052cc"/>
+        </marker>
+      </defs>
+      <polygon points="430,18 680,130 180,130" fill="rgba(0,82,204,0.06)" stroke="#0052cc" stroke-width="1.5"/>
+      <rect x="350" y="8" width="160" height="44" rx="6" fill="#312e81" stroke="#6366f1"/>
+      <text x="430" y="26" text-anchor="middle" fill="#c7d2fe" font-size="10" font-weight="700">Papier BB</text>
+      <text x="430" y="42" text-anchor="middle" fill="#a5b4fc" class="svgmono" font-size="8">arXiv:2509.00967</text>
+      <rect x="130" y="108" width="160" height="40" rx="6" fill="#422006" stroke="#f59e0b"/>
+      <text x="210" y="126" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="700">Sujet de stage</text>
+      <text x="210" y="140" text-anchor="middle" fill="#fde68a" class="svgmono" font-size="7">key rollover · safer update</text>
+      <rect x="570" y="108" width="160" height="40" rx="6" fill="#14532d" stroke="#22c55e"/>
+      <text x="650" y="126" text-anchor="middle" fill="#86efac" font-size="10" font-weight="700">7 besoins BB</text>
+      <text x="650" y="140" text-anchor="middle" fill="#bbf7d0" font-size="7">confidentialité · révocation · BLE…</text>
+      <circle cx="430" cy="88" r="34" fill="#0052cc"/>
+      <text x="430" y="84" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">Audit</text>
+      <text x="430" y="98" text-anchor="middle" fill="#cfe0ff" font-size="8">12 exigences</text>
+      <line x1="400" y1="52" x2="400" y2="72" stroke="#0052cc" stroke-width="1.5" marker-end="url(#arr-ref)"/>
+      <line x1="250" y1="108" x2="395" y2="95" stroke="#0052cc" stroke-width="1.5" marker-end="url(#arr-ref)"/>
+      <line x1="610" y1="108" x2="465" y2="95" stroke="#0052cc" stroke-width="1.5" marker-end="url(#arr-ref)"/>
+    </svg>
+  </div>
+
+  <div class="compare-grid compare-3">
+    <div class="compare-box">
+      <div class="box-title">Papier</div>
+      <ul class="box-list">
+        <li>Matrice N×32 B / paquet</li>
+        <li>Révocation par case à zéro</li>
+        <li>CDS/MPR · Hello anon</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Stage</div>
+      <ul class="box-list">
+        <li><strong>Évaluer + améliorer</strong> le schéma</li>
+        <li>Hardware + tests reproductibles</li>
+        <li>Écarts documentés = livrable</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">7 besoins</div>
+      <ul class="box-list">
+        <li>Confidentialité · anti-rejeu</li>
+        <li>Révocation · surcoût minimal</li>
+        <li>Multihop sans infra</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    Les écarts (epoch + gossip vs multi-clés) sont le <strong>livrable attendu</strong>, pas une dérive.
+  </div>
+</section>
+
+<!-- SLIDE 3 — PROCESSUS CRYPTO INTERACTIF -->
+<section class="slide slide-crypto" id="slide-crypto-walk">
+  <div class="slide-num">03 · Tutoriel crypto</div>
+  <h2>Comment un nœud déchiffre un message ?</h2>
+  <h3>Parcours pas-à-pas · cliquez sur les étapes ou utilisez Suivant</h3>
+
+  <div class="crypto-walk" id="crypto-walk">
+    <div class="mode-tabs">
+      <button type="button" class="mode-tab active" data-mode="group">Message de groupe</button>
+      <button type="button" class="mode-tab" data-mode="private">Message privé (1-to-1)</button>
+    </div>
+
+    <div class="step-dots" id="walk-dots"></div>
+
+    <div class="walk-body">
+      <div class="walk-diagram" id="walk-diagram"></div>
+      <div class="walk-panel">
+        <div class="walk-title" id="walk-title"></div>
+        <div class="walk-text" id="walk-text"></div>
+        <div class="walk-formula" id="walk-formula"></div>
+        <div class="walk-param" id="walk-param" hidden>
+          <label for="walk-seq">Numéro seq du paquet :</label>
+          <input type="number" id="walk-seq" min="0" max="9999" value="42">
+          <span class="walk-hint">→ la clé de paquet change à chaque seq</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="walk-controls">
+      <button type="button" class="walk-btn secondary" id="walk-prev">← Précédent</button>
+      <button type="button" class="walk-btn" id="walk-next">Suivant →</button>
+      <label class="walk-toggle" id="walk-intruder-wrap">
+        <input type="checkbox" id="walk-intruder">
+        Simuler un intrus (mauvaise clé)
+      </label>
+    </div>
+    <p class="walk-hint" style="margin-top:0.5rem;">Raccourcis sur cette diapo : <strong>↑ ↓</strong> ou <strong>PgUp/PgDn</strong> pour avancer les étapes · le HKDF est recalculé en direct (identique à <code>keys.py</code>)</p>
+  </div>
+</section>
+
+<!-- SLIDE 4 — MATRICE 1/2 -->
+<section class="slide">
+  <div class="slide-num">04 · Couverture</div>
+  <h2>Chiffrement &amp; intégrité</h2>
+  <h3>Exigences 1 à 6 · mécanisme sur le fil</h3>
+
+  <div class="split-grid">
+    <div>
+      <div class="diagram-card">
+        <div class="diagram-title">Paquet DATA — overhead fixe 42 B</div>
+        <svg viewBox="0 0 520 130" width="100%">
+          <defs>
+            <marker id="arr-pkt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#0052cc"/>
+            </marker>
+          </defs>
+          <rect x="8" y="18" width="130" height="38" rx="5" fill="#eef1f4" stroke="#0052cc" stroke-width="1.5"/>
+          <text x="73" y="33" text-anchor="middle" fill="#0052cc" font-size="9" font-weight="700">Routing header</text>
+          <text x="73" y="47" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="8">26 B clair · TTL→0 dans AAD</text>
+          <rect x="144" y="18" width="200" height="38" rx="5" fill="#1e3a5f" stroke="#3b82f6"/>
+          <text x="244" y="33" text-anchor="middle" fill="#93c5fd" font-size="9" font-weight="700">Ciphertext</text>
+          <text x="244" y="47" text-anchor="middle" fill="#64748b" class="svgmono" font-size="8">payload chiffré</text>
+          <rect x="350" y="18" width="70" height="38" rx="5" fill="#14532d" stroke="#22c55e"/>
+          <text x="385" y="33" text-anchor="middle" fill="#86efac" font-size="9" font-weight="700">Tag GCM</text>
+          <text x="385" y="47" text-anchor="middle" fill="#bbf7d0" class="svgmono" font-size="8">16 B</text>
+          <text x="430" y="38" fill="#1a2340" font-size="11" font-weight="700">= 42 B</text>
+          <!-- HKDF flow -->
+          <rect x="30" y="72" width="90" height="32" rx="4" fill="#312e81" stroke="#6366f1"/>
+          <text x="75" y="86" text-anchor="middle" fill="#c7d2fe" class="svgmono" font-size="8">group_key[e]</text>
+          <text x="75" y="98" text-anchor="middle" fill="#a5b4fc" font-size="7">PSK epoch</text>
+          <text x="128" y="90" fill="#0052cc" font-size="12">→</text>
+          <rect x="138" y="72" width="110" height="32" rx="4" fill="#0052cc"/>
+          <text x="193" y="86" text-anchor="middle" fill="#fff" class="svgmono" font-size="8">HKDF</text>
+          <text x="193" y="98" text-anchor="middle" fill="#cfe0ff" class="svgmono" font-size="7">src‖seq‖ts</text>
+          <text x="256" y="90" fill="#0052cc" font-size="12">→</text>
+          <rect x="266" y="72" width="90" height="32" rx="4" fill="#0f172a" stroke="#64748b" stroke-dasharray="3 2"/>
+          <text x="311" y="92" text-anchor="middle" fill="#e2e8f0" class="svgmono" font-size="8">packet_key</text>
+          <text x="364" y="90" fill="#0052cc" font-size="12">→</text>
+          <rect x="374" y="72" width="70" height="32" rx="4" fill="#14532d" stroke="#22c55e"/>
+          <text x="409" y="92" text-anchor="middle" fill="#86efac" class="svgmono" font-size="8">AES-GCM</text>
+          <!-- Relay -->
+          <circle cx="75" cy="118" r="14" fill="#fff" stroke="#b88700" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="75" y="122" text-anchor="middle" fill="#b88700" font-size="9" font-weight="700">R</text>
+          <line x1="95" y1="118" x2="200" y2="118" stroke="#b88700" stroke-width="1.5" marker-end="url(#arr-pkt)"/>
+          <text x="148" y="112" text-anchor="middle" fill="#b88700" font-size="8">relais : forward opaque</text>
+          <circle cx="220" cy="118" r="14" fill="#fff" stroke="#1e7e34" stroke-width="2"/>
+          <text x="220" y="122" text-anchor="middle" fill="#1a2340" font-size="9" font-weight="700">B</text>
+          <text x="280" y="122" fill="#1e7e34" font-size="8">déchiffre avec même HKDF</text>
+        </svg>
+      </div>
+      <div class="diagram-card">
+        <div class="diagram-title">Hello — plan de contrôle</div>
+        <svg viewBox="0 0 520 72" width="100%">
+          <rect x="8" y="14" width="220" height="44" rx="5" fill="#eef1f4" stroke="#0052cc"/>
+          <text x="118" y="30" text-anchor="middle" fill="#0052cc" font-size="9" font-weight="700">Hello PUBLIC</text>
+          <text x="118" y="44" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">voisins · MPR · topologie anon</text>
+          <text x="118" y="54" text-anchor="middle" fill="#5a6378" font-size="7">relais lisent sans identité membre</text>
+          <rect x="240" y="14" width="270" height="44" rx="5" fill="#312e81" stroke="#6366f1"/>
+          <text x="375" y="30" text-anchor="middle" fill="#c7d2fe" font-size="9" font-weight="700">Hello PRIVÉ v0x02</text>
+          <text x="375" y="44" text-anchor="middle" fill="#a5b4fc" class="svgmono" font-size="7">BD addr · epoch · X25519 pubkey</text>
+          <text x="375" y="54" text-anchor="middle" fill="#a5b4fc" font-size="7">membres seulement · déclenche gossip</text>
+        </svg>
+      </div>
+    </div>
+    <div>
+      <div class="check-grid">
+        <div class="check-item"><span class="ok">✓</span> Confidentialité groupe · AES-GCM</div>
+        <div class="check-item"><span class="ok">✓</span> Clé unique / paquet · HKDF</div>
+        <div class="check-item"><span class="ok">✓</span> Intégrité · AAD routing</div>
+        <div class="check-item"><span class="ok">✓</span> Anti-rejeu · 2× ReplayFilter</div>
+        <div class="check-item"><span class="ok">✓</span> Hello public / privé</div>
+        <div class="check-item"><span class="ok">✓</span> Privé pairwise · ECDH</div>
+      </div>
+      <table class="compact" style="margin-top:0.6rem;">
+        <tr><th>Exigence</th><th>Preuve</th></tr>
+        <tr><td>Intrus sans clé</td><td class="cell-good"><code>test_phase1a intruder</code></td></tr>
+        <tr><td>Overhead 42 B</td><td class="cell-good"><code>packet_overhead()</code></td></tr>
+        <tr><td>Relais + decrypt</td><td class="cell-good"><code>test_forwarder.py</code></td></tr>
+        <tr><td>Replay rejeté</td><td class="cell-good"><code>test_phase1a replay</code></td></tr>
+        <tr><td>MPR Hello</td><td class="cell-good"><code>test_mpr_hello.py</code></td></tr>
+        <tr><td>Privé hardware</td><td class="cell-good"><code>test_private_hardware.sh</code></td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 5 — MATRICE 2/2 -->
+<section class="slide">
+  <div class="slide-num">05 · Couverture</div>
+  <h2>Cycle de vie des clés</h2>
+  <h3>Exigences 7 à 12 · epoch · révocation · gossip</h3>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Epoch + gossip — révocation globale cohérente</div>
+    <svg viewBox="0 0 860 165" width="100%">
+      <defs>
+        <marker id="arr-epoch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#0052cc"/>
+        </marker>
+      </defs>
+      <circle cx="100" cy="75" r="32" fill="#0052cc"/>
+      <text x="100" y="71" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">Coord.</text>
+      <text x="100" y="86" text-anchor="middle" fill="#cfe0ff" class="svgmono" font-size="8">/revoke → e+1</text>
+      <line x1="136" y1="58" x2="280" y2="38" stroke="#0052cc" stroke-width="2" marker-end="url(#arr-epoch)"/>
+      <line x1="136" y1="92" x2="280" y2="112" stroke="#0052cc" stroke-width="2" marker-end="url(#arr-epoch)"/>
+      <text x="210" y="48" text-anchor="middle" fill="#0052cc" class="svgmono" font-size="9">PKT_REKEY pairwise</text>
+      <circle cx="320" cy="38" r="24" fill="#fff" stroke="#1e7e34" stroke-width="2"/>
+      <text x="320" y="42" text-anchor="middle" fill="#1a2340" font-size="10" font-weight="600">Alice</text>
+      <circle cx="320" cy="112" r="24" fill="#fff" stroke="#1e7e34" stroke-width="2"/>
+      <text x="320" y="116" text-anchor="middle" fill="#1a2340" font-size="10" font-weight="600">Bob</text>
+      <circle cx="480" cy="112" r="24" fill="#fff" stroke="#1e7e34" stroke-width="2"/>
+      <text x="480" y="116" text-anchor="middle" fill="#1a2340" font-size="10" font-weight="600">Carol</text>
+      <line x1="348" y1="112" x2="452" y2="112" stroke="#0052cc" stroke-width="1.5" marker-end="url(#arr-epoch)"/>
+      <circle cx="480" cy="38" r="24" fill="#fff" stroke="#c0392b" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="480" y="42" text-anchor="middle" fill="#c0392b" font-size="10" font-weight="700">M ✕</text>
+      <line x1="348" y1="38" x2="452" y2="38" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="6 5"/>
+      <text x="414" y="28" text-anchor="middle" fill="#c0392b" font-size="8">jamais REKEY</text>
+      <!-- Gossip catch-up -->
+      <rect x="560" y="20" width="280" height="125" rx="8" fill="rgba(0,82,204,0.05)" stroke="#0052cc"/>
+      <text x="700" y="42" text-anchor="middle" fill="#0052cc" font-size="10" font-weight="700">Gossip catch-up (membre absent)</text>
+      <text x="580" y="62" fill="#5a6378" font-size="9">1. Retour → Hello privé epoch = e (périmé)</text>
+      <text x="580" y="78" fill="#5a6378" font-size="9">2. Pair à jour voit e &lt; courant → envoie REKEY</text>
+      <text x="580" y="94" fill="#1e7e34" font-size="9">3. Un seul REKEY = état complet (clé + revoked_list)</text>
+      <text x="580" y="110" fill="#1e7e34" font-size="9">4. Convergence ~1 cycle Hello (5 s)</text>
+      <text x="580" y="132" fill="#b88700" font-size="8">PKT_SUBGROUP = fenêtre transitoire O(|S|) si urgent</text>
+    </svg>
+  </div>
+
+  <div class="badge-grid">
+    <div class="badge"><strong>Révocation</strong>EpochStore + flood REKEY<span class="tag tag-green">test_epoch.py</span></div>
+    <div class="badge"><strong>Ajout membre</strong>1 REKEY + ECDH auto<span class="tag tag-green">register_peer</span></div>
+    <div class="badge"><strong>Leader absent</strong>gossip sans coord. permanent<span class="tag tag-green">send_rekey_catchup</span></div>
+    <div class="badge"><strong>Membre absent</strong>Hello epoch → catch-up<span class="tag tag-green">hello v0x02</span></div>
+    <div class="badge"><strong>Surcoût BLE</strong>42 B fixe · chat ~88 B<span class="tag tag-green">&lt; MTU 251 B</span></div>
+    <div class="badge"><strong>Fenêtre prop.</strong>PKT_SUBGROUP transitoire<span class="tag tag-green">/subgroup</span></div>
+  </div>
+</section>
+
+<!-- SLIDE 6 — ÉCART PRINCIPAL -->
+<section class="slide">
+  <div class="slide-num">06 · Écart principal</div>
+  <h2>Multi-clés (papier) → Epoch + Gossip (impl.)</h2>
+  <h3>Même propriétés · coût sur le fil divisé par ~6</h3>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Comparaison sur le fil — n = 32 membres</div>
+    <svg viewBox="0 0 860 145" width="100%">
+      <!-- Papier -->
+      <text x="215" y="18" text-anchor="middle" fill="#c0392b" font-size="10" font-weight="700">Papier — multi-clés</text>
+      <rect x="20" y="26" width="70" height="32" rx="4" fill="#eef1f4" stroke="#64748b"/>
+      <text x="55" y="46" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">26 B</text>
+      <rect x="94" y="26" width="280" height="32" rx="4" fill="#312e81" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="234" y="40" text-anchor="middle" fill="#c7d2fe" font-size="8" font-weight="700">Key Header N×32 B</text>
+      <text x="234" y="52" text-anchor="middle" fill="#a5b4fc" class="svgmono" font-size="7">512 B — révocation locale / divergente</text>
+      <rect x="380" y="26" width="50" height="32" rx="4" fill="#eef1f4" stroke="#64748b"/>
+      <text x="405" y="46" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">payload</text>
+      <text x="55" y="72" text-anchor="middle" fill="#c0392b" font-size="9" font-weight="600">~600 B chat</text>
+      <text x="234" y="72" text-anchor="middle" fill="#c0392b" font-size="9">&gt; MTU BLE 251 B</text>
+      <!-- Impl -->
+      <text x="645" y="18" text-anchor="middle" fill="#1e7e34" font-size="10" font-weight="700">Impl. — epoch + HKDF</text>
+      <rect x="450" y="26" width="70" height="32" rx="4" fill="#eef1f4" stroke="#0052cc"/>
+      <text x="485" y="46" text-anchor="middle" fill="#0052cc" class="svgmono" font-size="7">26 B</text>
+      <rect x="526" y="26" width="120" height="32" rx="4" fill="#1e3a5f" stroke="#3b82f6"/>
+      <text x="586" y="46" text-anchor="middle" fill="#93c5fd" class="svgmono" font-size="7">ciphertext</text>
+      <rect x="652" y="26" width="50" height="32" rx="4" fill="#14532d" stroke="#22c55e"/>
+      <text x="677" y="46" text-anchor="middle" fill="#86efac" class="svgmono" font-size="7">16 B</text>
+      <text x="740" y="46" fill="#1e7e34" font-size="10" font-weight="700">42 B</text>
+      <text x="586" y="72" text-anchor="middle" fill="#1e7e34" font-size="9" font-weight="600">~88 B chat ✓ BLE</text>
+      <!-- Arrow transition -->
+      <text x="430" y="100" text-anchor="middle" fill="#0052cc" font-size="18">→</text>
+      <!-- Properties kept -->
+      <rect x="20" y="88" width="820" height="48" rx="6" fill="rgba(30,126,52,0.08)" stroke="#1e7e34"/>
+      <text x="430" y="108" text-anchor="middle" fill="#1e7e34" font-size="9" font-weight="700">4 propriétés conservées</text>
+      <text x="130" y="124" fill="#1a2340" font-size="8">instantanéité</text>
+      <text x="280" y="124" fill="#1a2340" font-size="8">pas d'attente globale</text>
+      <text x="450" y="124" fill="#1a2340" font-size="8">exclusion de case (ECDH intact)</text>
+      <text x="660" y="124" fill="#1a2340" font-size="8">retour absent ~5 s gossip</text>
+    </svg>
+  </div>
+
+  <div class="compare-grid compare-2">
+    <div class="compare-box">
+      <div class="box-title">Pourquoi changer ? <span class="tag tag-red">3 raisons</span></div>
+      <ul class="box-list">
+        <li>Sujet de stage : « key rollover, safer update »</li>
+        <li>Révocation papier = locale, vues divergentes</li>
+        <li>512 B header permanent incompatible BLE</li>
+      </ul>
+    </div>
+    <div class="compare-box winner">
+      <div class="box-title">Gain impl. <span class="tag tag-green">epoch</span></div>
+      <ul class="box-list">
+        <li>Setup O(n²) → <strong>1 PSK + ECDH auto</strong></li>
+        <li>Ajout membre : n clés → <strong>1 PKT_REKEY</strong></li>
+        <li>Cohérence globale + auto-réparation gossip</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 7 — MODÈLE DE MENACE -->
+<section class="slide">
+  <div class="slide-num">07 · Menaces</div>
+  <h2>Modèle de menace</h2>
+  <h3>Acteur → capacité → défense implémentée</h3>
+
+  <div class="split-grid">
+    <div class="diagram-card">
+      <div class="diagram-title">Couches de défense</div>
+      <svg viewBox="0 0 480 220" width="100%">
+        <!-- Concentric -->
+        <ellipse cx="240" cy="110" rx="210" ry="95" fill="rgba(192,57,43,0.06)" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="240" y="22" text-anchor="middle" fill="#c0392b" font-size="9" font-weight="600">Externe actif — injection → InvalidTag</text>
+        <ellipse cx="240" cy="110" rx="155" ry="70" fill="rgba(184,135,0,0.08)" stroke="#b88700" stroke-width="1.5"/>
+        <text x="400" y="68" fill="#b88700" font-size="8">Rejeu → ReplayFilter</text>
+        <ellipse cx="240" cy="110" rx="100" ry="48" fill="rgba(0,82,204,0.08)" stroke="#0052cc" stroke-width="1.5"/>
+        <text x="240" y="78" text-anchor="middle" fill="#0052cc" font-size="8">Passif BT — ciphertext opaque</text>
+        <ellipse cx="240" cy="110" rx="55" ry="28" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+        <text x="240" y="106" text-anchor="middle" fill="#86efac" font-size="8" font-weight="700">Membres</text>
+        <text x="240" y="118" text-anchor="middle" fill="#bbf7d0" class="svgmono" font-size="7">group_key[e]</text>
+        <!-- Side actors -->
+        <rect x="8" y="155" width="110" height="52" rx="6" fill="#fff" stroke="#c0392b"/>
+        <text x="63" y="172" text-anchor="middle" fill="#c0392b" font-size="9" font-weight="700">M compromis</text>
+        <text x="63" y="186" text-anchor="middle" fill="#5a6378" font-size="7">/revoke → epoch++</text>
+        <text x="63" y="198" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">revoked_list</text>
+        <line x1="118" y1="175" x2="185" y2="130" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <rect x="362" y="155" width="110" height="52" rx="6" fill="#fff" stroke="#b88700" stroke-dasharray="5 3"/>
+        <text x="417" y="172" text-anchor="middle" fill="#b88700" font-size="9" font-weight="700">Relais R</text>
+        <text x="417" y="186" text-anchor="middle" fill="#5a6378" font-size="7">forward opaque</text>
+        <text x="417" y="198" text-anchor="middle" fill="#5a6378" font-size="7">sans derive_packet_key</text>
+        <line x1="362" y1="175" x2="295" y2="130" stroke="#b88700" stroke-width="1.5" stroke-dasharray="4 3"/>
+      </svg>
+    </div>
+    <div>
+      <div class="badge-grid" style="grid-template-columns:1fr;">
+        <div class="badge" style="text-align:left;"><strong>Externe passif</strong>Paquets + Hello public = topologie anon · pas de clé<span class="tag tag-green">GCM opaque</span></div>
+        <div class="badge" style="text-align:left;"><strong>Externe actif</strong>Tamper → tag GCM invalide · MPR couvert par AAD privé<span class="tag tag-green">InvalidTag</span></div>
+        <div class="badge" style="text-align:left;"><strong>Rejeu</strong>2× ReplayFilter (256) + timestamp ±120 s<span class="tag tag-green">forwarder</span></div>
+        <div class="badge" style="text-align:left;"><strong>Membre / device volé</strong>Coordinateur /revoke · M jamais REKEY · rotation in-band<span class="tag tag-green">epoch++</span></div>
+        <div class="badge" style="text-align:left;"><strong>Relais malveillant</strong>Forward sans clé · mauvaise clé détectée à la livraison<span class="tag tag-green">opaque</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 8 — LIMITES 1/2 -->
+<section class="slide">
+  <div class="slide-num">08 · Limites</div>
+  <h2>Limites assumées — 1/2</h2>
+  <h3>Ce que le design ne résout pas (encore)</h3>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Carte des risques résiduels</div>
+    <svg viewBox="0 0 860 100" width="100%">
+      <rect x="20" y="20" width="190" height="60" rx="8" fill="rgba(184,135,0,0.12)" stroke="#b88700" stroke-width="2"/>
+      <text x="115" y="42" text-anchor="middle" fill="#b88700" font-size="10" font-weight="700">REKEY non signé</text>
+      <text x="115" y="58" text-anchor="middle" fill="#5a6378" font-size="8">fork / flood arbitraire</text>
+      <text x="115" y="70" text-anchor="middle" fill="#1e7e34" font-size="7">→ sig. coordinateur (next)</text>
+      <rect x="230" y="20" width="190" height="60" rx="8" fill="rgba(184,135,0,0.12)" stroke="#b88700" stroke-width="2"/>
+      <text x="325" y="42" text-anchor="middle" fill="#b88700" font-size="10" font-weight="700">Fenêtre propagation</text>
+      <text x="325" y="58" text-anchor="middle" fill="#5a6378" font-size="8">quelques s avant convergence</text>
+      <text x="325" y="70" text-anchor="middle" fill="#1e7e34" font-size="7">→ PKT_SUBGROUP transitoire</text>
+      <rect x="440" y="20" width="190" height="60" rx="8" fill="rgba(184,135,0,0.12)" stroke="#b88700" stroke-width="2"/>
+      <text x="535" y="42" text-anchor="middle" fill="#b88700" font-size="10" font-weight="700">Identité PSK-ancrée</text>
+      <text x="535" y="58" text-anchor="middle" fill="#5a6378" font-size="8">rotation epoch → nouvelle id.</text>
+      <text x="535" y="70" text-anchor="middle" fill="#1e7e34" font-size="7">→ documenté · pairwise recalc</text>
+      <rect x="650" y="20" width="190" height="60" rx="8" fill="rgba(184,135,0,0.12)" stroke="#b88700" stroke-width="2"/>
+      <text x="745" y="42" text-anchor="middle" fill="#b88700" font-size="10" font-weight="700">Pas FS intra-epoch</text>
+      <text x="745" y="58" text-anchor="middle" fill="#5a6378" font-size="8">PSK epoch = fenêtre lisible</text>
+      <text x="745" y="70" text-anchor="middle" fill="#1e7e34" font-size="7">→ HKDF/paquet · ECDH Phase 2</text>
+    </svg>
+  </div>
+
+  <div class="compare-grid compare-2">
+    <div class="compare-box">
+      <div class="box-title">REKEY non signé <span class="tag tag-yellow">MOYENNE</span></div>
+      <ul class="box-list">
+        <li>Membre malveillant peut flooder un REKEY arbitraire</li>
+        <li>Mitigation : accepter seulement du coord. + epoch monotone</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Fenêtre propagation <span class="tag tag-yellow">MOYENNE</span></div>
+      <ul class="box-list">
+        <li>Membre non basculé émet sous ancienne clé (secondes)</li>
+        <li><code>PKT_SUBGROUP</code> O(|S|) pour l'urgent transitoire</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Ancrage PSK <span class="tag tag-yellow">MOYENNE</span></div>
+      <ul class="box-list">
+        <li>X25519 dérivé PSK + BD addr — stable reboot, change à epoch</li>
+        <li>Pas de fuite inter-epoch si révocation appliquée</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">FS intra-epoch <span class="tag tag-yellow">MOYENNE</span></div>
+      <ul class="box-list">
+        <li>Compromission <code>group_key[e]</code> = trafic epoch lisible</li>
+        <li>FS par paquet (HKDF) limite déjà l'exposition passée</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 9 — LIMITES 2/2 -->
+<section class="slide">
+  <div class="slide-num">09 · Limites</div>
+  <h2>Limites acceptées — 2/2</h2>
+  <h3>Pas de régression vs le papier</h3>
+
+  <div class="split-grid">
+    <div class="diagram-card">
+      <div class="diagram-title">État persistant + collusion — limites basses</div>
+      <svg viewBox="0 0 480 150" width="100%">
+        <rect x="20" y="20" width="200" height="110" rx="8" fill="rgba(30,126,52,0.08)" stroke="#1e7e34"/>
+        <text x="120" y="42" text-anchor="middle" fill="#1e7e34" font-size="10" font-weight="700">Nœud stateful</text>
+        <rect x="40" y="52" width="160" height="28" rx="4" fill="#fff" stroke="#0052cc"/>
+        <text x="120" y="70" text-anchor="middle" fill="#0052cc" class="svgmono" font-size="8">.bb-epoch-*.bin ~100 B</text>
+        <text x="120" y="92" text-anchor="middle" fill="#5a6378" font-size="8">epoch + clé + revoked_list</text>
+        <text x="120" y="108" text-anchor="middle" fill="#1e7e34" font-size="8">gossip rattrape nœud amnésique</text>
+        <rect x="260" y="20" width="200" height="110" rx="8" fill="rgba(30,126,52,0.08)" stroke="#1e7e34"/>
+        <text x="360" y="42" text-anchor="middle" fill="#1e7e34" font-size="10" font-weight="700">Collusion interne</text>
+        <circle cx="310" cy="78" r="18" fill="#fff" stroke="#64748b"/>
+        <text x="310" y="82" text-anchor="middle" fill="#1a2340" font-size="9">A</text>
+        <circle cx="360" cy="78" r="18" fill="#fff" stroke="#c0392b" stroke-dasharray="4 3"/>
+        <text x="360" y="82" text-anchor="middle" fill="#c0392b" font-size="9">M</text>
+        <circle cx="410" cy="78" r="18" fill="#fff" stroke="#64748b"/>
+        <text x="410" y="82" text-anchor="middle" fill="#1a2340" font-size="9">B</text>
+        <line x1="328" y1="78" x2="342" y2="78" stroke="#c0392b" stroke-width="1.5"/>
+        <text x="360" y="108" text-anchor="middle" fill="#5a6378" font-size="8">complice transmet clé à M</text>
+        <text x="360" y="122" text-anchor="middle" fill="#5a6378" font-size="7">irréductible · idem papier</text>
+      </svg>
+    </div>
+    <div>
+      <div class="badge-grid" style="grid-template-columns:1fr;">
+        <div class="badge" style="text-align:left;"><strong>Nœuds non stateless</strong><span class="tag tag-green">BASSE</span>Persistance ~100 B · gossip auto-répare</div>
+        <div class="badge" style="text-align:left;"><strong>Collusion interne</strong><span class="tag tag-green">BASSE</span>Inhérent à toute PSK partagée — pas une régression</div>
+        <div class="badge" style="text-align:left;"><strong>Hors périmètre</strong><span class="tag tag-green">BASSE</span>BGW Phase 3 · gouvernance produit · pas de store-and-forward</div>
+      </div>
+      <div class="verdict" style="margin-top:0.75rem;">
+        Fenêtre propagation et collusion existaient déjà <strong>sous forme pire</strong> dans le papier — sans détection ni réparation.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 10 — PREUVES -->
+<section class="slide">
+  <div class="slide-num">10 · Preuves</div>
+  <h2>Preuves fonctionnelles</h2>
+  <h3>Pyramide de validation — unitaire → intégration → hardware</h3>
+
+  <div class="split-grid">
+    <div class="diagram-card">
+      <div class="diagram-title">Pyramide de tests</div>
+      <svg viewBox="0 0 480 200" width="100%">
+        <polygon points="240,15 420,175 60,175" fill="rgba(0,82,204,0.06)" stroke="#0052cc" stroke-width="1.5"/>
+        <line x1="120" y1="115" x2="360" y2="115" stroke="#d8dee6" stroke-width="1"/>
+        <line x1="155" y1="75" x2="325" y2="75" stroke="#d8dee6" stroke-width="1"/>
+        <text x="240" y="58" text-anchor="middle" fill="#0052cc" font-size="9" font-weight="700">Unitaire</text>
+        <text x="240" y="72" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">keys · hello · epoch · packet</text>
+        <text x="240" y="98" text-anchor="middle" fill="#1e7e34" font-size="9" font-weight="700">Intégration</text>
+        <text x="240" y="112" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">forwarder · replay · privé · REKEY</text>
+        <text x="240" y="148" text-anchor="middle" fill="#b88700" font-size="9" font-weight="700">Hardware 3 boards</text>
+        <text x="240" y="162" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">chat · relais opaque · privé X25519</text>
+        <!-- Side labels -->
+        <rect x="380" y="40" width="90" height="22" rx="4" fill="#14532d" stroke="#22c55e"/>
+        <text x="425" y="55" text-anchor="middle" fill="#86efac" class="svgmono" font-size="7">phase1a ✓</text>
+        <rect x="380" y="88" width="90" height="22" rx="4" fill="#14532d" stroke="#22c55e"/>
+        <text x="425" y="103" text-anchor="middle" fill="#86efac" class="svgmono" font-size="7">epoch ✓</text>
+        <rect x="380" y="130" width="90" height="22" rx="4" fill="#14532d" stroke="#22c55e"/>
+        <text x="425" y="145" text-anchor="middle" fill="#86efac" class="svgmono" font-size="7">hardware ✓</text>
+        <rect x="380" y="158" width="90" height="22" rx="4" fill="#422006" stroke="#f59e0b"/>
+        <text x="425" y="173" text-anchor="middle" fill="#fcd34d" class="svgmono" font-size="7">multihop ⚠</text>
+      </svg>
+    </div>
+    <div>
+      <div class="check-grid">
+        <div class="check-item"><span class="ok">✓</span> <code>test_phase1a</code> encrypt/decrypt/intruder</div>
+        <div class="check-item"><span class="ok">✓</span> <code>test_phase1a replay</code> rejet 2e envoi</div>
+        <div class="check-item"><span class="ok">✓</span> <code>test_forwarder</code> relay opaque</div>
+        <div class="check-item"><span class="ok">✓</span> <code>test_private_pairwise</code> ECDH</div>
+        <div class="check-item"><span class="ok">✓</span> <code>test_epoch.py</code> persist + REKEY</div>
+        <div class="check-item"><span class="ok">✓</span> <code>test_private_hardware.sh</code></div>
+      </div>
+      <div class="verdict" style="margin-top:0.75rem;">
+        <span class="tag tag-yellow">À revalider</span> multihop RELAY post-fix <code>am_i_cds</code> · scénario absent 7 jours (<code>bb-revocation-epoch.html</code>)
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 11 — Q&R 1/2 -->
+<section class="slide">
+  <div class="slide-num">11 · Q&amp;R</div>
+  <h2>Questions probables (1/2)</h2>
+  <h3>Chiffrement · nonce · multi-clés</h3>
+
+  <div class="split-grid">
+    <div class="diagram-card">
+      <div class="diagram-title">Nonce GCM = 0 — pourquoi c'est sûr</div>
+      <svg viewBox="0 0 480 100" width="100%">
+        <rect x="15" y="20" width="100" height="36" rx="4" fill="#312e81" stroke="#6366f1"/>
+        <text x="65" y="36" text-anchor="middle" fill="#c7d2fe" class="svgmono" font-size="8">group_key</text>
+        <text x="65" y="48" text-anchor="middle" fill="#a5b4fc" class="svgmono" font-size="7">+ src‖seq‖ts</text>
+        <text x="125" y="40" fill="#0052cc" font-size="14">→</text>
+        <rect x="135" y="20" width="90" height="36" rx="4" fill="#0f172a" stroke="#64748b" stroke-dasharray="3 2"/>
+        <text x="180" y="42" text-anchor="middle" fill="#e2e8f0" class="svgmono" font-size="8">packet_key</text>
+        <text x="235" y="40" fill="#0052cc" font-size="14">→</text>
+        <rect x="245" y="20" width="80" height="36" rx="4" fill="#14532d" stroke="#22c55e"/>
+        <text x="285" y="38" text-anchor="middle" fill="#86efac" class="svgmono" font-size="8">AES-GCM</text>
+        <text x="285" y="50" text-anchor="middle" fill="#bbf7d0" class="svgmono" font-size="7">nonce=0</text>
+        <text x="350" y="40" fill="#1e7e34" font-size="9" font-weight="600">clé unique</text>
+        <text x="350" y="52" fill="#1e7e34" font-size="9">= pas de réutilisation</text>
+        <text x="240" y="82" text-anchor="middle" fill="#5a6378" font-size="8">Pattern standard quand la clé est éphémère par message (TLS 1.3 record, Signal…)</text>
+      </svg>
+    </div>
+    <div>
+      <div class="step-row compact">
+        <div class="step-num">2</div>
+        <div class="step-body"><strong>Abandon multi-clés ?</strong><span class="ans">512 B &gt; MTU BLE · révocation divergente · sujet demande epoch + gossip.</span></div>
+      </div>
+      <div class="step-row compact">
+        <div class="step-num">3</div>
+        <div class="step-body"><strong>Révocation instantanée ?</strong><span class="ans">~5 s (1 flood REKEY). Fenêtre couverte par PKT_SUBGROUP. M jamais REKEY.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 12 — Q&R 2/2 -->
+<section class="slide">
+  <div class="slide-num">12 · Q&amp;R</div>
+  <h2>Questions probables (2/2)</h2>
+  <h3>Révocation · état · identité</h3>
+
+  <div class="split-grid">
+    <div class="diagram-card">
+      <div class="diagram-title">REKEY non signé — risque &amp; mitigation</div>
+      <svg viewBox="0 0 480 110" width="100%">
+        <circle cx="70" cy="45" r="28" fill="#fff" stroke="#c0392b" stroke-width="2"/>
+        <text x="70" y="42" text-anchor="middle" fill="#c0392b" font-size="10" font-weight="700">Attaquant</text>
+        <text x="70" y="54" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">REKEY fake</text>
+        <line x1="102" y1="45" x2="180" y2="45" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="5 4"/>
+        <rect x="185" y="25" width="110" height="40" rx="5" fill="#422006" stroke="#f59e0b"/>
+        <text x="240" y="42" text-anchor="middle" fill="#fcd34d" font-size="8">fork / flood</text>
+        <text x="240" y="56" text-anchor="middle" fill="#fde68a" font-size="7">epoch arbitraire</text>
+        <text x="305" y="45" fill="#1e7e34" font-size="14">→</text>
+        <rect x="320" y="25" width="150" height="40" rx="5" fill="rgba(30,126,52,0.15)" stroke="#1e7e34"/>
+        <text x="395" y="42" text-anchor="middle" fill="#1e7e34" font-size="8" font-weight="700">Mitigation next</text>
+        <text x="395" y="56" text-anchor="middle" fill="#1a2340" class="svgmono" font-size="7">sig coord. + epoch ↑</text>
+        <text x="240" y="88" text-anchor="middle" fill="#5a6378" font-size="8">Forward secrecy : HKDF/paquet (passé) · pas intra-epoch PSK (présent) · ECDH éphémère Phase 2</text>
+        <text x="240" y="102" text-anchor="middle" fill="#5a6378" font-size="8">Identité X25519 : stable reboot · change à rotation epoch — pairwise recalculé</text>
+      </svg>
+    </div>
+    <div>
+      <div class="step-row compact">
+        <div class="step-num">4</div>
+        <div class="step-body"><strong>REKEY non signé ?</strong><span class="ans">Fork possible. Sig. coordinateur + epoch monotone = prochain incrément.</span></div>
+      </div>
+      <div class="step-row compact">
+        <div class="step-num">5</div>
+        <div class="step-body"><strong>Forward secrecy ?</strong><span class="ans">Par paquet (HKDF). Pas intra-epoch sur PSK. Rotation epoch limite la fenêtre.</span></div>
+      </div>
+      <div class="step-row compact">
+        <div class="step-num">6</div>
+        <div class="step-body"><strong>Identité stable ?</strong><span class="ans">PSK + BD addr → X25519 déterministe. Change à epoch — documenté.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SLIDE 13 — SYNTHÈSE -->
+<section class="slide">
+  <div class="slide-num">13 · Synthèse</div>
+  <h2>Synthèse de l'audit</h2>
+  <h3>12/12 exigences · prochain incrément</h3>
+
+  <div class="diagram-card">
+    <div class="diagram-title">Bilan audit</div>
+    <svg viewBox="0 0 860 95" width="100%">
+      <rect x="20" y="15" width="500" height="65" rx="8" fill="rgba(30,126,52,0.1)" stroke="#1e7e34" stroke-width="2"/>
+      <text x="270" y="38" text-anchor="middle" fill="#1e7e34" font-size="12" font-weight="700">12 / 12 exigences couvertes</text>
+      <text x="80" y="58" fill="#1a2340" font-size="8">42 B BLE ✓</text>
+      <text x="180" y="58" fill="#1a2340" font-size="8">epoch + gossip ✓</text>
+      <text x="300" y="58" fill="#1a2340" font-size="8">relais opaque ✓</text>
+      <text x="420" y="58" fill="#1a2340" font-size="8">écart documenté ✓</text>
+      <text x="270" y="72" text-anchor="middle" fill="#5a6378" font-size="8">aligné sujet de stage · tests unitaire + hardware</text>
+      <rect x="540" y="15" width="300" height="65" rx="8" fill="rgba(0,82,204,0.06)" stroke="#0052cc"/>
+      <text x="690" y="35" text-anchor="middle" fill="#0052cc" font-size="10" font-weight="700">Prochain incrément</text>
+      <text x="560" y="52" fill="#1a2340" font-size="8">① Signature REKEY</text>
+      <text x="560" y="66" fill="#1a2340" font-size="8">② Scénario 7 jours hardware</text>
+      <text x="720" y="52" fill="#1a2340" font-size="8">③ Revalidation multihop</text>
+      <text x="720" y="66" fill="#1a2340" font-size="8">④ ECDH éphémère Phase 2</text>
+    </svg>
+  </div>
+
+  <div class="compare-grid compare-2">
+    <div class="compare-box winner">
+      <div class="box-title">Forces</div>
+      <ul class="box-list">
+        <li>Révocation <strong>globale cohérente</strong> + auto-réparation</li>
+        <li>Overhead fixe compatible BLE</li>
+        <li>Stack complète en prod (epoch, subgroup, privé)</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">À fermer</div>
+      <ul class="box-list">
+        <li>REKEY signé côté récepteur</li>
+        <li>Preuves hardware manquantes (multihop, absent 7j)</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const nav = document.getElementById('nav');
+  const titles = [
+    'Titre',
+    'Référentiels',
+    'Tutoriel crypto',
+    'Couverture 1/2',
+    'Couverture 2/2',
+    'Écart multi-clés',
+    'Modèle de menace',
+    'Limites 1/2',
+    'Limites 2/2',
+    'Preuves',
+    'Q&R 1/2',
+    'Q&R 2/2',
+    'Synthèse'
+  ];
+  let current = 0;
+
+  titles.forEach((t, i) => {
+    const b = document.createElement('button');
+    b.textContent = (i + 1) + '. ' + t;
+    b.onclick = () => go(i);
+    nav.appendChild(b);
+  });
+  const counter = document.createElement('div');
+  counter.id = 'slide-counter';
+  nav.appendChild(counter);
+
+  function go(i) {
+    if (i < 0 || i >= slides.length) return;
+    slides[current].classList.remove('active');
+    nav.children[current].classList.remove('active');
+    current = i;
+    slides[current].classList.add('active');
+    nav.children[current].classList.add('active');
+    counter.textContent = (current + 1) + ' / ' + slides.length;
+  }
+
+  document.addEventListener('keydown', e => {
+    const cryptoSlideIdx = 2;
+    if (current === cryptoSlideIdx && typeof cryptoWalk !== 'undefined') {
+      if (e.key === 'ArrowDown' || e.key === 'PageDown') {
+        e.preventDefault();
+        cryptoWalk.next();
+        return;
+      }
+      if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+        e.preventDefault();
+        cryptoWalk.prev();
+        return;
+      }
+    }
+    if (e.key === 'ArrowRight' || e.key === ' ') go(current + 1);
+    if (e.key === 'ArrowLeft') go(current - 1);
+  });
+
+  go(0);
+
+  /* ── Crypto walkthrough interactif ── */
+  const cryptoWalk = (function () {
+    const DEMO = {
+      groupKey: new Uint8Array(32).fill(0x01),
+      kPairDemo: new Uint8Array(32).fill(0xab),
+      wrongKey: new Uint8Array(32).fill(0x99),
+      src: 'AA:BB:CC:DD:EE:01',
+      dstGroup: 'FF:FF:FF:FF:FF:FF',
+      dstPrivate: 'AA:BB:CC:DD:EE:02',
+      seq: 42,
+      tsMs: 1710000000000,
+      epoch: 3,
+      plaintext: 'Bonjour le groupe !',
+      privPlaintext: 'Message secret A→B',
+    };
+
+    let mode = 'group';
+    let step = 0;
+    let intruder = false;
+    let packetKeyHex = '…';
+
+    const dotsEl = document.getElementById('walk-dots');
+    const diagramEl = document.getElementById('walk-diagram');
+    const titleEl = document.getElementById('walk-title');
+    const textEl = document.getElementById('walk-text');
+    const formulaEl = document.getElementById('walk-formula');
+    const paramEl = document.getElementById('walk-param');
+    const seqInput = document.getElementById('walk-seq');
+    const prevBtn = document.getElementById('walk-prev');
+    const nextBtn = document.getElementById('walk-next');
+    const intruderCb = document.getElementById('walk-intruder');
+
+    function macToBytes(mac) {
+      return mac.split(':').map(b => parseInt(b, 16));
+    }
+
+    function bytesToHex(u8) {
+      return Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function truncHex(u8, n) {
+      const h = bytesToHex(u8);
+      return h.slice(0, n) + '…';
+    }
+
+    async function derivePacketKey(baseKey, srcMac, seq, tsMs) {
+      const srcB = new Uint8Array(macToBytes(srcMac));
+      const info = new Uint8Array(18);
+      info.set(srcB, 0);
+      const view = new DataView(info.buffer);
+      view.setUint32(6, seq >>> 0, false);
+      view.setBigUint64(10, BigInt(tsMs), false);
+      const keyMaterial = await crypto.subtle.importKey('raw', baseKey, 'HKDF', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info },
+        keyMaterial,
+        256
+      );
+      return bytesToHex(new Uint8Array(bits));
+    }
+
+    const STEPS = {
+      group: [
+        {
+          label: 'Vue d\'ensemble',
+          title: 'Un paquet DATA arrive sur le nœud',
+          text: 'Bob reçoit un paquet Bluetooth. Une partie de l\'en-tête est en clair (pour le routage multihop), le reste est chiffré. Seuls les membres du groupe possèdent la clé nécessaire pour le lire.',
+          lit: ['pkt', 'bob'],
+          formula: () => `Paquet reçu sur L2CAP
+├─ En-tête routing   <span class="hl">26 B en clair</span>  (src, dst, seq, TTL…)
+├─ Corps chiffré     ciphertext AES-GCM
+└─ Tag intégrité     <span class="hl">16 B</span>
+Total overhead crypto = <span class="hl">42 B</span> (fixe, indépendant du nombre de membres)`,
+        },
+        {
+          label: 'Clé de groupe',
+          title: 'Étape 1 — La clé partagée du groupe',
+          text: 'Tous les membres partagent la même clé secrète group_key, indexée par l\'epoch courant (numéro de rotation). Elle arrive du fichier .env au démarrage, puis est mise à jour via PKT_REKEY lors d\'une révocation.',
+          lit: ['gkey', 'bob', 'arrow-gkey'],
+          formula: () => `group_key[epoch=${DEMO.epoch}]  =  ${truncHex(DEMO.groupKey, 16)}
+<span class="ok">✓ Bob la possède</span>  (membre du groupe, epoch à jour)
+<span class="err">✗ Un observateur BT ne l'a pas</span>`,
+        },
+        {
+          label: 'En-tête',
+          title: 'Étape 2 — Lire l\'en-tête routing (clair)',
+          text: 'Bob parse les 26 premiers octets sans déchiffrer. Il en extrait l\'adresse source src, le numéro de séquence seq et l\'horodatage ts_ms — ces trois valeurs serviront à recalculer la clé unique de ce paquet.',
+          lit: ['hdr', 'bob', 'arrow-hdr'],
+          formula: () => `Champs lus dans le header clair :
+  src   = <span class="hl">${DEMO.src}</span>
+  dst   = ${DEMO.dstGroup}   (broadcast groupe)
+  seq   = <span class="hl">${DEMO.seq}</span>
+  ts_ms = <span class="hl">${DEMO.tsMs}</span>`,
+        },
+        {
+          label: 'HKDF',
+          title: 'Étape 3 — Dériver la clé de paquet (HKDF-SHA256)',
+          text: 'Chaque paquet utilise une clé différente, même si group_key est la même. C\'est le HKDF qui combine la clé de base avec src‖seq‖ts_ms. Ainsi, capturer un paquet ne permet pas de déchiffrer les suivants (forward secrecy par paquet).',
+          lit: ['gkey', 'hdr', 'hkdf', 'pkey', 'arrow-gkey', 'arrow-hdr', 'arrow-hkdf'],
+          showSeq: true,
+          formula: () => `packet_key = HKDF-SHA256(
+  ikm  = group_key[${DEMO.epoch}],
+  salt = (vide),
+  info = src (6 B) ‖ seq (u32 BE) ‖ ts_ms (u64 BE)
+)
+
+→ packet_key = <span class="hl">${packetKeyHex.slice(0, 24)}…</span>
+<span class="ok">Même calcul côté émetteur et récepteur — aucune clé envoyée sur le fil</span>`,
+        },
+        {
+          label: 'Intégrité',
+          title: 'Étape 4 — Vérifier l\'intégrité (AAD + tag GCM)',
+          text: 'AES-GCM protège aussi l\'en-tête routing via l\'AAD (données authentifiées). Astuce BB : le TTL est mis à 0 dans l\'AAD pour que les relais puissent décrémenter le TTL sans invalider le tag à la livraison finale.',
+          lit: ['hdr', 'tag', 'gcm', 'pkey', 'arrow-aad'],
+          formula: () => `AES-GCM vérifie :
+  • clé     = packet_key
+  • nonce   = <span class="hl">0</span>  (sûr car packet_key est unique)
+  • AAD     = routing_header avec TTL=0
+  • tag     = 16 derniers octets du paquet
+
+Si un bit est modifié → <span class="err">InvalidTag</span> (rejet)`,
+        },
+        {
+          label: 'Déchiffrement',
+          title: () => intruder ? 'Échec — mauvaise clé (intrus)' : 'Étape 5 — Déchiffrer le message',
+          text: () => intruder
+            ? 'Mode intrus : on tente avec une clé aléatoire. Le tag GCM ne correspond pas → le paquet est rejeté silencieusement (test test_phase1a intruder).'
+            : 'Bob déchiffre le ciphertext avec packet_key. Si tout est cohérent, il obtient le message en clair.',
+          lit: () => intruder ? ['pkey-bad', 'gcm', 'tag', 'reject'] : ['pkey', 'gcm', 'plain', 'bob'],
+          formula: () => intruder
+            ? `Tentative avec clé aléatoire :
+  packet_key = ${truncHex(DEMO.wrongKey, 16)}
+
+→ <span class="err">InvalidTag</span> — déchiffrement refusé
+Le serveur ne crash pas, le paquet est ignoré.`
+            : `AES-GCM.decrypt(packet_key, ciphertext, AAD)
+
+→ plaintext = "<span class="ok">${DEMO.plaintext}</span>"
+
+<span class="ok">✓ Message authentifié et déchiffré</span>`,
+        },
+        {
+          label: 'Relais',
+          title: 'Bonus — Et le relais multihop ?',
+          text: 'Un relais CDS n\'est pas membre du groupe : il n\'a pas group_key. Il relaie le paquet tel quel (forward opaque) sans jamais exécuter le HKDF ni le déchiffrement.',
+          lit: ['pkt', 'relay', 'bob'],
+          formula: () => `Relais R (non-membre) :
+  1. Lit le header clair (TTL, next_hop)
+  2. Décrémente TTL, recalcule le checksum
+  3. <span class="hl">Forward opaque</span> — pas de derive_packet_key
+  4. Bob (membre) déchiffre à la destination
+
+→ Le relais ne voit jamais le contenu.`,
+        },
+      ],
+      private: [
+        {
+          label: 'Vue d\'ensemble',
+          title: 'Message privé entre Alice et Bob',
+          text: 'Pour un message 1-to-1, on n\'utilise pas group_key directement. Alice et Bob ont échangé leurs clés publiques X25519 dans le Hello privé, puis dérivent un secret partagé K_pair — inconnu des autres membres.',
+          lit: ['alice', 'bob', 'pkt'],
+          formula: () => `Mode privé (--private) :
+  dst = adresse MAC de Bob (unicast)
+  Seuls Alice et Bob possèdent K_pair
+  Overhead identique : <span class="hl">42 B</span>`,
+        },
+        {
+          label: 'ECDH',
+          title: 'Étape 1 — Secret pairwise via ECDH X25519',
+          text: 'Lors du Hello privé, chaque nœud annonce sa pubkey X25519. Alice calcule ECDH(sa_clé_privée, pub_Bob), puis applique HKDF pour obtenir K_pair — jamais transmis sur le réseau.',
+          lit: ['alice', 'bob', 'ecdh', 'kpair', 'arrow-ecdh'],
+          formula: () => `K_pair = HKDF-SHA256(
+  ikm  = ECDH(priv_Alice, pub_Bob),
+  salt = "bubble-blue-v1",
+  info = epoch (si > 0)
+)
+
+<span class="ok">K_pair jamais sur le fil</span>
+Identité X25519 dérivée de group_key + adresse BD`,
+        },
+        {
+          label: 'En-tête',
+          title: 'Étape 2 — Lire src, seq, ts_ms',
+          text: 'Même en-tête routing que le mode groupe. Seule la clé de base change : K_pair remplace group_key dans le HKDF suivant.',
+          lit: ['hdr', 'alice', 'bob'],
+          formula: () => `Header clair (identique au mode groupe) :
+  src   = ${DEMO.src}  (Alice)
+  dst   = ${DEMO.dstPrivate}  (Bob)
+  seq   = ${DEMO.seq}
+  ts_ms = ${DEMO.tsMs}`,
+        },
+        {
+          label: 'HKDF',
+          title: 'Étape 3 — Clé de paquet depuis K_pair',
+          text: 'La formule derive_packet_key est la même — seule la base_key diffère. Les autres membres du groupe ne peuvent pas calculer K_pair et donc pas lire le message.',
+          lit: ['kpair', 'hdr', 'hkdf', 'pkey', 'arrow-hkdf'],
+          showSeq: true,
+          formula: () => `packet_key = HKDF-SHA256(
+  ikm  = K_pair,          ← au lieu de group_key
+  info = src ‖ seq ‖ ts_ms
+)
+
+→ packet_key = <span class="hl">${packetKeyHex.slice(0, 24)}…</span>
+<span class="ok">Carol (autre membre) ne possède pas K_pair → ne peut pas déchiffrer</span>`,
+        },
+        {
+          label: 'Intégrité',
+          title: 'Étape 4 — Tag GCM + AAD',
+          text: 'Même mécanisme qu\'en groupe : intégrité du routing header + ciphertext. Un relais sur le chemin forward sans déchiffrer.',
+          lit: ['hdr', 'tag', 'gcm', 'pkey'],
+          formula: () => `Identique au mode groupe :
+  nonce = 0 · AAD = routing (TTL=0) · tag = 16 B
+  Relais multihop : forward opaque`,
+        },
+        {
+          label: 'Déchiffrement',
+          title: () => intruder ? 'Échec — Carol ne possède pas K_pair' : 'Étape 5 — Bob lit le message secret',
+          text: () => intruder
+            ? 'Carol tente avec group_key (clé de groupe) : échec — le message privé exige K_pair.'
+            : 'Bob recalcule K_pair (ECDH symétrique) puis packet_key, et obtient le message d\'Alice.',
+          lit: () => intruder ? ['carol', 'reject', 'gcm'] : ['bob', 'plain', 'kpair', 'pkey'],
+          formula: () => intruder
+            ? `Carol utilise group_key (pas K_pair) :
+→ <span class="err">InvalidTag</span>
+
+Seuls Alice et Bob partagent K_pair.`
+            : `plaintext = "<span class="ok">${DEMO.privPlaintext}</span>"
+
+<span class="ok">✓ Confidentialité vis-à-vis des autres membres</span>`,
+        },
+      ],
+    };
+
+    function diagramGroup() {
+      const bad = intruder && step >= 5;
+      return `<svg viewBox="0 0 520 280" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="w-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#60a5fa"/>
+          </marker>
+        </defs>
+        <g class="walk-node pkt" data-id="pkt">
+          <rect x="180" y="8" width="160" height="44" rx="6" fill="#1e293b" stroke="#64748b" stroke-dasharray="4 2"/>
+          <text x="260" y="28" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="600">Paquet DATA</text>
+          <text x="260" y="42" text-anchor="middle" fill="#94a3b8" class="svgmono" font-size="8">26B clair + cipher + tag</text>
+        </g>
+        <g class="walk-node bob" data-id="bob">
+          <circle cx="260" cy="230" r="32" fill="#0052cc"/>
+          <text x="260" y="226" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Bob</text>
+          <text x="260" y="242" text-anchor="middle" fill="#cfe0ff" font-size="8">membre</text>
+        </g>
+        <g class="walk-node relay" data-id="relay">
+          <circle cx="420" cy="120" r="26" fill="#1e293b" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 3"/>
+          <text x="420" y="116" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="700">R</text>
+          <text x="420" y="130" text-anchor="middle" fill="#94a3b8" font-size="7">relais</text>
+        </g>
+        <g class="walk-node gkey" data-id="gkey">
+          <rect x="12" y="100" width="110" height="40" rx="5" fill="#312e81" stroke="#6366f1"/>
+          <text x="67" y="118" text-anchor="middle" fill="#c7d2fe" class="svgmono" font-size="8">group_key</text>
+          <text x="67" y="132" text-anchor="middle" fill="#a5b4fc" font-size="7">epoch ${DEMO.epoch}</text>
+        </g>
+        <g class="walk-node hdr" data-id="hdr">
+          <rect x="12" y="160" width="110" height="40" rx="5" fill="#eef1f4" stroke="#0052cc"/>
+          <text x="67" y="178" text-anchor="middle" fill="#0052cc" font-size="8" font-weight="600">Header</text>
+          <text x="67" y="192" text-anchor="middle" fill="#5a6378" class="svgmono" font-size="7">src·seq·ts</text>
+        </g>
+        <g class="walk-node hkdf" data-id="hkdf">
+          <rect x="145" y="130" width="90" height="36" rx="5" fill="#1d4ed8" stroke="#60a5fa"/>
+          <text x="190" y="152" text-anchor="middle" fill="#fff" class="svgmono" font-size="9" font-weight="600">HKDF</text>
+        </g>
+        <g class="walk-node pkey" data-id="pkey">
+          <rect x="250" y="130" width="100" height="36" rx="5" fill="#0f172a" stroke="#64748b" stroke-dasharray="3 2"/>
+          <text x="300" y="152" text-anchor="middle" fill="#93c5fd" class="svgmono" font-size="8">packet_key</text>
+        </g>
+        <g class="walk-node pkey-bad" data-id="pkey-bad">
+          <rect x="250" y="130" width="100" height="36" rx="5" fill="#450a0a" stroke="#ef4444"/>
+          <text x="300" y="152" text-anchor="middle" fill="#fca5a5" class="svgmono" font-size="8">wrong key</text>
+        </g>
+        <g class="walk-node gcm" data-id="gcm">
+          <rect x="145" y="185" width="90" height="36" rx="5" fill="#14532d" stroke="#22c55e"/>
+          <text x="190" y="207" text-anchor="middle" fill="#86efac" class="svgmono" font-size="8">AES-GCM</text>
+        </g>
+        <g class="walk-node tag" data-id="tag">
+          <rect x="12" y="218" width="70" height="32" rx="4" fill="#422006" stroke="#f59e0b"/>
+          <text x="47" y="238" text-anchor="middle" fill="#fcd34d" class="svgmono" font-size="8">tag 16B</text>
+        </g>
+        <g class="walk-node plain" data-id="plain">
+          <rect x="250" y="185" width="120" height="36" rx="5" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+          <text x="310" y="207" text-anchor="middle" fill="#86efac" font-size="9" font-weight="600">"Bonjour…"</text>
+        </g>
+        <g class="walk-node reject" data-id="reject">
+          <text x="310" y="200" text-anchor="middle" fill="#ef4444" font-size="14" font-weight="700">InvalidTag</text>
+        </g>
+        <line class="walk-arrow arrow-gkey" data-id="arrow-gkey" x1="122" y1="120" x2="145" y2="148" stroke="#6366f1" stroke-width="1.5" marker-end="url(#w-arr)"/>
+        <line class="walk-arrow arrow-hdr" data-id="arrow-hdr" x1="122" y1="180" x2="145" y2="155" stroke="#0052cc" stroke-width="1.5" marker-end="url(#w-arr)"/>
+        <line class="walk-arrow arrow-hkdf" data-id="arrow-hkdf" x1="235" y1="148" x2="248" y2="148" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#w-arr)"/>
+        <line class="walk-arrow arrow-aad" data-id="arrow-aad" x1="82" y1="200" x2="145" y2="200" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#w-arr)"/>
+        <line x1="260" y1="52" x2="260" y2="195" stroke="#64748b" stroke-width="1" stroke-dasharray="4 3" opacity="0.4"/>
+        ${bad ? '' : '<line x1="340" y1="120" x2="390" y2="120" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>'}
+      </svg>`;
+    }
+
+    function diagramPrivate() {
+      return `<svg viewBox="0 0 520 280" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="w-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#fbbf24"/>
+          </marker>
+        </defs>
+        <g class="walk-node alice" data-id="alice">
+          <circle cx="80" cy="60" r="28" fill="#422006" stroke="#f59e0b" stroke-width="2"/>
+          <text x="80" y="65" text-anchor="middle" fill="#fef3c7" font-size="12" font-weight="700">Alice</text>
+        </g>
+        <g class="walk-node bob" data-id="bob">
+          <circle cx="440" cy="60" r="28" fill="#0052cc" stroke="#60a5fa" stroke-width="2"/>
+          <text x="440" y="65" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">Bob</text>
+        </g>
+        <g class="walk-node carol" data-id="carol">
+          <circle cx="260" cy="60" r="22" fill="#1e293b" stroke="#64748b"/>
+          <text x="260" y="65" text-anchor="middle" fill="#94a3b8" font-size="10">Carol</text>
+        </g>
+        <g class="walk-node ecdh" data-id="ecdh">
+          <rect x="175" y="100" width="170" height="44" rx="6" fill="#b45309" stroke="#fbbf24"/>
+          <text x="260" y="120" text-anchor="middle" fill="#fef9c3" class="svgmono" font-size="9" font-weight="600">ECDH X25519</text>
+          <text x="260" y="136" text-anchor="middle" fill="#fde68a" font-size="7">priv + pub peer → shared</text>
+        </g>
+        <g class="walk-node kpair" data-id="kpair">
+          <rect x="195" y="158" width="130" height="36" rx="5" fill="#422006" stroke="#f59e0b"/>
+          <text x="260" y="180" text-anchor="middle" fill="#fcd34d" class="svgmono" font-size="8">K_pair</text>
+        </g>
+        <g class="walk-node hdr" data-id="hdr">
+          <rect x="20" y="158" width="100" height="36" rx="5" fill="#eef1f4" stroke="#0052cc"/>
+          <text x="70" y="180" text-anchor="middle" fill="#0052cc" class="svgmono" font-size="8">src·seq·ts</text>
+        </g>
+        <g class="walk-node hkdf" data-id="hkdf">
+          <rect x="350" y="158" width="80" height="36" rx="5" fill="#1d4ed8" stroke="#60a5fa"/>
+          <text x="390" y="180" text-anchor="middle" fill="#fff" class="svgmono" font-size="8">HKDF</text>
+        </g>
+        <g class="walk-node pkey" data-id="pkey">
+          <rect x="350" y="210" width="100" height="36" rx="5" fill="#0f172a" stroke="#64748b" stroke-dasharray="3 2"/>
+          <text x="400" y="232" text-anchor="middle" fill="#93c5fd" class="svgmono" font-size="8">packet_key</text>
+        </g>
+        <g class="walk-node gcm" data-id="gcm">
+          <rect x="195" y="210" width="90" height="36" rx="5" fill="#14532d" stroke="#22c55e"/>
+          <text x="240" y="232" text-anchor="middle" fill="#86efac" class="svgmono" font-size="8">AES-GCM</text>
+        </g>
+        <g class="walk-node tag" data-id="tag">
+          <rect x="20" y="210" width="70" height="36" rx="4" fill="#422006" stroke="#f59e0b"/>
+          <text x="55" y="232" text-anchor="middle" fill="#fcd34d" class="svgmono" font-size="8">tag</text>
+        </g>
+        <g class="walk-node plain" data-id="plain">
+          <rect x="440" y="210" width="70" height="36" rx="5" fill="#14532d" stroke="#22c55e" stroke-width="2"/>
+          <text x="475" y="232" text-anchor="middle" fill="#86efac" font-size="8">secret</text>
+        </g>
+        <g class="walk-node pkt" data-id="pkt">
+          <rect x="200" y="12" width="120" height="36" rx="5" fill="#1e293b" stroke="#64748b" stroke-dasharray="4 2"/>
+          <text x="260" y="34" text-anchor="middle" fill="#e2e8f0" font-size="9">Paquet privé</text>
+        </g>
+        <g class="walk-node reject" data-id="reject">
+          <text x="260" y="250" text-anchor="middle" fill="#ef4444" font-size="13" font-weight="700">InvalidTag</text>
+        </g>
+        <line class="walk-arrow arrow-ecdh" data-id="arrow-ecdh" x1="108" y1="75" x2="175" y2="115" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#w-arr2)"/>
+        <line class="walk-arrow arrow-hkdf" data-id="arrow-hkdf" x1="325" y1="176" x2="348" y2="176" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#w-arr2)"/>
+        <line x1="408" y1="75" x2="412" y2="115" stroke="#64748b" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>
+        <text x="260" y="95" text-anchor="middle" fill="#64748b" font-size="7">Hello privé : pubkeys X25519</text>
+      </svg>`;
+    }
+
+    function applyLit(litIds) {
+      diagramEl.querySelectorAll('.walk-node, .walk-arrow').forEach(el => {
+        el.classList.remove('lit', 'lit-green', 'lit-red', 'dim');
+        const id = el.getAttribute('data-id');
+        if (!litIds.includes(id)) el.classList.add('dim');
+      });
+      litIds.forEach(id => {
+        const el = diagramEl.querySelector(`[data-id="${id}"]`);
+        if (!el) return;
+        el.classList.remove('dim');
+        if (id === 'reject' || id === 'pkey-bad') el.classList.add('lit-red');
+        else if (id === 'plain') el.classList.add('lit-green');
+        else el.classList.add('lit');
+      });
+    }
+
+    async function refreshKey() {
+      DEMO.seq = parseInt(seqInput.value, 10) || 0;
+      const base = mode === 'group' ? DEMO.groupKey : DEMO.kPairDemo;
+      packetKeyHex = await derivePacketKey(base, DEMO.src, DEMO.seq, DEMO.tsMs);
+    }
+
+    async function render() {
+      const steps = STEPS[mode];
+      const s = steps[step];
+      await refreshKey();
+
+      dotsEl.innerHTML = steps.map((st, i) => {
+        const cls = i === step ? 'active' : i < step ? 'done' : '';
+        return `<button type="button" class="step-dot ${cls}" data-i="${i}" title="${st.label}">${i + 1}</button>`;
+      }).join('') + `<span class="step-dot-label">${s.label}</span>`;
+
+      dotsEl.querySelectorAll('.step-dot').forEach(btn => {
+        btn.onclick = () => { step = parseInt(btn.dataset.i, 10); render(); };
+      });
+
+      diagramEl.innerHTML = mode === 'group' ? diagramGroup() : diagramPrivate();
+      const litIds = typeof s.lit === 'function' ? s.lit() : (s.lit || []);
+      applyLit(litIds);
+
+      titleEl.textContent = typeof s.title === 'function' ? s.title() : s.title;
+      textEl.textContent = typeof s.text === 'function' ? s.text() : s.text;
+      formulaEl.innerHTML = typeof s.formula === 'function' ? s.formula() : s.formula;
+      paramEl.hidden = !s.showSeq;
+
+      prevBtn.disabled = step === 0;
+      nextBtn.disabled = step === steps.length - 1;
+      nextBtn.textContent = step === steps.length - 1 ? 'Fin' : 'Suivant →';
+    }
+
+    document.querySelectorAll('.mode-tab').forEach(tab => {
+      tab.onclick = () => {
+        document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        mode = tab.dataset.mode;
+        step = 0;
+        render();
+      };
+    });
+
+    prevBtn.onclick = () => { if (step > 0) { step--; render(); } };
+    nextBtn.onclick = () => {
+      const max = STEPS[mode].length - 1;
+      if (step < max) { step++; render(); }
+    };
+    intruderCb.onchange = () => { intruder = intruderCb.checked; render(); };
+    seqInput.oninput = () => render();
+
+    render();
+    return { next: () => { if (step < STEPS[mode].length - 1) { step++; render(); } },
+             prev: () => { if (step > 0) { step--; render(); } } };
+  })();
+</script>
+</body>
+</html>

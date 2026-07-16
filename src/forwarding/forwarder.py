@@ -7,10 +7,24 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from cryptography.exceptions import InvalidTag
 
-from config import PKT_DATA, PKT_REKEY, PKT_SUBGROUP, BubbleBlueConfig, max_payload, mtu_for_transport
+from config import (
+    PKT_ANNOUNCE,
+    PKT_DATA,
+    PKT_REKEY,
+    PKT_REKEY_FLOOD,
+    PKT_SUBGROUP,
+    BubbleBlueConfig,
+    max_payload,
+    mtu_for_transport,
+)
+from src.control.announce import parse_announce
 from src.security.crypto import decrypt_with_key, encrypt_with_key, unwrap_msg_key, wrap_msg_key
 from src.security.keys import derive_packet_key, derive_wrap_key
-from src.security.rekey import pack_rekey_plaintext, unpack_rekey_plaintext
+from src.security.rekey import (
+    pack_rekey_plaintext,
+    partition_rekey_targets,
+    unpack_rekey_plaintext,
+)
 from src.security.replay import ReplayFilter
 from src.security.packet import (
     ROUTING_HEADER_SIZE,
@@ -26,6 +40,10 @@ from src.security.packet import (
     validate_timestamp,
 )
 
+_FWD_PKT_TYPES = frozenset(
+    {PKT_DATA, PKT_SUBGROUP, PKT_REKEY, PKT_ANNOUNCE, PKT_REKEY_FLOOD}
+)
+
 if TYPE_CHECKING:
     from src.control.hello_manager import HelloManager
     from src.transport.l2cap import L2CAPTransport
@@ -36,6 +54,7 @@ OnDecryptFailCallback = Callable[[str], None]
 
 _TTL_OFFSET = 13
 _SUBGROUP_MODE_MARKER = bytes([PKT_SUBGROUP])
+_REKEY_FLOOD_MODE_MARKER = bytes([PKT_REKEY_FLOOD])
 _ANON_TAG_SIZE = 8
 
 DeliverCallback = Callable[[str, bytes, dict[str, Any]], None]
@@ -258,11 +277,104 @@ class PacketForwarder:
         packet = self.build_rekey_packet(dst)
         self._transport.send(peer, packet)
 
+    def _rekey_flood_targets(self, *, exclude_bd: str | None = None) -> list[str]:
+        """
+        Same membership resolution as the historical unicast flood:
+        L2CAP connections + resolved Hello members + announce-learned peers.
+        """
+        local = self._cfg.local_bd_addr.upper()
+        exclude = exclude_bd.strip().upper() if exclude_bd else None
+        revoked = self._hello_mgr.epoch_store.revoked_pubkeys()
+        targets: set[str] = {bd.upper() for bd in self._transport.connections()}
+        targets.discard(local)
+        for m in self._hello_mgr.get_resolved_members():
+            targets.add(str(m["bd_addr"]).upper())
+        for bd in self._hello_mgr.key_store.known_peers():
+            targets.add(bd.upper())
+        if exclude:
+            targets.discard(exclude)
+
+        out: list[str] = []
+        for bd in sorted(targets):
+            if bd == local:
+                continue
+            pub = self._hello_mgr.key_store.get_peer_public_key(bd)
+            if pub is None:
+                self._log(f"[FWD] rekey-flood skip {bd}: no pubkey (wait for ANNOUNCE/Hello)")
+                continue
+            if pub in revoked:
+                continue
+            out.append(bd)
+        return out
+
+    def build_rekey_flood_packets(
+        self,
+        revoked_pubkey: bytes,
+        *,
+        wrap_epoch: int,
+        new_epoch: int,
+        new_group_key: bytes,
+        revoked_set: frozenset[bytes],
+        targets: list[str],
+        pair_keys: dict[str, bytes],
+    ) -> list[bytes]:
+        """
+        Build one or more self-contained PKT_REKEY_FLOOD packets.
+
+        Wraps use ``pair_keys`` derived at ``wrap_epoch`` (pre-bump). Each
+        partition has its own seq/ts/k_msg and identical rekey plaintext body.
+        """
+        _ = revoked_pubkey
+        src = self._cfg.local_bd_addr.upper()
+        plain = pack_rekey_plaintext(new_epoch, new_group_key, revoked_set)
+        body_len = len(plain)
+        mtu = mtu_for_transport(self._cfg.transport_kind)
+        partitions = partition_rekey_targets(targets, body_len, mtu)
+        if not partitions:
+            return []
+
+        packets: list[bytes] = []
+        for part in partitions:
+            seq = self._next_seq()
+            ts_ms = time.time_ns() // 1_000_000
+            k_msg = os.urandom(32)
+            cases: list[tuple[bytes, bytes]] = []
+            for bd in part:
+                pair_key = pair_keys.get(bd)
+                if pair_key is None:
+                    self._log(f"[FWD] rekey-flood missing pair_key for {bd}")
+                    continue
+                tag_fn = getattr(
+                    self._hello_mgr, "anon_id_for_or_compute", None
+                )
+                if callable(tag_fn):
+                    recipient_tag = tag_fn(bd)
+                else:
+                    recipient_tag = self._hello_mgr.anon_id_for(bd)
+                wrap_key = derive_wrap_key(pair_key, src, seq, ts_ms)
+                blob = wrap_msg_key(wrap_key, k_msg, aad=recipient_tag)
+                cases.append((recipient_tag, blob))
+            if not cases:
+                continue
+
+            rh = build_routing_header(
+                PKT_REKEY_FLOOD, src, BROADCAST_BD_ADDR, self._cfg.ttl_max, seq, ts_ms
+            )
+            cases_digest = subgroup_cases_digest(cases)
+            aad = routing_header_aad(rh) + _REKEY_FLOOD_MODE_MARKER + cases_digest
+            enc = encrypt_with_key(k_msg, plain, aad)
+            packet = build_subgroup_packet(rh, cases, enc["ciphertext"])
+            self._check_wire_packet(packet)
+            packets.append(packet)
+        return packets
+
     def revoke_member(self, bd_addr: str) -> None:
         """
-        Coordinator-initiated revocation: bump epoch, rotate group key, flood PKT_REKEY.
+        Coordinator-initiated revocation: bump epoch, rotate group key,
+        flood PKT_REKEY_FLOOD (multi-recipient wrap header).
 
-        Convention: smallest ``anon_id`` among resolved members acts as coordinator.
+        Wraps are under the pre-bump epoch pairwise keys. Late joiners are
+        caught up by existing PKT_REKEY unicast gossip (``send_rekey_catchup``).
         """
         if not self._hello_mgr.is_coordinator():
             raise RuntimeError("only the coordinator (min anon_id) may initiate revocation")
@@ -273,17 +385,61 @@ class PacketForwarder:
         if self._hello_mgr.epoch_store.is_revoked_pubkey(pubkey):
             raise RuntimeError(f"{target} is already revoked")
 
-        self._hello_mgr.epoch_store.prepare_revocation(pubkey)
+        # Capture wrap epoch and derive all K_pair before prepare_revocation /
+        # clear_pair_key_cache invalidate the cache domain.
+        wrap_epoch = self._hello_mgr.epoch_store.current_epoch()
+        targets = self._rekey_flood_targets(exclude_bd=target)
+        pair_keys: dict[str, bytes] = {}
+        for bd in targets:
+            pk = self._pair_key(bd, wire_epoch=wrap_epoch)
+            if pk is None:
+                self._log(f"[FWD] rekey-flood skip {bd}: no pairwise key at epoch {wrap_epoch}")
+                continue
+            pair_keys[bd] = pk
+        targets = [bd for bd in targets if bd in pair_keys]
+
+        new_epoch, new_key, revoked_set = self._hello_mgr.epoch_store.prepare_revocation(
+            pubkey
+        )
+        packets = self.build_rekey_flood_packets(
+            pubkey,
+            wrap_epoch=wrap_epoch,
+            new_epoch=new_epoch,
+            new_group_key=new_key,
+            revoked_set=revoked_set,
+            targets=targets,
+            pair_keys=pair_keys,
+        )
         self._hello_mgr.key_store.clear_pair_key_cache()
-        self.flood_rekey_state()
+        emit = getattr(self._hello_mgr, "emit_announce", None)
+        if callable(emit):
+            emit()
+
+        peers = self._other_peers(exclude=None)
+        if not peers:
+            self._log("[FWD] rekey-flood: no L2CAP peers to send on")
+            return
+        for packet in packets:
+            for peer in peers:
+                try:
+                    self._transport.send(peer, packet)
+                except OSError as e:
+                    self._log(f"[FWD] rekey-flood send {peer}: {e}")
 
     def flood_rekey_state(self) -> None:
-        """Flood PKT_REKEY to all known members except revoked pubkeys."""
+        """
+        Unicast PKT_REKEY gossip of current epoch state to all known members.
+
+        Kept for catch-up / diagnostics. Initial revocation uses
+        :meth:`revoke_member` → PKT_REKEY_FLOOD instead.
+        """
         revoked = self._hello_mgr.epoch_store.revoked_pubkeys()
         targets: set[str] = {bd.upper() for bd in self._transport.connections()}
         targets.discard(self._cfg.local_bd_addr.upper())
         for m in self._hello_mgr.get_resolved_members():
             targets.add(str(m["bd_addr"]).upper())
+        for bd in self._hello_mgr.key_store.known_peers():
+            targets.add(bd.upper())
         for bd in sorted(targets):
             pub = self._hello_mgr.key_store.get_peer_public_key(bd)
             if pub is not None and pub in revoked:
@@ -349,9 +505,7 @@ class PacketForwarder:
                 return
             hdr = parse_routing_header(data)
             pkt_type = hdr["type"]
-            if pkt_type not in (PKT_DATA, PKT_SUBGROUP, PKT_REKEY) or not validate_timestamp(
-                hdr["ts_ms"]
-            ):
+            if pkt_type not in _FWD_PKT_TYPES or not validate_timestamp(hdr["ts_ms"]):
                 return
 
             local = self._cfg.local_bd_addr.upper()
@@ -361,8 +515,12 @@ class PacketForwarder:
 
             if pkt_type == PKT_REKEY:
                 deliver_fn = self._try_deliver_rekey
+            elif pkt_type == PKT_REKEY_FLOOD:
+                deliver_fn = self._try_deliver_rekey_flood
             elif pkt_type == PKT_SUBGROUP:
                 deliver_fn = self._try_deliver_subgroup
+            elif pkt_type == PKT_ANNOUNCE:
+                deliver_fn = self._try_deliver_announce
             else:
                 deliver_fn = self._try_deliver
 
@@ -523,6 +681,113 @@ class PacketForwarder:
         if self._hello_mgr.epoch_store.adopt_rekey(epoch, group_key, revoked):
             self._hello_mgr.key_store.clear_pair_key_cache()
             self._log(f"[FWD] adopted epoch {epoch} from {src}")
+            # Re-announce under the new group key so multi-hop peers learn us.
+            emit = getattr(self._hello_mgr, "emit_announce", None)
+            if callable(emit):
+                emit()
+
+    def _try_deliver_rekey_flood(
+        self, ingress_peer: str, data: bytes, hdr: dict[str, Any]
+    ) -> None:
+        """
+        Local delivery of PKT_REKEY_FLOOD (relay already done by handle path).
+
+        Absent own case → silent (revoked or different partition fragment).
+        InvalidTag anywhere → drop with debug log; never raise.
+        """
+        _ = ingress_peer
+        src = hdr["src"].upper()
+        seq = int(hdr["seq"])
+        ts_ms = int(hdr["ts_ms"])
+        if not self._check_replay(src, seq, ts_ms):
+            return
+        if src == self._cfg.local_bd_addr.upper():
+            return
+
+        my_tag = self._hello_mgr.local_anon_id()
+        try:
+            parsed = parse_subgroup_packet(data)
+            our_blob: bytes | None = None
+            for tag, blob in parsed["cases"]:
+                if tag == my_tag:
+                    our_blob = blob
+                    break
+            if our_blob is None:
+                return
+
+            pair_key = self._pair_key(src, wire_epoch=self._current_epoch())
+            if pair_key is None:
+                self._log(f"[FWD] rekey-flood no pairwise key for {src}")
+                return
+
+            wrap_key = derive_wrap_key(pair_key, src, seq, ts_ms)
+            k_msg = unwrap_msg_key(wrap_key, our_blob, aad=my_tag)
+            aad = (
+                routing_header_aad(parsed["routing_header"])
+                + _REKEY_FLOOD_MODE_MARKER
+                + subgroup_cases_digest(parsed["cases"])
+            )
+            plain = decrypt_with_key(k_msg, parsed["ciphertext"], aad)
+            body = unpack_rekey_plaintext(plain)
+        except InvalidTag:
+            self._log(f"[FWD] rekey-flood decrypt failed src={src}")
+            return
+        except ValueError as e:
+            self._log(f"[FWD] rekey-flood parse failed src={src}: {e}")
+            return
+
+        epoch = int(body["epoch"])
+        group_key = bytes(body["group_key"])  # type: ignore[arg-type]
+        revoked = list(body["revoked_pubkeys"])  # type: ignore[arg-type]
+
+        if self._hello_mgr.epoch_store.adopt_rekey(epoch, group_key, revoked):
+            self._hello_mgr.key_store.clear_pair_key_cache()
+            self._log(f"[FWD] adopted epoch {epoch} from rekey-flood src={src}")
+            emit = getattr(self._hello_mgr, "emit_announce", None)
+            if callable(emit):
+                emit()
+
+    def _try_deliver_announce(self, ingress_peer: str, data: bytes, hdr: dict[str, Any]) -> None:
+        """Relay already done; parse group-encrypted pubkey binding locally."""
+        _ = ingress_peer
+        src = hdr["src"].upper()
+        seq = int(hdr["seq"])
+        ts_ms = int(hdr["ts_ms"])
+        if not self._check_replay(src, seq, ts_ms):
+            return
+        if src == self._cfg.local_bd_addr.upper():
+            return
+
+        keys = [
+            self._hello_mgr.epoch_store.current_group_key(),
+            self._hello_mgr.epoch_store.bootstrap_group_key,
+        ]
+        # Deduplicate while preserving order (current then bootstrap).
+        group_keys = list(dict.fromkeys(keys))
+        body = parse_announce(data, group_keys)
+        if body is None:
+            if self._on_decrypt_fail:
+                self._on_decrypt_fail(src)
+            else:
+                self._log(f"[FWD] announce decrypt failed src={src}")
+            return
+
+        bd = str(body["bd_addr"]).upper()
+        public_key = bytes(body["public_key"])  # type: ignore[arg-type]
+        peer_epoch = int(body["epoch"])
+        result = self._hello_mgr.key_store.apply_announce_binding(bd, public_key)
+        if result == "ignored_hello":
+            self._log(f"[SEC] conflit de binding pubkey pour {bd} (announce ignoré)")
+        elif result == "ignored_first":
+            self._log(
+                f"[SEC] conflit de binding pubkey pour {bd} "
+                "(premier vu conservé, announce ignoré)"
+            )
+        elif result == "registered":
+            # Soft epoch hint for catch-up (same as Hello private epoch field).
+            if hasattr(self._hello_mgr, "_peer_epochs"):
+                self._hello_mgr._peer_epochs[bd] = peer_epoch  # noqa: SLF001
+            self._log(f"[FWD] announce learned {bd} epoch={peer_epoch}")
 
     def _try_deliver_subgroup(self, ingress_peer: str, data: bytes, hdr: dict[str, Any]) -> None:
         src = hdr["src"].upper()

@@ -204,7 +204,7 @@ def resolve_chat_target(
 CHAT_HELP = """Commandes chat:
   /private <cible> <message>   message privé chiffré (X25519)
   /subgroup <cible>… <message>  multicast à la carte (PKT_SUBGROUP)
-  /revoke <cible>            révoquer un membre (coordinateur, epoch+gossip)
+  /revoke <cible>            révoquer un membre (coordinateur → PKT_REKEY_FLOOD + gossip)
   /epoch                     epoch courant + rôle coordinateur
   /members                     alias + membres connus (Hello)
   /help                        cette aide

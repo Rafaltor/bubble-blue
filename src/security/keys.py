@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import struct
 from pathlib import Path
 from typing import Final
+
+_log = logging.getLogger(__name__)
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
@@ -192,6 +195,9 @@ class BBKeyStore:
         self._local_public_key = self._private_key.public_key().public_bytes_raw()
         self._peer_public_keys: dict[str, bytes] = {}
         self._pair_key_cache: dict[tuple[str, int], bytes] = {}
+        # BD addresses whose pubkey was learned from a direct Hello private part
+        # (primary, 1-hop). ANNOUNCE must not override these on conflict.
+        self._hello_learned: set[str] = set()
 
     def clear_pair_key_cache(self) -> None:
         """Invalidate cached pairwise keys (e.g. after epoch adoption)."""
@@ -201,6 +207,14 @@ class BBKeyStore:
     def local_public_key(self) -> bytes:
         """32-byte X25519 public key for this node (advertised in Hello, not in PKT_DATA)."""
         return self._local_public_key
+
+    def mark_hello_learned(self, bd_addr: str) -> None:
+        """Mark ``bd_addr`` as having a pubkey from a direct Hello private part."""
+        self._hello_learned.add(bd_addr.strip().upper())
+
+    def is_hello_learned(self, bd_addr: str) -> bool:
+        """True if the peer pubkey was registered from Hello (not only ANNOUNCE)."""
+        return bd_addr.strip().upper() in self._hello_learned
 
     def register_peer(self, bd_addr: str, public_key: bytes) -> None:
         """
@@ -217,6 +231,42 @@ class BBKeyStore:
         self._peer_public_keys[addr] = bytes(public_key)
         if prev != public_key:
             self._pair_key_cache = {k: v for k, v in self._pair_key_cache.items() if k[0] != addr}
+
+    def register_peer_from_hello(self, bd_addr: str, public_key: bytes) -> None:
+        """Register pubkey from Hello private and mark hello-learned provenance."""
+        self.register_peer(bd_addr, public_key)
+        self.mark_hello_learned(bd_addr)
+
+    def apply_announce_binding(self, bd_addr: str, public_key: bytes) -> str:
+        """
+        Apply PKT_ANNOUNCE binding with conflict policy.
+
+        Returns one of: ``\"registered\"``, ``\"noop\"``, ``\"ignored_hello\"``,
+        ``\"ignored_first\"``.
+        """
+        addr = bd_addr.strip().upper()
+        if len(public_key) != _X25519_KEY_SIZE:
+            raise ValueError(f"public_key must be {_X25519_KEY_SIZE} bytes (got {len(public_key)})")
+        X25519PublicKey.from_public_bytes(public_key)
+        pub = bytes(public_key)
+
+        prev = self._peer_public_keys.get(addr)
+        if prev is None:
+            self.register_peer(addr, pub)
+            return "registered"
+        if prev == pub:
+            return "noop"
+        if addr in self._hello_learned:
+            _log.warning(
+                "[SEC] conflit de binding pubkey pour %s (announce ignoré)",
+                addr,
+            )
+            return "ignored_hello"
+        _log.warning(
+            "[SEC] conflit de binding pubkey pour %s (premier vu conservé, announce ignoré)",
+            addr,
+        )
+        return "ignored_first"
 
     def get_pair_key(self, bd_addr: str, *, epoch: int = 0) -> bytes | None:
         """

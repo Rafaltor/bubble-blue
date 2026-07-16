@@ -22,13 +22,29 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from config import PKT_ACK, PKT_DATA, PKT_HELLO, PKT_REKEY, PKT_SUBGROUP
+from config import (
+    PKT_ACK,
+    PKT_ANNOUNCE,
+    PKT_DATA,
+    PKT_HELLO,
+    PKT_REKEY,
+    PKT_REKEY_FLOOD,
+    PKT_SUBGROUP,
+)
 
 FRAG_MARKER = 0xFB
 _FRAGMENT_FIELDS = struct.Struct("!HHH")
 HEADER_SIZE = 1 + _FRAGMENT_FIELDS.size  # 7
 
-_PKT_TYPES = (PKT_HELLO, PKT_DATA, PKT_ACK, PKT_SUBGROUP, PKT_REKEY)
+_PKT_TYPES = (
+    PKT_HELLO,
+    PKT_DATA,
+    PKT_ACK,
+    PKT_SUBGROUP,
+    PKT_REKEY,
+    PKT_ANNOUNCE,
+    PKT_REKEY_FLOOD,
+)
 if FRAG_MARKER in _PKT_TYPES:
     raise RuntimeError(f"FRAG_MARKER 0x{FRAG_MARKER:02X} collides with a PKT_* type")
 

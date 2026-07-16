@@ -24,7 +24,15 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from config import PKT_DATA, PKT_HELLO, PKT_REKEY, PKT_SUBGROUP, load_config  # noqa: E402
+from config import (  # noqa: E402
+    PKT_ANNOUNCE,
+    PKT_DATA,
+    PKT_HELLO,
+    PKT_REKEY,
+    PKT_REKEY_FLOOD,
+    PKT_SUBGROUP,
+    load_config,
+)
 from src.control.hello_manager import HelloManager  # noqa: E402
 from src.forwarding.cds import CDSAlgorithm  # noqa: E402
 from src.forwarding.forwarder import PacketForwarder  # noqa: E402
@@ -34,7 +42,9 @@ from src.security.keys import BBKeyStore  # noqa: E402
 from sim.sim_engine import ConvergenceResult, SimEngine, _GK  # noqa: E402
 from sim.sim_transport import DataLogEvent, Position, SimBus, SimTransport  # noqa: E402
 
-_FWD_PKT_TYPES = frozenset({PKT_DATA, PKT_SUBGROUP, PKT_REKEY})
+_FWD_PKT_TYPES = frozenset(
+    {PKT_DATA, PKT_SUBGROUP, PKT_REKEY, PKT_ANNOUNCE, PKT_REKEY_FLOOD}
+)
 
 
 def reconstruct_waves_from_log(
@@ -130,7 +140,8 @@ class ForwardingSimNode:
 
     Inbound routing (wired in ``_on_receive``):
       PKT_HELLO  → hello_mgr.on_receive
-      PKT_DATA / PKT_SUBGROUP / PKT_REKEY → forwarder.handle
+      PKT_DATA / PKT_SUBGROUP / PKT_REKEY / PKT_ANNOUNCE / PKT_REKEY_FLOOD
+      → forwarder.handle
     """
 
     def __init__(

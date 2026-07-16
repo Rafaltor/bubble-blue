@@ -6,7 +6,16 @@ import threading
 import time
 from collections.abc import Callable
 
-from config import PKT_DATA, PKT_HELLO, PKT_REKEY, PKT_SUBGROUP, BubbleBlueConfig, load_config
+from config import (
+    PKT_ANNOUNCE,
+    PKT_DATA,
+    PKT_HELLO,
+    PKT_REKEY,
+    PKT_REKEY_FLOOD,
+    PKT_SUBGROUP,
+    BubbleBlueConfig,
+    load_config,
+)
 from src.control.hello_manager import HelloManager
 from src.control.presence_scanner import PresenceScanner
 from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
@@ -152,7 +161,13 @@ class BBNode:
                         if not had and hm.has_learned_public_hello(peer):
                             node_self._mark_peer_admitted(peer)
                     return
-                if data[0] in (PKT_DATA, PKT_SUBGROUP, PKT_REKEY):
+                if data[0] in (
+                    PKT_DATA,
+                    PKT_SUBGROUP,
+                    PKT_REKEY,
+                    PKT_ANNOUNCE,
+                    PKT_REKEY_FLOOD,
+                ):
                     fwd = holder["fwd"]
                     if fwd is not None:
                         fwd.handle(peer, data)
@@ -274,7 +289,14 @@ class BBNode:
         self._require_forwarder().send_subgroup(text, recipients)
 
     def revoke_member(self, bd_addr: str) -> None:
-        """Revoke a member (epoch bump + PKT_REKEY flood). Coordinator only."""
+        """
+        Revoke a member (coordinator only).
+
+        Bumps the group epoch, rotates the group key, and floods one or more
+        ``PKT_REKEY_FLOOD`` packets (multi-recipient wrap header under the
+        pre-bump pairwise keys). Late nodes are caught up by existing
+        ``PKT_REKEY`` unicast gossip when they next Hello with a stale epoch.
+        """
         self._require_forwarder().revoke_member(bd_addr)
 
     def current_epoch(self) -> int:
