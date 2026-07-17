@@ -55,19 +55,24 @@ def setup_ble_pairing_agent(*, quiet: bool = False) -> PairingAgentSupervisor:
 
 
 def _identity_key_store(cfg: BubbleBlueConfig) -> BBKeyStore:
-    return BBKeyStore.from_group_key(cfg.group_key, cfg.local_bd_addr)
+    """Persistent random identity (not derived from group key)."""
+    return BBKeyStore.for_node(cfg.local_bd_addr)
 
 
 def _log_x25519_identity(cfg: BubbleBlueConfig) -> None:
-    pub_hex = _identity_key_store(cfg).local_public_key.hex()
+    store = _identity_key_store(cfg)
+    pub_hex = store.local_public_key.hex()
+    sig_hex = store.local_signing_public_key.hex()
     print(f"[APP] X25519 identity: {pub_hex[:16]}… (full: {pub_hex})", flush=True)
+    print(f"[APP] Ed25519 signing: {sig_hex[:16]}… (full: {sig_hex})", flush=True)
 
 
 def show_identity(*, interface: str, peer: str | None) -> int:
     cfg = load_config(interface=interface, remote_bd_addr=peer)
-    pub_hex = _identity_key_store(cfg).local_public_key.hex()
+    store = _identity_key_store(cfg)
     print(f"BD_ADDR: {cfg.local_bd_addr.upper()}", flush=True)
-    print(f"X25519 public key: {pub_hex}", flush=True)
+    print(f"X25519 public key: {store.local_public_key.hex()}", flush=True)
+    print(f"Ed25519 public key: {store.local_signing_public_key.hex()}", flush=True)
     return 0
 
 

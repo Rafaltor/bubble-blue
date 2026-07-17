@@ -1,4 +1,4 @@
-"""PKT_ANNOUNCE: network-wide pubkey binding under group key."""
+"""PKT_ANNOUNCE: signed network-wide pubkey binding under group key."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ if _ROOT not in sys.path:
 
 from config import PKT_ANNOUNCE, load_config  # noqa: E402
 from src.control.announce import (  # noqa: E402
+    announce_signed_message,
     build_announce,
     pack_announce_plaintext,
     parse_announce,
@@ -37,6 +38,45 @@ def _epoch_store(bd: str, group_key: bytes = GROUP_KEY) -> EpochStore:
     fd, path = tempfile.mkstemp(prefix="bb-announce-epoch-")
     os.close(fd)
     return EpochStore(group_key, persist_path=path, local_bd_addr=bd)
+
+
+def _mk_announce(
+    store: BBKeyStore,
+    bd: str,
+    *,
+    seq: int,
+    ts_ms: int,
+    epoch: int = 0,
+    ttl: int = 10,
+    group_key: bytes = GROUP_KEY,
+) -> bytes:
+    msg = announce_signed_message(
+        bd, epoch, store.local_public_key, store.local_signing_public_key
+    )
+    return build_announce(
+        group_key,
+        bd,
+        seq=seq,
+        ts_ms=ts_ms,
+        epoch=epoch,
+        public_key=store.local_public_key,
+        ttl=ttl,
+        signing_public_key=store.local_signing_public_key,
+        signature=store.sign(msg),
+    )
+
+
+def _apply(store: BBKeyStore, peer: BBKeyStore, bd: str, *, epoch: int = 0) -> str:
+    msg = announce_signed_message(
+        bd, epoch, peer.local_public_key, peer.local_signing_public_key
+    )
+    return store.apply_announce_binding(
+        bd,
+        peer.local_public_key,
+        signing_public_key=peer.local_signing_public_key,
+        signature=peer.sign(msg),
+        signed_message=msg,
+    )
 
 
 class _MeshTransport:
@@ -115,16 +155,8 @@ class _AnnounceHelloMgr:
 
 
 def test_announce_roundtrip() -> None:
-    pub = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    pkt = build_announce(
-        GROUP_KEY,
-        ADDR_A,
-        seq=7,
-        ts_ms=1_700_000_000_000,
-        epoch=2,
-        public_key=pub,
-        ttl=10,
-    )
+    store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+    pkt = _mk_announce(store, ADDR_A, seq=7, ts_ms=1_700_000_000_000, epoch=2)
     hdr = parse_routing_header(pkt)
     assert hdr["type"] == PKT_ANNOUNCE
     assert hdr["src"] == ADDR_A
@@ -134,25 +166,20 @@ def test_announce_roundtrip() -> None:
     assert out is not None
     assert out["bd_addr"] == ADDR_A
     assert out["epoch"] == 2
-    assert out["public_key"] == pub
+    assert out["public_key"] == store.local_public_key
+    assert out["signing_public_key"] == store.local_signing_public_key
     assert out["seq"] == 7
 
 
 def test_announce_wrong_group_key() -> None:
-    pub = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    pkt = build_announce(
-        GROUP_KEY, ADDR_A, seq=1, ts_ms=1_700_000_000_000, epoch=0, public_key=pub, ttl=5
-    )
+    store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+    pkt = _mk_announce(store, ADDR_A, seq=1, ts_ms=1_700_000_000_000, epoch=0, ttl=5)
     assert parse_announce(pkt, [b"\x22" * 32]) is None
 
 
 def test_announce_tamper_header_or_ciphertext() -> None:
-    pub = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    pkt = build_announce(
-        GROUP_KEY, ADDR_A, seq=3, ts_ms=1_700_000_000_000, epoch=1, public_key=pub, ttl=5
-    )
-    # Tamper TTL byte (header) — AAD zeros TTL so this alone may still decrypt;
-    # tamper src byte in header instead.
+    store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+    pkt = _mk_announce(store, ADDR_A, seq=3, ts_ms=1_700_000_000_000, epoch=1, ttl=5)
     bad_hdr = bytearray(pkt)
     bad_hdr[2] ^= 0xFF  # within src BD
     assert parse_announce(bytes(bad_hdr), [GROUP_KEY]) is None
@@ -163,12 +190,21 @@ def test_announce_tamper_header_or_ciphertext() -> None:
 
 
 def test_announce_plaintext_validation() -> None:
-    pub = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    plain = pack_announce_plaintext(ADDR_A, 9, pub)
+    store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+    msg = announce_signed_message(
+        ADDR_A, 9, store.local_public_key, store.local_signing_public_key
+    )
+    plain = pack_announce_plaintext(
+        ADDR_A,
+        9,
+        store.local_public_key,
+        store.local_signing_public_key,
+        store.sign(msg),
+    )
     body = unpack_announce_plaintext(plain)
     assert body["bd_addr"] == ADDR_A
     assert body["epoch"] == 9
-    assert body["public_key"] == pub
+    assert body["public_key"] == store.local_public_key
     try:
         unpack_announce_plaintext(plain[:-1])
         raise AssertionError("expected ValueError for truncated plaintext")
@@ -181,35 +217,58 @@ def test_announce_plaintext_validation() -> None:
         pass
 
 
+def test_announce_bad_signature_rejected() -> None:
+    store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+    peer = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
+    msg = announce_signed_message(
+        ADDR_B, 0, peer.local_public_key, peer.local_signing_public_key
+    )
+    bad_sig = bytes(64)  # invalid
+    assert (
+        store.apply_announce_binding(
+            ADDR_B,
+            peer.local_public_key,
+            signing_public_key=peer.local_signing_public_key,
+            signature=bad_sig,
+            signed_message=msg,
+        )
+        == "rejected_sig"
+    )
+    assert store.get_peer_public_key(ADDR_B) is None
+
+
 def test_conflict_policy_hello_learned_wins(caplog_compat: None = None) -> None:
     _ = caplog_compat
     store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
     peer = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
-    other_pub = os.urandom(X25519_PUBLIC_KEY_SIZE)
+    other = BBKeyStore()  # ephemeral attacker identity
 
-    store.register_peer_from_hello(ADDR_B, peer.local_public_key)
+    store.register_peer_from_hello(
+        ADDR_B,
+        peer.local_public_key,
+        signing_public_key=peer.local_signing_public_key,
+    )
     assert store.is_hello_learned(ADDR_B)
 
     with _CaptureWarnings() as caps:
-        result = store.apply_announce_binding(ADDR_B, other_pub)
+        result = _apply(store, other, ADDR_B)
     assert result == "ignored_hello"
     assert store.get_peer_public_key(ADDR_B) == peer.local_public_key
     assert any("conflit de binding" in m and ADDR_B in m for m in caps)
 
-    # Identical announce is a no-op
-    assert store.apply_announce_binding(ADDR_B, peer.local_public_key) == "noop"
+    assert _apply(store, peer, ADDR_B) == "noop"
 
 
 def test_conflict_policy_first_seen_otherwise() -> None:
     store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
-    first = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    second = os.urandom(X25519_PUBLIC_KEY_SIZE)
+    first = BBKeyStore()
+    second = BBKeyStore()
 
-    assert store.apply_announce_binding(ADDR_B, first) == "registered"
+    assert _apply(store, first, ADDR_B) == "registered"
     assert not store.is_hello_learned(ADDR_B)
     with _CaptureWarnings() as caps:
-        assert store.apply_announce_binding(ADDR_B, second) == "ignored_first"
-    assert store.get_peer_public_key(ADDR_B) == first
+        assert _apply(store, second, ADDR_B) == "ignored_first"
+    assert store.get_peer_public_key(ADDR_B) == first.local_public_key
     assert any("premier vu" in m for m in caps)
 
 
@@ -219,7 +278,6 @@ def test_register_peer_invalidates_pair_cache() -> None:
     store_a.register_peer(ADDR_B, store_b.local_public_key)
     k1 = store_a.get_pair_key(ADDR_B)
     assert k1 is not None
-    # Legitimate key change (new identity) must drop cached pairwise key.
     new_b = BBKeyStore()  # ephemeral new identity
     store_a.register_peer(ADDR_B, new_b.local_public_key)
     k2 = store_a.get_pair_key(ADDR_B)
@@ -274,7 +332,6 @@ def test_line_topology_announce_enables_pair_and_rekey() -> None:
     hm_r = _AnnounceHelloMgr(local=ADDR_R, relay=True, key_store=store_r, epoch_store=ep_r)
     hm_b = _AnnounceHelloMgr(local=ADDR_B, relay=False, key_store=store_b, epoch_store=ep_b)
 
-    # Register handlers after constructing forwarders (closure via mesh).
     holders: dict[str, PacketForwarder] = {}
 
     class _H:
@@ -295,41 +352,23 @@ def test_line_topology_announce_enables_pair_and_rekey() -> None:
     holders[ADDR_R] = fwd_r
     holders[ADDR_B] = fwd_b
 
-    # Before announce: B has no pair key for A.
     assert store_b.get_pair_key(ADDR_A) is None
     assert store_a.get_peer_public_key(ADDR_B) is None
 
     ts = time.time_ns() // 1_000_000
-    pkt_a = build_announce(
-        GROUP_KEY, ADDR_A, seq=100, ts_ms=ts, epoch=0, public_key=store_a.local_public_key, ttl=10
-    )
-    # A floods to R; R relays to B and delivers locally.
-    t_a.send(ADDR_R, pkt_a)
+    t_a.send(ADDR_R, _mk_announce(store_a, ADDR_A, seq=100, ts_ms=ts))
 
     assert store_b.get_pair_key(ADDR_A) is not None
     assert store_b.get_peer_public_key(ADDR_A) == store_a.local_public_key
+    assert store_b.get_peer_signing_public_key(ADDR_A) == store_a.local_signing_public_key
 
-    # B announces so A (coordinator) learns B's pubkey.
-    pkt_b = build_announce(
-        GROUP_KEY,
-        ADDR_B,
-        seq=200,
-        ts_ms=ts + 1,
-        epoch=0,
-        public_key=store_b.local_public_key,
-        ttl=10,
-    )
-    t_b.send(ADDR_R, pkt_b)
+    t_b.send(ADDR_R, _mk_announce(store_b, ADDR_B, seq=200, ts_ms=ts + 1))
     assert store_a.get_peer_public_key(ADDR_B) == store_b.local_public_key
     assert store_a.get_pair_key(ADDR_B) is not None
 
-    # flood_rekey must not skip B for missing pubkey.
     mesh.sent.clear()
-    # A is only connected to R; rekey for B routes via R.
     fwd_a.flood_rekey_state()
     rekey_dsts = [dst for _src, dst, data in mesh.sent if data and data[0] == 0x05]
-    # At least one REKEY leaves A toward R (path to B); B must have been attempted
-    # (pubkey present — previously would have been `continue`).
     assert store_a.get_peer_public_key(ADDR_B) is not None
     assert any(dst == ADDR_R for dst in rekey_dsts) or any(
         dst == ADDR_B for dst in rekey_dsts
@@ -338,6 +377,7 @@ def test_line_topology_announce_enables_pair_and_rekey() -> None:
 
 def test_announce_replay_rejected() -> None:
     store = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
+    store_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
     ep = _epoch_store(ADDR_B)
     cfg = replace(load_config(), group_key=GROUP_KEY, local_bd_addr=ADDR_B, ttl_max=10)
     hm = _AnnounceHelloMgr(local=ADDR_B, relay=False, key_store=store, epoch_store=ep)
@@ -345,20 +385,26 @@ def test_announce_replay_rejected() -> None:
     transport.connections.return_value = [ADDR_R]
     fwd = PacketForwarder(cfg, transport, hm, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
 
-    pub_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A).local_public_key
     ts = time.time_ns() // 1_000_000
-    pkt = build_announce(
-        GROUP_KEY, ADDR_A, seq=55, ts_ms=ts, epoch=0, public_key=pub_a, ttl=10
-    )
+    pkt = _mk_announce(store_a, ADDR_A, seq=55, ts_ms=ts)
     fwd.handle(ADDR_R, pkt)
-    assert store.get_peer_public_key(ADDR_A) == pub_a
+    assert store.get_peer_public_key(ADDR_A) == store_a.local_public_key
 
-    # Same (src, seq) again → replay filter drops second ingestion.
-    other = os.urandom(X25519_PUBLIC_KEY_SIZE)
-    # Even if we rebuild identical wire, replay must refuse.
     fwd.handle(ADDR_R, pkt)
-    assert store.get_peer_public_key(ADDR_A) == pub_a
-    assert store.apply_announce_binding(ADDR_A, other) == "ignored_first"
+    assert store.get_peer_public_key(ADDR_A) == store_a.local_public_key
+    other = BBKeyStore()
+    assert _apply(store, other, ADDR_A) == "ignored_first"
+
+
+def test_file_identity_not_group_derived() -> None:
+    """Runtime identity (for_node) must not be re-derivable from the group key."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "id.bin")
+        file_store = BBKeyStore.for_node(ADDR_A, persist_path=path)
+        derived = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+        assert file_store.local_public_key != derived.local_public_key
+        again = BBKeyStore.for_node(ADDR_A, persist_path=path)
+        assert again.local_public_key == file_store.local_public_key
 
 
 if __name__ == "__main__":
@@ -366,9 +412,11 @@ if __name__ == "__main__":
     test_announce_wrong_group_key()
     test_announce_tamper_header_or_ciphertext()
     test_announce_plaintext_validation()
+    test_announce_bad_signature_rejected()
     test_conflict_policy_hello_learned_wins()
     test_conflict_policy_first_seen_otherwise()
     test_register_peer_invalidates_pair_cache()
     test_line_topology_announce_enables_pair_and_rekey()
     test_announce_replay_rejected()
+    test_file_identity_not_group_derived()
     print("✅ announce tests passed")

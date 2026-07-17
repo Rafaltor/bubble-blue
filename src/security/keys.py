@@ -17,6 +17,12 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 try:
     from .packet import bd_addr_to_bytes
+    from .signing import (
+        ed25519_private_from_identity_seed,
+        ed25519_public_bytes,
+        sign as ed25519_sign,
+        verify as ed25519_verify,
+    )
 except ImportError:  # pragma: no cover — direct script execution
     import sys
 
@@ -24,13 +30,23 @@ except ImportError:  # pragma: no cover — direct script execution
     if _root not in sys.path:
         sys.path.insert(0, _root)
     from src.security.packet import bd_addr_to_bytes
+    from src.security.signing import (
+        ed25519_private_from_identity_seed,
+        ed25519_public_bytes,
+        sign as ed25519_sign,
+        verify as ed25519_verify,
+    )
 
 _X25519_KEY_SIZE: Final = 32
 _PAIRWISE_HKDF_SALT: Final = b"bubble-blue-v1"
 _SUBGROUP_WRAP_HKDF_SALT: Final = b"bb-subgroup-wrap-v1"
 _IDENTITY_HKDF_SALT: Final = b"bb-identity-v1"
 _IDENTITY_HKDF_INFO_PREFIX: Final = b"bubble-blue-x25519-identity:"
+_X25519_FROM_SEED_SALT: Final = b"bb-x25519-v1"
+_X25519_FROM_SEED_INFO: Final = b"bubble-blue-ecdh"
 _DERIVED_KEY_SIZE: Final = 32
+_IDENTITY_MAGIC: Final = b"BBID"
+_IDENTITY_FILE_VERSION: Final = 1
 
 
 def _hkdf_sha256(
@@ -50,26 +66,27 @@ def _hkdf_sha256(
     return hkdf.derive(ikm)
 
 
-def _load_or_create_file_private_key(path: Path) -> X25519PrivateKey:
-    """Load 32-byte raw X25519 private key from ``path``, or create and persist it."""
-    if path.exists():
-        raw = path.read_bytes()
-        if len(raw) != _X25519_KEY_SIZE:
-            raise ValueError(
-                f"identity file {path} must be {_X25519_KEY_SIZE} bytes (got {len(raw)})"
-            )
-        return X25519PrivateKey.from_private_bytes(raw)
+def default_identity_path(local_bd_addr: str) -> Path:
+    """Default on-disk identity seed path (independent of group key)."""
+    safe = local_bd_addr.replace(":", "").lower() or "node"
+    env = os.environ.get("BUBBLE_BLUE_IDENTITY_PATH", "").strip()
+    if env:
+        return Path(env)
+    return Path(f".bb-identity-{safe}.bin")
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    private_key = X25519PrivateKey.generate()
-    raw = private_key.private_bytes_raw()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        f.write(raw)
-    return private_key
+
+def _x25519_private_from_seed(seed: bytes) -> X25519PrivateKey:
+    raw = _hkdf_sha256(
+        seed,
+        length=_X25519_KEY_SIZE,
+        salt=_X25519_FROM_SEED_SALT,
+        info=_X25519_FROM_SEED_INFO,
+    )
+    return X25519PrivateKey.from_private_bytes(raw)
 
 
 def _derive_identity_private_key(group_key: bytes, local_bd_addr: str) -> bytes:
+    """Deprecated: X25519 private bytes from group key (any member can re-derive)."""
     if len(group_key) != _DERIVED_KEY_SIZE:
         raise ValueError(f"group_key must be {_DERIVED_KEY_SIZE} bytes (got {len(group_key)})")
     addr = local_bd_addr.strip().upper()
@@ -79,6 +96,40 @@ def _derive_identity_private_key(group_key: bytes, local_bd_addr: str) -> bytes:
         info=_IDENTITY_HKDF_INFO_PREFIX + addr.encode("ascii"),
         length=_X25519_KEY_SIZE,
     )
+
+
+def _load_or_create_identity(path: Path) -> tuple[X25519PrivateKey, bytes]:
+    """
+    Load identity from ``path``.
+
+    Returns ``(x25519_private, signing_seed)``.
+
+    File formats:
+      - BBID v1: magic(4) | version(1) | seed(32) — X25519 and Ed25519 from seed
+      - Legacy: raw 32-byte X25519 private — keep ECDH identity; Ed25519 from those bytes
+    """
+    if path.exists():
+        raw = path.read_bytes()
+        if len(raw) == 4 + 1 + _X25519_KEY_SIZE and raw[:4] == _IDENTITY_MAGIC:
+            version = raw[4]
+            if version != _IDENTITY_FILE_VERSION:
+                raise ValueError(f"unsupported identity file version {version}")
+            seed = bytes(raw[5 : 5 + _X25519_KEY_SIZE])
+            return _x25519_private_from_seed(seed), seed
+        if len(raw) == _X25519_KEY_SIZE:
+            return X25519PrivateKey.from_private_bytes(raw), bytes(raw)
+        raise ValueError(
+            f"identity file {path} has unexpected length {len(raw)} "
+            f"(expected {_X25519_KEY_SIZE} or {4 + 1 + _X25519_KEY_SIZE})"
+        )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    seed = os.urandom(_X25519_KEY_SIZE)
+    blob = _IDENTITY_MAGIC + bytes([_IDENTITY_FILE_VERSION]) + seed
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(blob)
+    return _x25519_private_from_seed(seed), seed
 
 
 def _derive_pairwise_key(
@@ -141,33 +192,34 @@ def derive_wrap_key(pair_key: bytes, src: str, seq: int, ts_ms: int) -> bytes:
 
 class BBKeyStore:
     """
-    X25519 identity and per-peer pairwise keys for private messaging.
+    X25519 ECDH identity + Ed25519 signing identity for control-plane attestations.
 
-    Static ECDH secrets are derived locally; no key material is placed in data packets.
+    **Recommended — file persistence** (``persist_path=...`` / ``for_node(bd)``):
+        Random seed on disk (mode ``0o600``). Independent of ``group_key`` — other
+        members cannot re-derive private keys (traitor-resistant for pairwise secrecy).
 
-    Two ways to obtain a **stable** identity across reboots:
+    **Deprecated — from group key** (``from_group_key``):
+        X25519 private = HKDF(group_key, bd). Any holder of the PSK can re-derive
+        every member's ECDH keys. Kept for tests/sim only.
 
-    **Strategy A — file persistence** (``persist_path=...``):
-        Load a 32-byte raw X25519 private key from disk, or generate and write it
-        (mode ``0o600``). Useful when you want identity independent of group key rotation.
-
-    **Strategy B — deterministic from group key** (``from_group_key(...)``, recommended):
-        ``HKDF-SHA256(group_key, salt=bb-identity-v1,
-        info=b"bubble-blue-x25519-identity:" + local_bd_addr)``.
-        Same ``group_key`` + BD address always yields the same key pair.
-        No file I/O — ideal for embedded nodes. If ``group_key`` rotates, the identity
-        rotates too (peers must re-learn the new public key via Hello).
-
-    **Ephemeral** (``BBKeyStore()`` with no ``persist_path``):
-        Fresh random key each process start — private messages break after restart.
+    **Ephemeral** (``BBKeyStore()`` with no path):
+        Fresh random key each process start.
     """
 
     def __init__(self, *, persist_path: str | Path | None = None) -> None:
         if persist_path is not None:
-            self._private_key = _load_or_create_file_private_key(Path(persist_path))
+            self._private_key, signing_seed = _load_or_create_identity(Path(persist_path))
         else:
             self._private_key = X25519PrivateKey.generate()
+            signing_seed = self._private_key.private_bytes_raw()
+        self._signing_key = ed25519_private_from_identity_seed(signing_seed)
         self._init_peer_state()
+
+    @classmethod
+    def for_node(cls, local_bd_addr: str, *, persist_path: str | Path | None = None) -> BBKeyStore:
+        """Recommended constructor: persistent random identity for ``local_bd_addr``."""
+        path = Path(persist_path) if persist_path is not None else default_identity_path(local_bd_addr)
+        return cls(persist_path=path)
 
     @classmethod
     def from_group_key(
@@ -177,26 +229,26 @@ class BBKeyStore:
         **kwargs: object,
     ) -> BBKeyStore:
         """
-        Deterministic identity derived from the group pre-shared key and local BD address.
+        Deprecated: X25519 identity derived from the group PSK.
 
-        ``kwargs`` is reserved for forward compatibility (ignored today).
-
-        Caveat: rotating ``group_key`` changes this node's X25519 identity; peers must
-        receive a fresh Hello to learn the new ``public_key``.
+        Unsafe when members may be traitors — any member can re-derive all ECDH keys.
+        Prefer :meth:`for_node`. Ed25519 signing key is HKDF-derived from the same
+        32-byte material (domain-separated).
         """
         _ = kwargs
         inst = cls.__new__(cls)
         priv_bytes = _derive_identity_private_key(group_key, local_bd_addr)
         inst._private_key = X25519PrivateKey.from_private_bytes(priv_bytes)
+        inst._signing_key = ed25519_private_from_identity_seed(priv_bytes)
         inst._init_peer_state()
         return inst
 
     def _init_peer_state(self) -> None:
         self._local_public_key = self._private_key.public_key().public_bytes_raw()
+        self._local_signing_public_key = ed25519_public_bytes(self._signing_key)
         self._peer_public_keys: dict[str, bytes] = {}
+        self._peer_signing_keys: dict[str, bytes] = {}
         self._pair_key_cache: dict[tuple[str, int], bytes] = {}
-        # BD addresses whose pubkey was learned from a direct Hello private part
-        # (primary, 1-hop). ANNOUNCE must not override these on conflict.
         self._hello_learned: set[str] = set()
 
     def clear_pair_key_cache(self) -> None:
@@ -205,8 +257,24 @@ class BBKeyStore:
 
     @property
     def local_public_key(self) -> bytes:
-        """32-byte X25519 public key for this node (advertised in Hello, not in PKT_DATA)."""
+        """32-byte X25519 public key for this node."""
         return self._local_public_key
+
+    @property
+    def local_signing_public_key(self) -> bytes:
+        """32-byte Ed25519 public key for this node (ANNOUNCE / rekey attestations)."""
+        return self._local_signing_public_key
+
+    def sign(self, message: bytes) -> bytes:
+        """Ed25519-sign ``message`` with the local signing key (64-byte signature)."""
+        return ed25519_sign(self._signing_key, message)
+
+    def verify_peer_signature(self, bd_addr: str, message: bytes, signature: bytes) -> bool:
+        """Verify ``signature`` under the registered Ed25519 key for ``bd_addr``."""
+        pub = self._peer_signing_keys.get(bd_addr.strip().upper())
+        if pub is None:
+            return False
+        return ed25519_verify(pub, message, signature)
 
     def mark_hello_learned(self, bd_addr: str) -> None:
         """Mark ``bd_addr`` as having a pubkey from a direct Hello private part."""
@@ -216,11 +284,18 @@ class BBKeyStore:
         """True if the peer pubkey was registered from Hello (not only ANNOUNCE)."""
         return bd_addr.strip().upper() in self._hello_learned
 
-    def register_peer(self, bd_addr: str, public_key: bytes) -> None:
+    def register_peer(
+        self,
+        bd_addr: str,
+        public_key: bytes,
+        *,
+        signing_public_key: bytes | None = None,
+    ) -> None:
         """
-        Record a peer's static X25519 public key (e.g. from a received Hello).
+        Record a peer's X25519 public key (and optional Ed25519 signing key).
 
-        Re-registering the same address with a different key invalidates any cached pairwise key.
+        Re-registering the same address with a different ECDH key invalidates
+        any cached pairwise key.
         """
         addr = bd_addr.strip().upper()
         if len(public_key) != _X25519_KEY_SIZE:
@@ -232,29 +307,57 @@ class BBKeyStore:
         if prev != public_key:
             self._pair_key_cache = {k: v for k, v in self._pair_key_cache.items() if k[0] != addr}
 
-    def register_peer_from_hello(self, bd_addr: str, public_key: bytes) -> None:
+        if signing_public_key is not None:
+            if len(signing_public_key) != 32:
+                raise ValueError("signing_public_key must be 32 bytes")
+            self._peer_signing_keys[addr] = bytes(signing_public_key)
+
+    def register_peer_from_hello(
+        self,
+        bd_addr: str,
+        public_key: bytes,
+        *,
+        signing_public_key: bytes | None = None,
+    ) -> None:
         """Register pubkey from Hello private and mark hello-learned provenance."""
-        self.register_peer(bd_addr, public_key)
+        self.register_peer(bd_addr, public_key, signing_public_key=signing_public_key)
         self.mark_hello_learned(bd_addr)
 
-    def apply_announce_binding(self, bd_addr: str, public_key: bytes) -> str:
+    def apply_announce_binding(
+        self,
+        bd_addr: str,
+        public_key: bytes,
+        *,
+        signing_public_key: bytes,
+        signature: bytes,
+        signed_message: bytes,
+    ) -> str:
         """
-        Apply PKT_ANNOUNCE binding with conflict policy.
+        Apply a signed PKT_ANNOUNCE binding.
 
-        Returns one of: ``\"registered\"``, ``\"noop\"``, ``\"ignored_hello\"``,
-        ``\"ignored_first\"``.
+        Requires a valid Ed25519 signature under ``signing_public_key`` (PoP).
+        Conflict policy: Hello-learned wins; else first-seen.
+
+        Returns ``registered`` | ``noop`` | ``ignored_hello`` | ``ignored_first``
+        | ``rejected_sig``.
         """
         addr = bd_addr.strip().upper()
         if len(public_key) != _X25519_KEY_SIZE:
             raise ValueError(f"public_key must be {_X25519_KEY_SIZE} bytes (got {len(public_key)})")
+        if not ed25519_verify(signing_public_key, signed_message, signature):
+            _log.warning("[SEC] ANNOUNCE signature invalide pour %s", addr)
+            return "rejected_sig"
+
         X25519PublicKey.from_public_bytes(public_key)
         pub = bytes(public_key)
+        sig_pub = bytes(signing_public_key)
 
         prev = self._peer_public_keys.get(addr)
         if prev is None:
-            self.register_peer(addr, pub)
+            self.register_peer(addr, pub, signing_public_key=sig_pub)
             return "registered"
         if prev == pub:
+            self._peer_signing_keys.setdefault(addr, sig_pub)
             return "noop"
         if addr in self._hello_learned:
             _log.warning(
@@ -294,6 +397,11 @@ class BBKeyStore:
         pub = self._peer_public_keys.get(bd_addr.strip().upper())
         return bytes(pub) if pub is not None else None
 
+    def get_peer_signing_public_key(self, bd_addr: str) -> bytes | None:
+        """Return the registered Ed25519 public key for ``bd_addr``, if known."""
+        pub = self._peer_signing_keys.get(bd_addr.strip().upper())
+        return bytes(pub) if pub is not None else None
+
     def known_peers(self) -> list[str]:
         """BD addresses for which a peer public key has been registered."""
         return sorted(self._peer_public_keys.keys())
@@ -306,33 +414,47 @@ if __name__ == "__main__":
     addr_a = "AA:BB:CC:DD:EE:01"
     addr_b = "AA:BB:CC:DD:EE:02"
 
-    store_a = BBKeyStore.from_group_key(group_key, addr_a)
-    store_b = BBKeyStore.from_group_key(group_key, addr_b)
-    assert BBKeyStore.from_group_key(group_key, addr_a).local_public_key == store_a.local_public_key
-
-    store_a.register_peer(addr_b, store_b.local_public_key)
-    store_b.register_peer(addr_a, store_a.local_public_key)
-
-    key_ab = store_a.get_pair_key(addr_b)
-    key_ba = store_b.get_pair_key(addr_a)
-    assert key_ab is not None and key_ba is not None
-    assert key_ab == key_ba, "ECDH pairwise key must be symmetric"
-
-    pkt_key = derive_packet_key(key_ab, addr_a, seq=1, ts_ms=1_700_000_000_000)
-    assert len(pkt_key) == 32
-    assert pkt_key != key_ab
-
-    wrap_key = derive_wrap_key(key_ab, addr_a, seq=1, ts_ms=1_700_000_000_000)
-    assert len(wrap_key) == 32
-    assert wrap_key != key_ab
-    assert wrap_key != pkt_key
+    # Group-derived X25519 identity must remain stable (wire/test compat).
+    d1 = BBKeyStore.from_group_key(group_key, addr_a)
+    d2 = BBKeyStore.from_group_key(group_key, addr_a)
+    assert d1.local_public_key == d2.local_public_key
+    assert d1.local_signing_public_key == d2.local_signing_public_key
 
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "identity.key"
-        s1 = BBKeyStore(persist_path=path)
-        pub1 = s1.local_public_key
-        s2 = BBKeyStore(persist_path=path)
-        assert s2.local_public_key == pub1
-        assert path.stat().st_mode & 0o777 == 0o600
+        path_a = Path(tmp) / "a.bin"
+        path_b = Path(tmp) / "b.bin"
+        store_a = BBKeyStore(persist_path=path_a)
+        store_b = BBKeyStore(persist_path=path_b)
+        assert BBKeyStore(persist_path=path_a).local_public_key == store_a.local_public_key
+        assert store_a.local_public_key != store_b.local_public_key
+        assert store_a.local_public_key != d1.local_public_key
+
+        store_a.register_peer(
+            addr_b,
+            store_b.local_public_key,
+            signing_public_key=store_b.local_signing_public_key,
+        )
+        store_b.register_peer(
+            addr_a,
+            store_a.local_public_key,
+            signing_public_key=store_a.local_signing_public_key,
+        )
+
+        key_ab = store_a.get_pair_key(addr_b)
+        key_ba = store_b.get_pair_key(addr_a)
+        assert key_ab is not None and key_ba is not None
+        assert key_ab == key_ba
+
+        msg = b"attest"
+        sig = store_a.sign(msg)
+        assert store_b.verify_peer_signature(addr_a, msg, sig)
+        assert path_a.stat().st_mode & 0o777 == 0o600
+
+        # Legacy raw X25519 file still loads.
+        legacy = Path(tmp) / "legacy.bin"
+        raw_priv = X25519PrivateKey.generate().private_bytes_raw()
+        legacy.write_bytes(raw_priv)
+        leg = BBKeyStore(persist_path=legacy)
+        assert leg.local_public_key == X25519PrivateKey.from_private_bytes(raw_priv).public_key().public_bytes_raw()
 
     print("✅ keys.py self-test passed")

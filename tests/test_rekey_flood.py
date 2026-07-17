@@ -42,11 +42,20 @@ from src.security.rekey import (  # noqa: E402
     unpack_rekey_plaintext,
 )
 
-GROUP_KEY = b"\x33" * 32
+# Chosen so ADDR_A has the minimum anon_id (true coordinator among A/R/B/M).
+GROUP_KEY = b"\x08" * 32
 ADDR_A = "AA:BB:CC:DD:EE:01"  # coordinator
 ADDR_R = "AA:BB:CC:DD:EE:02"  # relay
 ADDR_B = "AA:BB:CC:DD:EE:03"  # 2-hop member
 ADDR_M = "AA:BB:CC:DD:EE:04"  # revoked
+
+
+def _link(left: BBKeyStore, right_bd: str, right: BBKeyStore) -> None:
+    left.register_peer(
+        right_bd,
+        right.local_public_key,
+        signing_public_key=right.local_signing_public_key,
+    )
 
 
 def _epoch(bd: str, gk: bytes = GROUP_KEY) -> EpochStore:
@@ -195,7 +204,7 @@ def test_case_tamper_breaks_all_decrypts() -> None:
         (store_b, store_a, ADDR_A),
         (store_r, store_a, ADDR_A),
     ):
-        s.register_peer(oa, o.local_public_key)
+        _link(s, oa, o)
 
     ep_a = _epoch(ADDR_A)
     cfg = replace(load_config(), group_key=GROUP_KEY, local_bd_addr=ADDR_A, ttl_max=10)
@@ -259,13 +268,13 @@ def test_revoked_absent_from_cases() -> None:
     store_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
     store_b = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
     store_m = BBKeyStore.from_group_key(GROUP_KEY, ADDR_M)
-    for s, a, o, oa in (
+    for s, _a, o, oa in (
         (store_a, ADDR_A, store_b, ADDR_B),
         (store_a, ADDR_A, store_m, ADDR_M),
         (store_b, ADDR_B, store_a, ADDR_A),
         (store_m, ADDR_M, store_a, ADDR_A),
     ):
-        s.register_peer(oa, o.local_public_key)
+        _link(s, oa, o)
 
     ep_a = _epoch(ADDR_A)
     cfg = replace(load_config(), group_key=GROUP_KEY, local_bd_addr=ADDR_A, ttl_max=10)
@@ -330,7 +339,7 @@ def test_integration_two_hop_adopt() -> None:
     store_m = BBKeyStore.from_group_key(GROUP_KEY, ADDR_M)
 
     # Pairwise keys among A↔R, R↔B, A↔B (via announce path), A↔M
-    for left, la, right, ra in (
+    for left, _la, right, ra in (
         (store_a, ADDR_A, store_r, ADDR_R),
         (store_r, ADDR_R, store_a, ADDR_A),
         (store_r, ADDR_R, store_b, ADDR_B),
@@ -340,7 +349,7 @@ def test_integration_two_hop_adopt() -> None:
         (store_a, ADDR_A, store_m, ADDR_M),
         (store_m, ADDR_M, store_a, ADDR_A),
     ):
-        left.register_peer(ra, right.local_public_key)
+        _link(left, ra, right)
 
     ep_a, ep_r, ep_b = _epoch(ADDR_A), _epoch(ADDR_R), _epoch(ADDR_B)
     mesh = _Mesh()
@@ -388,7 +397,7 @@ def test_announce_only_member_in_cases() -> None:
     """Peer known only via pubkey register (no Hello learn) still gets a case."""
     store_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
     store_b = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
-    store_a.register_peer(ADDR_B, store_b.local_public_key)  # not hello-learned
+    _link(store_a, ADDR_B, store_b)  # not hello-learned
     assert not store_a.is_hello_learned(ADDR_B)
 
     ep_a = _epoch(ADDR_A)
@@ -438,8 +447,8 @@ def test_non_coordinator_revoke_raises() -> None:
 def test_replay_old_flood_rejected() -> None:
     store_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
     store_b = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
-    store_a.register_peer(ADDR_B, store_b.local_public_key)
-    store_b.register_peer(ADDR_A, store_a.local_public_key)
+    _link(store_a, ADDR_B, store_b)
+    _link(store_b, ADDR_A, store_a)
     ep_a, ep_b = _epoch(ADDR_A), _epoch(ADDR_B)
 
     cfg_a = replace(load_config(), group_key=GROUP_KEY, local_bd_addr=ADDR_A, ttl_max=10)
@@ -453,7 +462,7 @@ def test_replay_old_flood_rejected() -> None:
         resolved=[ADDR_B],
     )
     hm_a.learn(ADDR_B)
-    hm_b = _HM(local=ADDR_B, relay=False, key_store=store_b, epoch_store=ep_b)
+    hm_b = _HM(local=ADDR_B, relay=False, key_store=store_b, epoch_store=ep_b, resolved=[ADDR_A])
     hm_b.learn(ADDR_A)
 
     fwd_a = PacketForwarder(cfg_a, MagicMock(connections=lambda: [ADDR_B]), hm_a, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
@@ -479,12 +488,63 @@ def test_replay_old_flood_rejected() -> None:
     assert ep_b.current_epoch() == 1
 
 
+def test_non_coordinator_signed_flood_rejected() -> None:
+    """Receiver rejects a cryptographically valid flood from a non-coordinator."""
+    store_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
+    store_b = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
+    store_r = BBKeyStore.from_group_key(GROUP_KEY, ADDR_R)
+    _link(store_b, ADDR_R, store_r)
+    _link(store_b, ADDR_A, store_a)
+    _link(store_r, ADDR_B, store_b)
+
+    ep_r, ep_b = _epoch(ADDR_R), _epoch(ADDR_B)
+    cfg_r = replace(load_config(), group_key=GROUP_KEY, local_bd_addr=ADDR_R, ttl_max=10)
+    cfg_b = replace(cfg_r, local_bd_addr=ADDR_B)
+    # R pretends to be coordinator on the send path; B knows A has lower anon_id.
+    hm_r = _HM(
+        local=ADDR_R,
+        relay=True,
+        key_store=store_r,
+        epoch_store=ep_r,
+        coordinator=True,
+        resolved=[ADDR_A, ADDR_B],
+    )
+    hm_r.learn(ADDR_B)
+    hm_b = _HM(
+        local=ADDR_B,
+        relay=False,
+        key_store=store_b,
+        epoch_store=ep_b,
+        resolved=[ADDR_A, ADDR_R],
+    )
+    hm_b.learn(ADDR_A)
+    hm_b.learn(ADDR_R)
+
+    fwd_r = PacketForwarder(cfg_r, MagicMock(connections=lambda: [ADDR_B]), hm_r, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
+    fwd_b = PacketForwarder(cfg_b, MagicMock(connections=lambda: [ADDR_R]), hm_b, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
+
+    pk = store_r.get_pair_key(ADDR_B, epoch=0)
+    assert pk is not None
+    new_epoch, new_key, revoked = ep_r.prepare_revocation(b"\xaa" * 32)
+    packets = fwd_r.build_rekey_flood_packets(
+        b"\xaa" * 32,
+        wrap_epoch=0,
+        new_epoch=new_epoch,
+        new_group_key=new_key,
+        revoked_set=revoked,
+        targets=[ADDR_B],
+        pair_keys={ADDR_B: pk},
+    )
+    fwd_b.handle(ADDR_R, packets[0])
+    assert ep_b.current_epoch() == 0  # rejected: R is not min anon_id
+
+
 def test_offline_catchup_via_unicast_gossip() -> None:
     """Member offline during flood is still catchable via PKT_REKEY unicast."""
     store_a = BBKeyStore.from_group_key(GROUP_KEY, ADDR_A)
     store_b = BBKeyStore.from_group_key(GROUP_KEY, ADDR_B)
-    store_a.register_peer(ADDR_B, store_b.local_public_key)
-    store_b.register_peer(ADDR_A, store_a.local_public_key)
+    _link(store_a, ADDR_B, store_b)
+    _link(store_b, ADDR_A, store_a)
     ep_a, ep_b = _epoch(ADDR_A), _epoch(ADDR_B)
 
     cfg_a = replace(load_config(), group_key=GROUP_KEY, local_bd_addr=ADDR_A, ttl_max=10)
@@ -498,7 +558,10 @@ def test_offline_catchup_via_unicast_gossip() -> None:
         resolved=[ADDR_B],
     )
     hm_a.learn(ADDR_B)
-    hm_b = _HM(local=ADDR_B, relay=False, key_store=store_b, epoch_store=ep_b)
+    hm_b = _HM(
+        local=ADDR_B, relay=False, key_store=store_b, epoch_store=ep_b, resolved=[ADDR_A]
+    )
+    hm_b.learn(ADDR_A)
     hm_b._peer_epochs[ADDR_A] = 0
 
     tx_a = MagicMock()
@@ -528,5 +591,6 @@ if __name__ == "__main__":
     test_announce_only_member_in_cases()
     test_non_coordinator_revoke_raises()
     test_replay_old_flood_rejected()
+    test_non_coordinator_signed_flood_rejected()
     test_offline_catchup_via_unicast_gossip()
     print("✅ rekey flood tests passed")

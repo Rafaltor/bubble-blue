@@ -181,10 +181,7 @@ class BBNode:
                 on_peer_connected=self._dispatch_peer_connected,
                 on_peer_disconnected=self._dispatch_peer_disconnected,
             )
-            key_store = self._key_store or BBKeyStore.from_group_key(
-                self._cfg.group_key,
-                self._cfg.local_bd_addr,
-            )
+            key_store = self._key_store or BBKeyStore.for_node(self._cfg.local_bd_addr)
             epoch_store = EpochStore(
                 self._cfg.group_key,
                 local_bd_addr=self._cfg.local_bd_addr,

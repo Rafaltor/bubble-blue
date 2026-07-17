@@ -22,8 +22,11 @@ from src.security.crypto import decrypt_with_key, encrypt_with_key, unwrap_msg_k
 from src.security.keys import derive_packet_key, derive_wrap_key
 from src.security.rekey import (
     pack_rekey_plaintext,
+    pack_signed_rekey_plaintext,
     partition_rekey_targets,
+    sender_is_coordinator,
     unpack_rekey_plaintext,
+    verify_rekey_attestation,
 )
 from src.security.replay import ReplayFilter
 from src.security.packet import (
@@ -258,7 +261,7 @@ class PacketForwarder:
         if pair_key is None:
             raise RuntimeError(f"No pairwise key for {dst}")
 
-        plain = pack_rekey_plaintext(
+        plain = self._signed_rekey_plaintext(
             self._hello_mgr.epoch_store.current_epoch(),
             self._hello_mgr.epoch_store.current_group_key(),
             self._hello_mgr.epoch_store.revoked_pubkeys(),
@@ -269,6 +272,73 @@ class PacketForwarder:
         packet_key = derive_packet_key(pair_key, src, seq, ts_ms)
         enc = encrypt_with_key(packet_key, plain, routing_header_aad(rh))
         return build_bb_packet(rh, enc["ciphertext"])
+
+    def _signed_rekey_plaintext(
+        self,
+        epoch: int,
+        group_key: bytes,
+        revoked: list[bytes] | frozenset[bytes],
+    ) -> bytes:
+        """Core rekey body + Ed25519 signature under the local signing key."""
+        core = pack_rekey_plaintext(epoch, group_key, revoked)
+        sig = self._hello_mgr.key_store.sign(core)
+        return pack_signed_rekey_plaintext(epoch, group_key, revoked, sig)
+
+    def _member_anon_ids_for_coordinator_check(self) -> list[bytes]:
+        """Anon_ids of known live members (resolved + peers with pubkey + self)."""
+        local = self._cfg.local_bd_addr.upper()
+        aids: dict[str, bytes] = {local: self._hello_mgr.local_anon_id()}
+        for m in self._hello_mgr.get_resolved_members():
+            bd = str(m["bd_addr"]).upper()
+            aid = m.get("anon_id")
+            if isinstance(aid, (bytes, bytearray)) and len(aid) == 8:
+                aids[bd] = bytes(aid)
+            else:
+                tag_fn = getattr(self._hello_mgr, "anon_id_for_or_compute", None)
+                if callable(tag_fn):
+                    aids[bd] = tag_fn(bd)
+        for bd in self._hello_mgr.key_store.known_peers():
+            if bd in aids:
+                continue
+            tag_fn = getattr(self._hello_mgr, "anon_id_for_or_compute", None)
+            if callable(tag_fn):
+                aids[bd] = tag_fn(bd)
+            else:
+                try:
+                    aids[bd] = self._hello_mgr.anon_id_for(bd)
+                except (KeyError, AttributeError):
+                    continue
+        return list(aids.values())
+
+    def _accept_rekey_from(self, src: str, body: dict[str, object]) -> bool:
+        """
+        Require Ed25519 attestation under src's known signing key and
+        that src is the min-anon_id coordinator among known members.
+        """
+        src_u = src.strip().upper()
+        sig_pub = self._hello_mgr.key_store.get_peer_signing_public_key(src_u)
+        if sig_pub is None:
+            self._log(f"[SEC] rekey rejected from {src_u}: no signing key")
+            return False
+        if not verify_rekey_attestation(body, src_signing_public_key=sig_pub):
+            self._log(f"[SEC] rekey rejected from {src_u}: bad signature")
+            return False
+        tag_fn = getattr(self._hello_mgr, "anon_id_for_or_compute", None)
+        if callable(tag_fn):
+            src_aid = tag_fn(src_u)
+        else:
+            try:
+                src_aid = self._hello_mgr.anon_id_for(src_u)
+            except (KeyError, AttributeError):
+                self._log(f"[SEC] rekey rejected from {src_u}: unknown anon_id")
+                return False
+        members = self._member_anon_ids_for_coordinator_check()
+        # Exclude src from "other members" list — is_coordinator adds self.
+        others = [a for a in members if a != src_aid]
+        if not sender_is_coordinator(src_aid, others):
+            self._log(f"[SEC] rekey rejected from {src_u}: not coordinator")
+            return False
+        return True
 
     def send_rekey_catchup(self, dst_bd_addr: str) -> None:
         """Gossip: send current PKT_REKEY to a peer with a stale epoch (pairwise)."""
@@ -326,7 +396,7 @@ class PacketForwarder:
         """
         _ = revoked_pubkey
         src = self._cfg.local_bd_addr.upper()
-        plain = pack_rekey_plaintext(new_epoch, new_group_key, revoked_set)
+        plain = self._signed_rekey_plaintext(new_epoch, new_group_key, revoked_set)
         body_len = len(plain)
         mtu = mtu_for_transport(self._cfg.transport_kind)
         partitions = partition_rekey_targets(targets, body_len, mtu)
@@ -674,6 +744,9 @@ class PacketForwarder:
                 self._log(f"[FWD] rekey parse failed src={src}")
             return
 
+        if not self._accept_rekey_from(src, body):
+            return
+
         epoch = int(body["epoch"])
         group_key = bytes(body["group_key"])  # type: ignore[arg-type]
         revoked = list(body["revoked_pubkeys"])  # type: ignore[arg-type]
@@ -736,6 +809,9 @@ class PacketForwarder:
             self._log(f"[FWD] rekey-flood parse failed src={src}: {e}")
             return
 
+        if not self._accept_rekey_from(src, body):
+            return
+
         epoch = int(body["epoch"])
         group_key = bytes(body["group_key"])  # type: ignore[arg-type]
         revoked = list(body["revoked_pubkeys"])  # type: ignore[arg-type]
@@ -775,8 +851,16 @@ class PacketForwarder:
         bd = str(body["bd_addr"]).upper()
         public_key = bytes(body["public_key"])  # type: ignore[arg-type]
         peer_epoch = int(body["epoch"])
-        result = self._hello_mgr.key_store.apply_announce_binding(bd, public_key)
-        if result == "ignored_hello":
+        result = self._hello_mgr.key_store.apply_announce_binding(
+            bd,
+            public_key,
+            signing_public_key=bytes(body["signing_public_key"]),  # type: ignore[arg-type]
+            signature=bytes(body["signature"]),  # type: ignore[arg-type]
+            signed_message=bytes(body["signed_message"]),  # type: ignore[arg-type]
+        )
+        if result == "rejected_sig":
+            self._log(f"[SEC] ANNOUNCE signature invalide pour {bd}")
+        elif result == "ignored_hello":
             self._log(f"[SEC] conflit de binding pubkey pour {bd} (announce ignoré)")
         elif result == "ignored_first":
             self._log(
@@ -788,6 +872,9 @@ class PacketForwarder:
             if hasattr(self._hello_mgr, "_peer_epochs"):
                 self._hello_mgr._peer_epochs[bd] = peer_epoch  # noqa: SLF001
             self._log(f"[FWD] announce learned {bd} epoch={peer_epoch}")
+        elif result == "noop":
+            if hasattr(self._hello_mgr, "_peer_epochs"):
+                self._hello_mgr._peer_epochs[bd] = peer_epoch  # noqa: SLF001
 
     def _try_deliver_subgroup(self, ingress_peer: str, data: bytes, hdr: dict[str, Any]) -> None:
         src = hdr["src"].upper()

@@ -16,9 +16,11 @@ from src.security.packet import bd_addr_to_bytes, bytes_to_bd_addr
 
 ANON_ID_SIZE = 8
 X25519_PUBLIC_KEY_SIZE = 32
+ED25519_PUBLIC_KEY_SIZE = 32
 KnownNeighbor = tuple[bytes, str]  # (learned anon_id, bd_addr for private zip)
 _PRIVATE_HELLO_VERSION = 0x01
 _PRIVATE_HELLO_VERSION_EPOCH = 0x02
+_PRIVATE_HELLO_VERSION_SIGNING = 0x03
 
 # Public Hello prefix: type | anon_id | seq | ts_ms | n_neighbors
 _HELLO_PUBLIC_PREFIX = struct.Struct("!B8sLQB")
@@ -59,11 +61,13 @@ def _pack_private_plaintext(
     local_public_key: bytes,
     *,
     epoch: int = 0,
+    local_signing_public_key: bytes | None = None,
 ) -> bytes:
     """
-    Private Hello plaintext v0x02 (encrypted under current group_key).
+    Private Hello plaintext (encrypted under current group_key).
 
-    Layout: version | local_bd | n_neighbors | neighbors | epoch (uint32) | x25519_pub.
+    v0x02: version | local_bd | n_neighbors | neighbors | epoch | x25519_pub
+    v0x03: v0x02 fields + ed25519_pub (32B) when ``local_signing_public_key`` is set
     """
     if len(local_public_key) != X25519_PUBLIC_KEY_SIZE:
         raise ValueError(
@@ -75,9 +79,20 @@ def _pack_private_plaintext(
     neighbors = list(neighbor_bd_addrs)
     if len(neighbors) > 255:
         raise ValueError("too many private neighbors (max 255)")
+
+    if local_signing_public_key is not None:
+        if len(local_signing_public_key) != ED25519_PUBLIC_KEY_SIZE:
+            raise ValueError(
+                f"local_signing_public_key must be {ED25519_PUBLIC_KEY_SIZE} bytes "
+                f"(got {len(local_signing_public_key)})"
+            )
+        version = _PRIVATE_HELLO_VERSION_SIGNING
+    else:
+        version = _PRIVATE_HELLO_VERSION_EPOCH
+
     out = struct.pack(
         "!B6sB",
-        _PRIVATE_HELLO_VERSION_EPOCH,
+        version,
         bd_addr_to_bytes(local_bd_addr),
         len(neighbors),
     )
@@ -85,29 +100,38 @@ def _pack_private_plaintext(
         out += bd_addr_to_bytes(addr)
     out += struct.pack("!L", int(epoch))
     out += bytes(local_public_key)
+    if local_signing_public_key is not None:
+        out += bytes(local_signing_public_key)
     return out
 
 
 def _unpack_private_plaintext(data: bytes) -> dict[str, Any]:
     """
-    Parse private Hello plaintext (version 0x01 or 0x02).
+    Parse private Hello plaintext (version 0x01, 0x02, or 0x03).
 
-    Returns bd_addr, neighbor_bd_addrs, public_key, and epoch (0 for v0x01).
+    Returns bd_addr, neighbor_bd_addrs, public_key, epoch (0 for v0x01),
+    and signing_public_key (None when absent).
     """
     min_len = 1 + 6 + 1 + X25519_PUBLIC_KEY_SIZE
     if len(data) < min_len:
         raise ValueError("private hello plaintext too short")
 
     version, local_b, n = struct.unpack_from("!B6sB", data, 0)
-    if version not in (_PRIVATE_HELLO_VERSION, _PRIVATE_HELLO_VERSION_EPOCH):
+    if version not in (
+        _PRIVATE_HELLO_VERSION,
+        _PRIVATE_HELLO_VERSION_EPOCH,
+        _PRIVATE_HELLO_VERSION_SIGNING,
+    ):
         raise ValueError(f"unsupported private hello version: 0x{version:02X}")
 
     off = 1 + 6 + 1
     need_neighbors = off + int(n) * 6
-    if version == _PRIVATE_HELLO_VERSION_EPOCH:
+    if version == _PRIVATE_HELLO_VERSION:
+        need = need_neighbors + X25519_PUBLIC_KEY_SIZE
+    elif version == _PRIVATE_HELLO_VERSION_EPOCH:
         need = need_neighbors + 4 + X25519_PUBLIC_KEY_SIZE
     else:
-        need = need_neighbors + X25519_PUBLIC_KEY_SIZE
+        need = need_neighbors + 4 + X25519_PUBLIC_KEY_SIZE + ED25519_PUBLIC_KEY_SIZE
     if len(data) < need:
         raise ValueError("truncated private hello plaintext")
 
@@ -117,18 +141,28 @@ def _unpack_private_plaintext(data: bytes) -> dict[str, Any]:
         off += 6
 
     epoch = 0
-    if version == _PRIVATE_HELLO_VERSION_EPOCH:
+    if version in (_PRIVATE_HELLO_VERSION_EPOCH, _PRIVATE_HELLO_VERSION_SIGNING):
         epoch, = struct.unpack_from("!L", data, off)
         off += 4
 
     public_key = data[off : off + X25519_PUBLIC_KEY_SIZE]
     if len(public_key) != X25519_PUBLIC_KEY_SIZE:
         raise ValueError("truncated X25519 public key in private hello")
+    off += X25519_PUBLIC_KEY_SIZE
+
+    signing_public_key: bytes | None = None
+    if version == _PRIVATE_HELLO_VERSION_SIGNING:
+        signing_public_key = data[off : off + ED25519_PUBLIC_KEY_SIZE]
+        if len(signing_public_key) != ED25519_PUBLIC_KEY_SIZE:
+            raise ValueError("truncated Ed25519 public key in private hello")
 
     return {
         "bd_addr": bytes_to_bd_addr(local_b),
         "neighbor_bd_addrs": neighbors,
         "public_key": bytes(public_key),
+        "signing_public_key": (
+            bytes(signing_public_key) if signing_public_key is not None else None
+        ),
         "epoch": int(epoch),
     }
 
@@ -161,6 +195,7 @@ def build_hello(
     epoch: int = 0,
     anon_id_key: bytes | None = None,
     mpr_anon_ids: list[bytes] | None = None,
+    local_signing_public_key: bytes | None = None,
 ) -> bytes:
     """
     Build a BB Hello packet (public cleartext + group-encrypted private part).
@@ -213,9 +248,13 @@ def build_hello(
     for m in mpr_ids:
         public += m
 
-    # Private part — BD addresses + X25519 pubkey; visible only to group members.
+    # Private part — BD addresses + X25519 (+ Ed25519) pubkeys; group members only.
     priv_plain = _pack_private_plaintext(
-        local_bd_addr, neighbor_bd_addrs, local_public_key, epoch=int(epoch)
+        local_bd_addr,
+        neighbor_bd_addrs,
+        local_public_key,
+        epoch=int(epoch),
+        local_signing_public_key=local_signing_public_key,
     )
     private_enc = _encrypt_private(group_key, priv_plain, aad=public)
     if len(private_enc) > 0xFFFF:

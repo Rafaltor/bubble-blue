@@ -10,7 +10,7 @@ from config import (
     ANNOUNCE_INTERVAL_S,
     BubbleBlueConfig,
 )
-from src.control.announce import build_announce
+from src.control.announce import announce_signed_message, build_announce
 from src.control.hello import build_hello, compute_anon_id, parse_hello_private, parse_hello_public
 from src.control.neighbors import NeighborTable
 from src.forwarding.cds import CDSAlgorithm, am_i_cds, compute_local_mpr
@@ -178,7 +178,16 @@ class HelloManager:
             if public_key is not None and bd_addr is not None:
                 bd_u = str(bd_addr).upper()
                 self._peer_epochs[bd_u] = peer_epoch
-                self._key_store.register_peer_from_hello(bd_u, public_key)
+                signing_pub = priv.get("signing_public_key")
+                self._key_store.register_peer_from_hello(
+                    bd_u,
+                    public_key,
+                    signing_public_key=(
+                        bytes(signing_pub)
+                        if isinstance(signing_pub, (bytes, bytearray))
+                        else None
+                    ),
+                )
                 if (
                     peer_epoch < self._epoch_store.current_epoch()
                     and not self._epoch_store.is_revoked_pubkey(public_key)
@@ -268,6 +277,7 @@ class HelloManager:
             epoch=self._epoch_store.current_epoch(),
             anon_id_key=self._bootstrap_key,
             mpr_anon_ids=mpr_filtered or None,
+            local_signing_public_key=self._key_store.local_signing_public_key,
         )
 
         for peer in peers:
@@ -288,14 +298,23 @@ class HelloManager:
             return
         seq = self._next_seq()
         try:
+            epoch = self._epoch_store.current_epoch()
+            signed = announce_signed_message(
+                self._local_bd,
+                epoch,
+                self._key_store.local_public_key,
+                self._key_store.local_signing_public_key,
+            )
             pkt = build_announce(
                 self._epoch_store.current_group_key(),
                 self._local_bd,
                 seq,
                 None,
-                self._epoch_store.current_epoch(),
+                epoch,
                 self._key_store.local_public_key,
                 self._cfg.ttl_max,
+                signing_public_key=self._key_store.local_signing_public_key,
+                signature=self._key_store.sign(signed),
             )
         except (ValueError, RuntimeError) as e:
             if not self._quiet:

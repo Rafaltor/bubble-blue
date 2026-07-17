@@ -19,12 +19,14 @@ from __future__ import annotations
 import struct
 from typing import Final
 
+from src.security.epoch import is_coordinator
 from src.security.packet import (
     GCM_TAG_SIZE,
     ROUTING_HEADER_SIZE,
     SUBGROUP_CASE_SIZE,
     SUBGROUP_N_CASES_MAX,
 )
+from src.security.signing import ED25519_SIGNATURE_SIZE, verify as ed25519_verify
 
 _X25519_PUBLIC_KEY_SIZE: Final = 32
 _GROUP_KEY_SIZE: Final = 32
@@ -36,7 +38,12 @@ def pack_rekey_plaintext(
     group_key: bytes,
     revoked_pubkeys: list[bytes] | frozenset[bytes],
 ) -> bytes:
-    """Wire plaintext for PKT_REKEY / PKT_REKEY_FLOOD body: epoch ‖ group_key ‖ revoked."""
+    """
+    Core REKEY body (unsigned): epoch ‖ group_key ‖ revoked.
+
+    Signed wire form appends a 64-byte Ed25519 signature (see
+    ``pack_signed_rekey_plaintext``).
+    """
     if not (0 <= epoch <= 0xFFFFFFFF):
         raise ValueError("epoch must fit in uint32")
     if len(group_key) != _GROUP_KEY_SIZE:
@@ -53,8 +60,25 @@ def pack_rekey_plaintext(
     return bytes(out)
 
 
+def pack_signed_rekey_plaintext(
+    epoch: int,
+    group_key: bytes,
+    revoked_pubkeys: list[bytes] | frozenset[bytes],
+    signature: bytes,
+) -> bytes:
+    """Core body + Ed25519 signature (64 B) over the core body."""
+    if len(signature) != ED25519_SIGNATURE_SIZE:
+        raise ValueError(f"signature must be {ED25519_SIGNATURE_SIZE} bytes")
+    return pack_rekey_plaintext(epoch, group_key, revoked_pubkeys) + bytes(signature)
+
+
 def unpack_rekey_plaintext(data: bytes) -> dict[str, object]:
-    """Parse REKEY plaintext; raises ValueError on truncation."""
+    """
+    Parse REKEY plaintext (unsigned or signed).
+
+    When a trailing 64-byte signature is present, returns ``signature`` and
+    ``signed_message`` (core body). Unsigned bodies omit those keys.
+    """
     if len(data) < _REKEY_PREFIX.size:
         raise ValueError("rekey plaintext too short")
     epoch, group_key, n_revoked = _REKEY_PREFIX.unpack_from(data, 0)
@@ -66,19 +90,52 @@ def unpack_rekey_plaintext(data: bytes) -> dict[str, object]:
     for _ in range(int(n_revoked)):
         revoked.append(data[off : off + _X25519_PUBLIC_KEY_SIZE])
         off += _X25519_PUBLIC_KEY_SIZE
-    return {
+
+    out: dict[str, object] = {
         "epoch": int(epoch),
         "group_key": bytes(group_key),
         "revoked_pubkeys": revoked,
     }
+    rem = len(data) - need
+    if rem == ED25519_SIGNATURE_SIZE:
+        out["signed_message"] = bytes(data[:need])
+        out["signature"] = bytes(data[need:])
+    elif rem != 0:
+        raise ValueError(
+            f"rekey plaintext trailing bytes unexpected ({rem}; "
+            f"expected 0 or {ED25519_SIGNATURE_SIZE})"
+        )
+    return out
 
 
-def rekey_plaintext_len(n_revoked: int) -> int:
-    """Byte length of ``pack_rekey_plaintext`` for ``n_revoked`` pubkeys."""
+def rekey_plaintext_len(n_revoked: int, *, signed: bool = False) -> int:
+    """Byte length of rekey plaintext for ``n_revoked`` pubkeys (optionally +64 sig)."""
     n = int(n_revoked)
     if n < 0:
         raise ValueError("n_revoked must be >= 0")
-    return _REKEY_PREFIX.size + n * _X25519_PUBLIC_KEY_SIZE
+    base = _REKEY_PREFIX.size + n * _X25519_PUBLIC_KEY_SIZE
+    return base + (ED25519_SIGNATURE_SIZE if signed else 0)
+
+
+def verify_rekey_attestation(
+    body: dict[str, object],
+    *,
+    src_signing_public_key: bytes,
+) -> bool:
+    """True if ``body`` carries a valid Ed25519 signature under ``src_signing_public_key``."""
+    sig = body.get("signature")
+    msg = body.get("signed_message")
+    if not isinstance(sig, (bytes, bytearray)) or not isinstance(msg, (bytes, bytearray)):
+        return False
+    return ed25519_verify(bytes(src_signing_public_key), bytes(msg), bytes(sig))
+
+
+def sender_is_coordinator(
+    src_anon_id: bytes,
+    member_anon_ids: list[bytes],
+) -> bool:
+    """Receiver-side check: ``src`` has the minimum anon_id among known members."""
+    return is_coordinator(src_anon_id, member_anon_ids)
 
 
 def partition_rekey_targets(

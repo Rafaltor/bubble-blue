@@ -62,13 +62,18 @@ def test_hello_private_carries_epoch() -> None:
 
 
 def test_rekey_adoption_via_forwarder() -> None:
-    cfg = replace(load_config(), group_key=b"\x01" * 32, local_bd_addr="AA:BB:CC:DD:EE:01", ttl_max=10)
+    # Group key where ADDR_A is the true min-anon_id coordinator vs ADDR_B.
+    cfg = replace(load_config(), group_key=b"\x08" * 32, local_bd_addr="AA:BB:CC:DD:EE:01", ttl_max=10)
     addr_a, addr_b = "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"
 
     store_a = BBKeyStore.from_group_key(cfg.group_key, addr_a)
     store_b = BBKeyStore.from_group_key(cfg.group_key, addr_b)
-    store_a.register_peer(addr_b, store_b.local_public_key)
-    store_b.register_peer(addr_a, store_a.local_public_key)
+    store_a.register_peer(
+        addr_b, store_b.local_public_key, signing_public_key=store_b.local_signing_public_key
+    )
+    store_b.register_peer(
+        addr_a, store_a.local_public_key, signing_public_key=store_a.local_signing_public_key
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         epoch_a = EpochStore(
@@ -98,6 +103,7 @@ def test_rekey_adoption_via_forwarder() -> None:
                 self.key_store = store
                 self.epoch_store = epoch
                 self._epochs: dict[str, int] = {}
+                self._local = local.upper()
 
             def refresh_cds_role(self, *, verbose: bool = False) -> None:
                 _ = verbose
@@ -110,14 +116,18 @@ def test_rekey_adoption_via_forwarder() -> None:
 
                 return compute_anon_id(cfg.group_key, bd)
 
+            def anon_id_for_or_compute(self, bd: str) -> bytes:
+                return self.anon_id_for(bd)
+
             def get_peer_epoch(self, bd: str) -> int:
                 return self._epochs.get(bd.upper(), 0)
 
             def get_resolved_members(self) -> list[dict[str, str | bytes]]:
-                return []
+                other = addr_b if self._local == addr_a else addr_a
+                return [{"bd_addr": other, "anon_id": self.anon_id_for(other)}]
 
             def is_coordinator(self) -> bool:
-                return True
+                return self._local == addr_a
 
             def set_rekey_catchup(self, _h) -> None:
                 pass
