@@ -23,6 +23,7 @@ from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
 from src.transport.base import ManagedTransport
 from src.transport.factory import make_transport
+from src.transport.le_scan import hci_index_from_interface, mgmt_scan_records
 from src.transport.pairing_agent import PairingAgentSupervisor
 
 LogFn = Callable[[str, bool], None]
@@ -212,10 +213,21 @@ class BBNode:
             self._started = True
 
             if self._cfg.transport_kind == "ble_l2cap":
+                hci_index = hci_index_from_interface(self._interface)
+                scan_log = None if self._quiet else self._dispatch_log
+
+                def _mgmt_records_provider(
+                    window_s: float,
+                    _idx: int = hci_index,
+                    _log=scan_log,
+                ) -> dict:
+                    return mgmt_scan_records(_idx, window_s, log=_log)
+
                 self._presence_scanner = PresenceScanner(
                     quiet=self._quiet,
                     on_candidate=self._on_presence_candidate,
                     idle_check=self._presence_scanner_idle,
+                    records_provider=_mgmt_records_provider,
                 )
                 self._presence_scanner.start()
 

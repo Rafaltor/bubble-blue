@@ -71,6 +71,7 @@ class PresenceScanner:
         scan_runner: Callable[[float], str] | None = None,
         info_runner: Callable[[str], str] | None = None,
         paired_runner: Callable[[], str] | None = None,
+        records_provider: Callable[[float], dict[str, ScanDeviceRecord]] | None = None,
     ) -> None:
         self._scan_window_s = max(0.1, float(scan_window_s))
         self._scan_period_s = max(self._scan_window_s, float(scan_period_s))
@@ -83,6 +84,10 @@ class PresenceScanner:
         self._scan_runner = scan_runner or self._default_scan_runner
         self._info_runner = info_runner or self._default_info_runner
         self._paired_runner = paired_runner or self._default_paired_runner
+        # When set, LE discovery comes straight from MGMT Device Found events
+        # (full EIR, no bluetoothctl). This bypasses the fragile stdout parsing
+        # and the per-device `info` round-robin entirely.
+        self._records_provider = records_provider
         self._lock = threading.RLock()
         self._candidates: dict[str, PresenceCandidate] = {}
         self._negative_cache_until: dict[str, float] = {}
@@ -210,12 +215,19 @@ class PresenceScanner:
                 break
 
     def _scan_pass(self, now_mono: float) -> list[PresenceCandidate]:
-        text = self._scan_runner(self._scan_window_s)
-        records = parse_bluetoothctl_scan_output(
-            text,
-            now_ms=int(now_mono * 1000),
-            log=self._log,
-        )
+        if self._records_provider is not None:
+            try:
+                records = self._records_provider(self._scan_window_s)
+            except Exception as exc:
+                self._log(f"records provider error: {exc}")
+                records = {}
+        else:
+            text = self._scan_runner(self._scan_window_s)
+            records = parse_bluetoothctl_scan_output(
+                text,
+                now_ms=int(now_mono * 1000),
+                log=self._log,
+            )
         found: list[PresenceCandidate] = []
         matched: set[str] = set()
 
@@ -241,6 +253,12 @@ class PresenceScanner:
                             addr_type=old.addr_type,
                             last_seen=now_mono,
                         )
+
+        # MGMT records carry the full EIR: a device that did not match the fast
+        # path is genuinely not a BB node, so skip the bluetoothctl `info`
+        # round-robin (it only exists to compensate for lossy stdout parsing).
+        if self._records_provider is not None:
+            return found
 
         paired = parse_bluetoothctl_devices_output(self._paired_runner())
 
@@ -323,6 +341,8 @@ class PresenceScanner:
         return candidate
 
     def _resolve_addr_type(self, bd_addr: str, record: ScanDeviceRecord) -> str:
+        if record.addr_type:
+            return record.addr_type.lower()
         try:
             info = parse_bluetoothctl_info(self._info_runner(bd_addr), log=self._log)
         except Exception as exc:

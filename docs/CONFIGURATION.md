@@ -11,7 +11,7 @@ Accessible à **tout nœud BB**, indépendamment de `BUBBLE_BLUE_GROUP_KEY` :
 | Mécanisme | Module | Comportement |
 |-----------|--------|--------------|
 | Beacon universel | `src/transport/advertising.py` (`LEAdvertiser`) | AD statique : Flags `0x06` + Manufacturer Data company `0xFFFF`, magic ASCII `BB`, version protocole `0x01` |
-| Scan périodique | `src/control/presence_scanner.py` (`PresenceScanner`) | Scan LE 3 s, filtre candidats BB ; duty cycle adaptatif (15 s actif → 60 s une fois tous les candidats admis connectés) ; courtoisie post-connexion (10 s) |
+| Scan périodique | `src/control/presence_scanner.py` (`PresenceScanner`) + `src/transport/le_scan.py` (`mgmt_scan_records`) | Scan LE 3 s via **socket MGMT** (événements *Device Found* → EIR complet à chaque détection), filtre candidats BB ; duty cycle adaptatif (15 s actif → 60 s une fois tous les candidats admis connectés) ; courtoisie post-connexion (10 s) |
 | Sécurité lien BLE | `src/transport/ble_coc.py` (`apply_le_flowctl`) | `BT_SECURITY_LOW` : CoC ouvert sans chiffrement lien ni pairing (crypto assurée au niveau appli BB) |
 | Agent pairing (dormant) | `src/transport/pairing_agent.py` (`PairingAgentSupervisor`) | NoInputNoOutput / Just Works ; inutilisé en `LOW`, requis seulement si on repasse en `MEDIUM` |
 | Auto-connect | transport L2CAP / `BBNode` | Établissement de liens vers les candidats détectés (sans adresses préconfigurées) |
@@ -225,6 +225,12 @@ BUBBLE-BLUE mitigates this in software:
 | Active discovery period | **15 s** | `scan_period_s` while unknown / unconnected candidates remain |
 | Steady period | **60 s** | `steady_period_s` when every non-quarantined discovered candidate is an admitted active peer (`idle_check` from `BBNode`) |
 | Post-connect courtesy | **10 s** | `defer_next_pass()` after each peer connect — skips the next scan pass if it would fall inside the deferral window (SMP, GATT, first Hello) |
+
+### Découverte via socket MGMT (et non `bluetoothctl scan`)
+
+Le scan LE passe par un **socket de contrôle MGMT** (`src/transport/le_scan.py`, `mgmt_scan_records`), à la manière de `btmgmt find`, et **non** par `bluetoothctl scan le`. Raison : `bluetoothctl` n’imprime `ManufacturerData` que **lorsqu’elle change**. Un beacon BB stable, déjà en cache dans `bluetoothd`, ne ré-émet jamais de ligne `[CHG] ManufacturerData` → il devient invisible au parsing de stdout, et le repli `bluetoothctl info <bd>` par appareil **famine** dans un environnement RF chargé (immeuble plein d’appareils BLE + adresses résolvables tournantes). C’était la cause de l’échec d’auto-découverte qui **obligeait à passer `--topology` à la main**.
+
+L’événement MGMT *Device Found* porte l’**EIR complet à chaque détection**, indépendamment du suivi de changement de `bluetoothd`. Le scanner extrait directement le Manufacturer Data BB (`company 0xFFFF`, magic `BB`) et le type d’adresse, sans aucun `bluetoothctl` : plus de parsing fragile, plus de round-robin `info`, et **`--topology` redevient facultatif** (auto-découverte fiable Arduino ↔ Rubik). Nécessite les privilèges MGMT (root / `CAP_NET_ADMIN`) ; en cas d’échec d’ouverture socket, la fenêtre de scan renvoie un résultat vide (loggé) et le scanner continue.
 
 ### Optional lab tweak (debugfs)
 
