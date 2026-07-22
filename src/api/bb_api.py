@@ -104,6 +104,8 @@ class BBNode:
         self._connect_last_log: dict[str, float] = {}
         self._connect_backoff_until: dict[str, float] = {}
         self._connect_streak: dict[str, int] = {}
+        # One outbound bond attempt per backoff cycle (BLE EPERM / unbonded peer).
+        self._bond_attempted: set[str] = set()
         self._active_peers: set[str] = set()
         self._presence_scanner: PresenceScanner | None = None
         self._discovered_candidates: dict[str, str] = {}
@@ -509,6 +511,7 @@ class BBNode:
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
+                self._bond_attempted.discard(bd)
                 continue
             if now < self._connect_backoff_until.get(bd, 0.0):
                 continue
@@ -516,6 +519,8 @@ class BBNode:
                 continue
             if local >= bd:
                 continue
+            # New attempt window after backoff (or first try): allow one bond.
+            self._bond_attempted.discard(bd)
             addr_type = self._peer_addr_types.get(bd)
             try:
                 if self._cfg and self._cfg.transport_kind == "ble_l2cap":
@@ -525,9 +530,50 @@ class BBNode:
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
+                self._bond_attempted.discard(bd)
             except OSError as e:
+                if (
+                    e.errno == errno.EPERM
+                    and self._cfg is not None
+                    and self._cfg.transport_kind == "ble_l2cap"
+                    and bd not in self._bond_attempted
+                ):
+                    self._bond_attempted.add(bd)
+                    if self._try_auto_bond(bd, addr_type):
+                        try:
+                            self._transport.connect(bd, addr_type=addr_type)
+                            self._connect_last_err.pop(bd, None)
+                            self._connect_backoff_until.pop(bd, None)
+                            self._connect_streak.pop(bd, None)
+                            self._bond_attempted.discard(bd)
+                            continue
+                        except OSError as e2:
+                            e = e2
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
+
+    def _try_auto_bond(self, bd: str, addr_type: str | None) -> bool:
+        """
+        Initiate Just Works bond once (BLE EPERM / no encrypted link).
+
+        Requires PairingAgentSupervisor on *both* boards (NoInputNoOutput).
+        """
+        sup = self._pairing_supervisor
+        self._dispatch_log(f"bond auto tenté avec {bd}")
+        if sup is None or not sup.setup_ok:
+            self._dispatch_log(f"bond auto échoué {bd}")
+            return False
+        try:
+            ok = bool(sup.ensure_bonded(bd, addr_type))
+        except Exception as exc:  # noqa: BLE001 — never break connect loop
+            self._dispatch_log(f"bond auto échoué {bd}")
+            self._dispatch_log(f"bond auto error {bd}: {exc}")
+            return False
+        if ok:
+            self._dispatch_log(f"bond auto réussi {bd}")
+            return True
+        self._dispatch_log(f"bond auto échoué {bd}")
+        return False
 
     def _backoff_after_connect_fail(self, bd: str, e: OSError) -> None:
         if e.errno not in (
@@ -539,12 +585,15 @@ class BBNode:
             errno.ECONNRESET,
             errno.EINPROGRESS,
             errno.EALREADY,
+            errno.EPERM,  # BLE L2CAP CoC to an unbonded peer (no encrypted link)
         ):
             return
         key = f"{e.errno}"
         streak = self._connect_streak.get(bd, 0) + 1 if self._connect_last_err.get(bd) == key else 1
         self._connect_streak[bd] = streak
-        self._connect_backoff_until[bd] = time.monotonic() + min(60.0, 4.0 * streak)
+        # Unbonded peer (EPERM) will not become connectable until bonded — back off harder.
+        base_s = 10.0 if e.errno == errno.EPERM else 4.0
+        self._connect_backoff_until[bd] = time.monotonic() + min(60.0, base_s * streak)
 
     def _log_connect_failure(self, bd: str, e: OSError) -> None:
         key = f"{e.errno}"

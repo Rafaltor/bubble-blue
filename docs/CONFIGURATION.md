@@ -239,3 +239,21 @@ Requires debugfs mounted; replace `hci0` with your interface. This is **optional
 ### Pairing agent (Just Works)
 
 `PairingAgentSupervisor` keeps an interactive `bluetoothctl` with verified `NoInputNoOutput` default agent. **Do not** fire-and-forget `agent NoInputNoOutput` after `bluetoothctl` starts — it auto-registers `KeyboardDisplay` and silently rejects a later NoInputNoOutput, leading to numeric-comparison MITM and ~20 s disconnects (Reason **0x13**). Sequence: `agent off` → `agent NoInputNoOutput` → `default-agent` → `pairable on`.
+
+### Bond automatique Just Works
+
+Quand une board BLE découvre un pair BB **non-bondé**, l’ouverture du L2CAP CoC échoue avec `EPERM` (pas de lien chiffré). `BBNode` tente alors un bond Just Works via `PairingAgentSupervisor.ensure_bonded` (`info` → `pair`), puis retente le connect.
+
+**Conditions obligatoires (sinon SMP demande un passkey) :**
+
+1. **Les DEUX boards** doivent avoir `PairingAgentSupervisor` actif **avant** toute tentative de connexion / bond auto. Just Works n’est choisi que si **les deux** côtés déclarent `NoInputNoOutput`.
+2. **Aucun `bluetoothctl` manuel** ne doit rester ouvert sur une board. Un shell interactif réenregistre `KeyboardDisplay` comme agent par défaut et casse le Just Works (négociation → numeric comparison).
+3. Au démarrage le supervisor logue un avertissement s’il détecte d’autres PID `bluetoothctl`, et appelle `verify_just_works_capability()` (marqueurs `Agent registered` / `Default agent request successful` + absence de concurrent + probe D-Bus `org.bluez.AgentManager1`).
+
+**Symptôme d’échec typique :**
+
+```bash
+journalctl -u bluetooth -b | grep -E 'device_confirm_passkey|Failed requesting authentication'
+```
+
+Si vous voyez `device_confirm_passkey` / `Failed requesting authentication`, un côté n’est **pas** en NoInputNoOutput (agent concurrent ou peer sans supervisor). Fermez tout `bluetoothctl` manuel, redémarrez les deux nodes BB, vérifiez les logs `[PAIRING] Just Works capability: CONFIRMED`.
