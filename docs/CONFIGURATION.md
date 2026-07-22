@@ -12,7 +12,8 @@ Accessible à **tout nœud BB**, indépendamment de `BUBBLE_BLUE_GROUP_KEY` :
 |-----------|--------|--------------|
 | Beacon universel | `src/transport/advertising.py` (`LEAdvertiser`) | AD statique : Flags `0x06` + Manufacturer Data company `0xFFFF`, magic ASCII `BB`, version protocole `0x01` |
 | Scan périodique | `src/control/presence_scanner.py` (`PresenceScanner`) | Scan LE 3 s, filtre candidats BB ; duty cycle adaptatif (15 s actif → 60 s une fois tous les candidats admis connectés) ; courtoisie post-connexion (10 s) |
-| Agent pairing | `src/transport/pairing_agent.py` (`PairingAgentSupervisor`) | `agent off` puis NoInputNoOutput (Just Works, évite MITM numérique ~20 s / Reason 0x13) |
+| Sécurité lien BLE | `src/transport/ble_coc.py` (`apply_le_flowctl`) | `BT_SECURITY_LOW` : CoC ouvert sans chiffrement lien ni pairing (crypto assurée au niveau appli BB) |
+| Agent pairing (dormant) | `src/transport/pairing_agent.py` (`PairingAgentSupervisor`) | NoInputNoOutput / Just Works ; inutilisé en `LOW`, requis seulement si on repasse en `MEDIUM` |
 | Auto-connect | transport L2CAP / `BBNode` | Établissement de liens vers les candidats détectés (sans adresses préconfigurées) |
 | Hellos publics | `src/control/hello.py` | Partie publique lisible par tous ; anon_ids appris sur le fil (cross-group) |
 | CDS / RELAY | `src/control/hello_manager.py`, `src/forwarding/cds.py` | Élection RELAY/LEAF sur la topologie anonyme ; forward **opaque** des `PKT_DATA` |
@@ -240,20 +241,29 @@ Requires debugfs mounted; replace `hci0` with your interface. This is **optional
 
 `PairingAgentSupervisor` keeps an interactive `bluetoothctl` with verified `NoInputNoOutput` default agent. **Do not** fire-and-forget `agent NoInputNoOutput` after `bluetoothctl` starts — it auto-registers `KeyboardDisplay` and silently rejects a later NoInputNoOutput, leading to numeric-comparison MITM and ~20 s disconnects (Reason **0x13**). Sequence: `agent off` → `agent NoInputNoOutput` → `default-agent` → `pairable on`.
 
-### Bond automatique Just Works
+### Sécurité du lien BLE : `BT_SECURITY_LOW` (pas de pairing)
 
-Quand une board BLE découvre un pair BB **non-bondé**, l’ouverture du L2CAP CoC échoue avec `EPERM` (pas de lien chiffré). `BBNode` tente alors un bond Just Works via `PairingAgentSupervisor.ensure_bonded` (`info` → `pair`), puis retente le connect.
+Le CoC L2CAP est ouvert en **`BT_SECURITY_LOW`** (aucun chiffrement au niveau du lien), voir `apply_le_flowctl` dans `src/transport/ble_coc.py`. **Aucun pairing / bonding n’est requis** : la confidentialité et l’intégrité sont assurées par la couche applicative BB (AES-256-GCM par paquet, clés pairwise X25519, clé de groupe, attestations Ed25519). Le chiffrement du lien BlueZ serait redondant.
 
-**Conditions obligatoires (sinon SMP demande un passkey) :**
+**Conséquences (le comportement voulu pour un chat de groupe) :**
+
+- Un nouveau membre rejoint le mesh **sans intervention manuelle** ; le CoC s’ouvre nu dès la découverte.
+- Plus d’échec `EPERM` sur pair non-bondé, donc plus de boucle connect/déconnect liée au (re-)pairing SMP (Reason **0x13** / `device_confirm_passkey`).
+
+**Arbitrage (métadonnées) :** en `LOW`, un sniffer BLE passif à portée peut lire le **header de routing en clair** (type de paquet, `src`/`dst`, `seq`, `ts`). Le contenu (payloads + partie privée des Hello) reste chiffré AES-GCM, et toute trame forgée/altérée est rejetée par le tag GCM — cohérent avec les lignes « outsider » de la table d’adversaire.
+
+> Pour rétablir le chiffrement du lien (au prix d’un bonding préalable), repasser `sec_low` → `sec_medium` dans `apply_le_flowctl`.
+
+### Bond automatique Just Works (dormant, hérité)
+
+`PairingAgentSupervisor.ensure_bonded` et le chemin d’auto-bond sur `EPERM` dans `BBNode` restent en place mais **ne se déclenchent plus** en `BT_SECURITY_LOW` (aucun `EPERM` n’est levé). Ils ne redeviennent utiles que si vous repassez le lien en `MEDIUM`. Dans ce cas :
 
 1. **Les DEUX boards** doivent avoir `PairingAgentSupervisor` actif **avant** toute tentative de connexion / bond auto. Just Works n’est choisi que si **les deux** côtés déclarent `NoInputNoOutput`.
-2. **Aucun `bluetoothctl` manuel** ne doit rester ouvert sur une board. Un shell interactif réenregistre `KeyboardDisplay` comme agent par défaut et casse le Just Works (négociation → numeric comparison).
-3. Au démarrage le supervisor logue un avertissement s’il détecte d’autres PID `bluetoothctl`, et appelle `verify_just_works_capability()` (marqueurs `Agent registered` / `Default agent request successful` + absence de concurrent + probe D-Bus `org.bluez.AgentManager1`).
+2. **Aucun `bluetoothctl` manuel** ne doit rester ouvert (réenregistre `KeyboardDisplay` → numeric comparison).
+3. Au démarrage le supervisor logue un avertissement s’il détecte d’autres PID `bluetoothctl` et appelle `verify_just_works_capability()`.
 
-**Symptôme d’échec typique :**
+Diagnostic (mode `MEDIUM` uniquement) :
 
 ```bash
 journalctl -u bluetooth -b | grep -E 'device_confirm_passkey|Failed requesting authentication'
 ```
-
-Si vous voyez `device_confirm_passkey` / `Failed requesting authentication`, un côté n’est **pas** en NoInputNoOutput (agent concurrent ou peer sans supervisor). Fermez tout `bluetoothctl` manuel, redémarrez les deux nodes BB, vérifiez les logs `[PAIRING] Just Works capability: CONFIRMED`.

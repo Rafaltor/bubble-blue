@@ -4,8 +4,12 @@ Shared BlueZ LE L2CAP CoC socket setup.
 Used by ``coc_client.py``, ``coc_server.py``, and ``BLEL2CAPTransport`` so every
 board (Rubik Pi, Arduino UNO Q, …) runs the **same** bring-up sequence:
 
-  listen : bind(BDADDR_ANY, psm) → BT_MODE_LE_FLOWCTL → BT_SECURITY → listen
-  outbound: bind(BDADDR_ANY, psm=0) → BT_MODE_LE_FLOWCTL → BT_SECURITY → connect
+  listen : bind(BDADDR_ANY, psm) → BT_MODE_LE_FLOWCTL → BT_SECURITY_LOW → listen
+  outbound: bind(BDADDR_ANY, psm=0) → BT_MODE_LE_FLOWCTL → BT_SECURITY_LOW → connect
+
+Security is LOW (no link-layer encryption): BB encrypts everything at the
+application layer, so no SMP pairing/bonding is required to open the CoC.
+See ``apply_le_flowctl`` for the full rationale and trade-off.
 """
 
 from __future__ import annotations
@@ -64,17 +68,35 @@ def new_socket() -> socket.socket:
 
 
 def apply_le_flowctl(sock: socket.socket) -> None:
-    """After LE bind: assert LE_FLOWCTL + MEDIUM security (matches coc_* scripts)."""
+    """After LE bind: assert LE_FLOWCTL + LOW security.
+
+    We deliberately use ``BT_SECURITY_LOW`` (no link-layer encryption) rather
+    than ``MEDIUM``. Bubble-Blue provides its own confidentiality and integrity
+    at the application layer (per-packet AES-256-GCM, X25519 pairwise keys,
+    group key, Ed25519 attestations), so BlueZ link encryption is redundant.
+
+    Requiring ``MEDIUM`` would force SMP pairing/bonding on every unicast peer,
+    which (a) makes the group mesh depend on manual pre-bonding and (b) is the
+    root cause of the connect/disconnect flapping: unbonded peers fail with
+    ``EPERM`` and SMP re-pairing between many boards falls back to passkey and
+    tears the link down (HCI reason 0x13). ``LOW`` lets the CoC open bare so the
+    mesh self-completes as members appear.
+
+    Trade-off: a co-located passive sniffer can observe the cleartext routing
+    header (packet type, src/dst, seq, ts). Payloads and Hello private parts
+    stay AES-GCM encrypted, and forged/tampered frames are rejected by the GCM
+    tag — consistent with BB's "outsider" adversary rows.
+    """
     bt_mode = getattr(socket, "BT_MODE", None)
     le_flowctl = getattr(socket, "BT_MODE_LE_FLOWCTL", None)
     if bt_mode is not None and le_flowctl is not None:
         sock.setsockopt(socket.SOL_BLUETOOTH, bt_mode, struct.pack("B", le_flowctl))
 
     bt_security = getattr(socket, "BT_SECURITY", None)
-    sec_medium = getattr(socket, "BT_SECURITY_MEDIUM", None)
-    if bt_security is not None and sec_medium is not None:
+    sec_low = getattr(socket, "BT_SECURITY_LOW", None)
+    if bt_security is not None and sec_low is not None:
         sock.setsockopt(
-            socket.SOL_BLUETOOTH, bt_security, struct.pack("BB", sec_medium, 0)
+            socket.SOL_BLUETOOTH, bt_security, struct.pack("BB", sec_low, 0)
         )
 
 

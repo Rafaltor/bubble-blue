@@ -8,8 +8,9 @@ Differences from BT Classic ``l2cap.py``:
   1. ``SOCK_SEQPACKET`` + 4-tuple LE address ``(bd, psm, cid, bdaddr_type)``
   2. ``PSM_BLE`` (0x0081) from config — LE CoC listen PSM
   3. BlueZ LE CoC bring-up (``coc_server`` / ``coc_client``): bind LE first,
-     then ``BT_MODE_LE_FLOWCTL`` + ``BT_SECURITY_MEDIUM``; outbound uses
-     ``bind(BDADDR_ANY, psm=0)`` before ``connect``
+     then ``BT_MODE_LE_FLOWCTL`` + ``BT_SECURITY_LOW`` (no link encryption —
+     BB secures the payload at the app layer, so no SMP bonding is needed);
+     outbound uses ``bind(BDADDR_ANY, psm=0)`` before ``connect``
   4. Negotiated MTU (target ``MTU_BLE`` = 512), exposed as ``self.mtu``
   5. Optional fragmentation (``fragmentation.py``) only when wire size > MTU
 
