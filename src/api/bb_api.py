@@ -22,7 +22,12 @@ from src.control.presence_scanner import PresenceScanner
 from src.forwarding.forwarder import LogCallback, OnMessageCallback, PacketForwarder
 from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
+from src.transport.advertising import (
+    BB_BEACON_COMPANY_ID,
+    parse_presence_manufacturer_value,
+)
 from src.transport.base import ManagedTransport
+from src.transport.dbus_advertiser import DBusLEAdvertiser
 from src.transport.factory import make_transport
 from src.transport.le_scan import MgmtLEScanner, hci_index_from_interface
 from src.transport.pairing_agent import PairingAgentSupervisor
@@ -111,6 +116,12 @@ class BBNode:
         self._active_peers: set[str] = set()
         self._presence_scanner: PresenceScanner | None = None
         self._le_scanner: MgmtLEScanner | None = None
+        # Connectionless presence plane (public Hello broadcast + ingest).
+        self._dbus_advertiser: DBusLEAdvertiser | None = None
+        self._presence_stop = threading.Event()
+        self._presence_thread: threading.Thread | None = None
+        # anon_id (hex) -> (bd_addr, addr_type) learned from heard presence Hellos.
+        self._presence_addr: dict[str, tuple[str, str]] = {}
         self._discovered_candidates: dict[str, str] = {}
         self._peer_addr_types: dict[str, str] = {}
         self._peer_admission_deadline: dict[str, float] = {}
@@ -231,6 +242,7 @@ class BBNode:
                     steady_period_s=4.0,
                 )
                 self._presence_scanner.start()
+                self._start_presence_plane(hello)
 
             self._active_peers = {p.upper() for p in transport.connections()}
             self._connect_peers()
@@ -244,6 +256,7 @@ class BBNode:
 
     def stop(self) -> None:
         self._connect_stop.set()
+        self._stop_presence_plane()
         with self._lock:
             if self._presence_scanner is not None:
                 self._presence_scanner.stop()
@@ -271,6 +284,84 @@ class BBNode:
             self._pairing_supervisor.stop()
             self._pairing_supervisor = None
 
+    def _start_presence_plane(self, hello: HelloManager) -> None:
+        """
+        Bring up the connectionless presence plane for BLE L2CAP.
+
+        Elects the CDS backbone from over-the-air public Hellos (no link needed),
+        broadcasts our own public Hello via Extended Advertising (bluetoothd
+        D-Bus), and ingests peers' Hellos from the MGMT scan snapshot. If the
+        D-Bus advertiser is unavailable we still ingest (read-only awareness).
+        """
+        hello.enable_connectionless_topology()
+        hci_index = hci_index_from_interface(self._interface)
+        if DBusLEAdvertiser.available():
+            try:
+                adv = DBusLEAdvertiser(
+                    interface=hci_index,
+                    company_id=BB_BEACON_COMPANY_ID,
+                    value=hello.build_local_presence_value(),
+                    log=(lambda m: None) if self._quiet else self._dispatch_log,
+                )
+                adv.start()
+                self._dbus_advertiser = adv
+            except Exception as e:  # noqa: BLE001
+                self._dispatch_log(f"presence advertiser unavailable: {e!r}")
+                self._dbus_advertiser = None
+        else:
+            self._dispatch_log(
+                "dbus-fast missing: presence broadcast off (ingest still active)"
+            )
+        self._presence_stop.clear()
+        self._presence_thread = threading.Thread(
+            target=self._presence_loop, name="bb-presence", daemon=True
+        )
+        self._presence_thread.start()
+
+    def _stop_presence_plane(self) -> None:
+        self._presence_stop.set()
+        thread = self._presence_thread
+        if thread is not None:
+            thread.join(timeout=3.0)
+            self._presence_thread = None
+        if self._dbus_advertiser is not None:
+            self._dbus_advertiser.stop()
+            self._dbus_advertiser = None
+        self._presence_addr.clear()
+
+    def _presence_loop(self) -> None:
+        # Jittered so independently-booted nodes don't refresh in lockstep.
+        while not self._presence_stop.wait(2.0 + random.uniform(0.0, 1.0)):
+            try:
+                self._ingest_presence_from_scan()
+                adv = self._dbus_advertiser
+                hello = self._hello_mgr
+                if adv is not None and hello is not None:
+                    adv.update(hello.build_local_presence_value())
+            except Exception as e:  # noqa: BLE001
+                self._dispatch_log(f"presence loop: {e}")
+
+    def _ingest_presence_from_scan(self) -> None:
+        """Parse public Hellos from the scan snapshot into the connectionless table."""
+        scanner = self._le_scanner
+        hello = self._hello_mgr
+        if scanner is None or hello is None:
+            return
+        for bd, rec in scanner.snapshot().items():
+            value = rec.manufacturer_data.get(BB_BEACON_COMPANY_ID)
+            if value is None:
+                continue
+            parsed = parse_presence_manufacturer_value(value)
+            if parsed is None:
+                continue
+            hello.ingest_public_hello(
+                parsed["anon_id"], parsed["seq"], parsed["neighbors"], parsed["mpr"]
+            )
+            self._presence_addr[parsed["anon_id"].hex()] = (
+                bd.upper(),
+                rec.addr_type or "",
+            )
+
     def _presence_scanner_idle(self) -> bool:
         """True when every non-quarantined discovered candidate is an admitted active peer."""
         with self._lock:
@@ -287,6 +378,7 @@ class BBNode:
 
     def mute(self) -> None:
         """Stop presence scan and LE advertising (beacon); L2CAP links stay up."""
+        self._stop_presence_plane()
         with self._lock:
             if self._presence_scanner is not None:
                 self._presence_scanner.stop()

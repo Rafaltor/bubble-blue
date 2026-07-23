@@ -58,6 +58,14 @@ class HelloManager:
         self._learned_anon_ids: dict[str, bytes] = {}
         self._rekey_catchup: Callable[[str], None] | None = None
 
+        # Connectionless presence plane: anon_ids whose public Hello we heard
+        # over the air (broadcast), independent of any L2CAP link. When enabled,
+        # the CDS election runs on this heard set instead of transport peers.
+        self._connectionless = False
+        self._heard_ttl_s = max(1.0, float(cfg.neighbor_timeout_s))
+        self._heard: dict[bytes, float] = {}
+        self._heard_lock = threading.Lock()
+
         self.anon_id = compute_anon_id(self._bootstrap_key, self._local_bd)
         self.table = NeighborTable()
         self.table.resolve_member(
@@ -222,11 +230,19 @@ class HelloManager:
         )
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
-        """Recompute RELAY/LEAF from current L2CAP peers and Hello tables."""
+        """
+        Recompute RELAY/LEAF from the current neighbor set and Hello tables.
+
+        In connectionless mode the symmetric-neighbor set comes from public Hellos
+        heard over the air (:meth:`heard_anon_ids`) — the CDS backbone is elected
+        WITHOUT needing an L2CAP link to every neighbor. Otherwise it falls back to
+        ``transport.connections()`` (legacy link-driven election).
+        """
+        peers = self.heard_anon_ids() if self._connectionless else self._l2cap_peer_anon_ids()
         self._is_cds = am_i_cds(
             self.anon_id,
             self.table,
-            self._l2cap_peer_anon_ids(),
+            peers,
             algorithm=self._cds_algorithm,
         )
         if verbose:
@@ -239,6 +255,82 @@ class HelloManager:
         """Switch CDS election strategy and recompute the local relay role."""
         self._cds_algorithm = algorithm
         self.refresh_cds_role(verbose=False)
+
+    # ------------------------------------------------------------------
+    # Connectionless presence plane (public Hello broadcast via advertising)
+    # ------------------------------------------------------------------
+    def enable_connectionless_topology(self, *, ttl_s: float | None = None) -> None:
+        """
+        Elect the CDS backbone from over-the-air public Hellos, not L2CAP links.
+
+        Once enabled, :meth:`ingest_public_hello` feeds the neighbor table from
+        broadcast Hellos and :meth:`refresh_cds_role` uses the heard set — so a
+        node knows who is around and whether it is a relay before opening any link.
+        """
+        self._connectionless = True
+        if ttl_s is not None:
+            self._heard_ttl_s = max(1.0, float(ttl_s))
+
+    def ingest_public_hello(
+        self,
+        anon_id: bytes,
+        seq: int,
+        neighbor_anon_ids: list[bytes],
+        mpr_anon_ids: list[bytes] | None = None,
+    ) -> None:
+        """
+        Ingest a public Hello heard over the air (no L2CAP link, no private part).
+
+        Updates the neighbor/topology tables (advertised 1-hop lists + MPR set)
+        and marks the sender as currently heard, then refreshes the relay role.
+        Ignores our own broadcast.
+        """
+        aid = bytes(anon_id)
+        if aid == self.anon_id:
+            return
+        ts_ms = time.time_ns() // 1_000_000
+        parsed_public = {
+            "anon_id": aid,
+            "ts_ms": ts_ms,
+            "seq": int(seq),
+            "neighbor_anon_ids": [bytes(a) for a in neighbor_anon_ids],
+            "mpr_anon_ids": [bytes(a) for a in (mpr_anon_ids or [])],
+        }
+        self.table.update_from_hello(parsed_public, None)
+        with self._heard_lock:
+            self._heard[aid] = time.monotonic()
+        self.refresh_cds_role(verbose=not self._quiet)
+
+    def heard_anon_ids(self) -> frozenset[bytes]:
+        """anon_ids whose public Hello was heard within the TTL (excludes self)."""
+        now = time.monotonic()
+        with self._heard_lock:
+            fresh = {
+                aid
+                for aid, ts in self._heard.items()
+                if now - ts <= self._heard_ttl_s and aid != self.anon_id
+            }
+            # Opportunistically drop stale entries so the set stays bounded.
+            self._heard = {aid: ts for aid, ts in self._heard.items() if now - ts <= self._heard_ttl_s}
+        return frozenset(fresh)
+
+    def build_local_presence_value(self) -> bytes:
+        """
+        Build the Manufacturer Specific Data VALUE for our own public Hello.
+
+        Advertises our anon_id, a fresh sequence number, our currently-heard
+        symmetric neighbors and the MPR set we elect over them — everything a
+        peer needs to place us in the mesh graph without connecting.
+        """
+        from src.transport.advertising import build_presence_manufacturer_value
+
+        heard = self.heard_anon_ids()
+        neighbors = sorted(heard)
+        mpr = {bytes(a) for a in compute_local_mpr(self.table, self.anon_id)} & set(heard)
+        seq = self._next_seq()
+        return build_presence_manufacturer_value(
+            self.anon_id, seq, neighbors, sorted(mpr)
+        )
 
     def _known_neighbor_pairs(self) -> list[tuple[bytes, str]]:
         """

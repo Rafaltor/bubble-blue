@@ -13,8 +13,10 @@ watchdog — there is no separate "silent but running" state.
 from __future__ import annotations
 
 import re
+import struct
 import subprocess
 import threading
+from collections.abc import Iterable
 from typing import Callable
 
 # ASCII magic in Manufacturer Specific Data — reusable by scanners.
@@ -53,6 +55,117 @@ def build_bb_beacon_adv_data() -> bytes:
 def bb_beacon_ad_hex() -> str:
     """Hex string for ``btmgmt add-adv -d <hex>`` (Manufacturer data only)."""
     return BB_BEACON_ADV_DATA.hex()
+
+
+# ---------------------------------------------------------------------------
+# Connectionless public Hello carried in Manufacturer Specific Data.
+#
+# Broadcasting the public Hello (anon_id + advertised 1-hop neighbors + MPR set)
+# lets every node build the mesh topology and run the CDS election WITHOUT any
+# L2CAP connection — presence is learned from the air, exactly like the beacon.
+# The payload exceeds the 31-byte legacy AD limit, so it is emitted via bluetoothd
+# Extended Advertising (see :class:`~src.transport.dbus_advertiser.DBusLEAdvertiser`).
+#
+# Layout of the manufacturer VALUE (the bytes AFTER the 2-byte company id, i.e.
+# what ``parse_eir_manufacturer`` returns for company 0xFFFF):
+#   BB_BEACON_MAGIC            (2)  b"BB"   ] identical to the plain beacon, so
+#   BB_BEACON_PROTOCOL_VERSION (1)  0x01    ] match_bb_beacon_in_ad still matches
+#   PRESENCE_FORMAT_VERSION    (1)  0x01    -> presence extension marker
+#   anon_id                    (8)
+#   seq                        (4, big-endian)
+#   n_neighbors                (1)
+#   neighbor_anon_ids          (8 * n_neighbors)
+#   n_mpr                      (1)
+#   mpr_anon_ids               (8 * n_mpr)
+# ---------------------------------------------------------------------------
+ANON_ID_SIZE = 8
+PRESENCE_FORMAT_VERSION = 0x01
+_PRESENCE_PREFIX = BB_BEACON_MAGIC + bytes([BB_BEACON_PROTOCOL_VERSION, PRESENCE_FORMAT_VERSION])
+# Max manufacturer VALUE the controller accepts, leaving room for the company id
+# (2) + the AD length/type (2) inside the 251-byte extended AD budget.
+_MAX_PRESENCE_VALUE_LEN = 247
+
+
+def _coerce_anon_id(anon_id: bytes) -> bytes:
+    b = bytes(anon_id)
+    if len(b) != ANON_ID_SIZE:
+        raise ValueError(f"anon_id must be {ANON_ID_SIZE} bytes, got {len(b)}")
+    return b
+
+
+def build_presence_manufacturer_value(
+    anon_id: bytes,
+    seq: int,
+    neighbor_anon_ids: Iterable[bytes],
+    mpr_anon_ids: Iterable[bytes] = (),
+) -> bytes:
+    """
+    Encode a public Hello into the Manufacturer Specific Data VALUE (company 0xFFFF).
+
+    Neighbor and MPR lists are truncated (neighbors first) so the value stays within
+    the extended-advertising budget; callers should pass the most relevant neighbors
+    first. anon_ids must be 8 bytes each.
+    """
+    local = _coerce_anon_id(anon_id)
+    if not (0 <= int(seq) <= 0xFFFFFFFF):
+        raise ValueError("seq must fit in uint32")
+    neighbors = [_coerce_anon_id(a) for a in neighbor_anon_ids]
+    mprs = [_coerce_anon_id(a) for a in mpr_anon_ids]
+
+    head = _PRESENCE_PREFIX + local + struct.pack("!L", int(seq))
+
+    def _assemble(nbrs: list[bytes], mp: list[bytes]) -> bytes:
+        out = head + bytes([len(nbrs)])
+        for a in nbrs:
+            out += a
+        out += bytes([len(mp)])
+        for a in mp:
+            out += a
+        return out
+
+    value = _assemble(neighbors, mprs)
+    # Drop MPRs first, then neighbors, until the value fits the controller budget.
+    while len(value) > _MAX_PRESENCE_VALUE_LEN and mprs:
+        mprs.pop()
+        value = _assemble(neighbors, mprs)
+    while len(value) > _MAX_PRESENCE_VALUE_LEN and neighbors:
+        neighbors.pop()
+        value = _assemble(neighbors, mprs)
+    return value
+
+
+def parse_presence_manufacturer_value(value: bytes) -> dict | None:
+    """
+    Decode a presence Hello from a Manufacturer VALUE (company 0xFFFF payload).
+
+    Returns ``{"anon_id", "seq", "neighbors": [8b...], "mpr": [8b...]}`` or ``None``
+    if the value is a plain beacon / not a well-formed presence Hello. Never raises
+    on malformed input — unknown or truncated payloads simply yield ``None`` so the
+    scanner can keep polling untrusted air data.
+    """
+    if len(value) < len(_PRESENCE_PREFIX):
+        return None
+    if value[: len(_PRESENCE_PREFIX)] != _PRESENCE_PREFIX:
+        return None
+    off = len(_PRESENCE_PREFIX)
+    if len(value) < off + ANON_ID_SIZE + 4 + 1:
+        return None
+    anon_id = value[off : off + ANON_ID_SIZE]
+    off += ANON_ID_SIZE
+    (seq,) = struct.unpack_from("!L", value, off)
+    off += 4
+    n = value[off]
+    off += 1
+    if len(value) < off + n * ANON_ID_SIZE + 1:
+        return None
+    neighbors = [value[off + i * ANON_ID_SIZE : off + (i + 1) * ANON_ID_SIZE] for i in range(n)]
+    off += n * ANON_ID_SIZE
+    m = value[off]
+    off += 1
+    if len(value) < off + m * ANON_ID_SIZE:
+        return None
+    mprs = [value[off + i * ANON_ID_SIZE : off + (i + 1) * ANON_ID_SIZE] for i in range(m)]
+    return {"anon_id": bytes(anon_id), "seq": int(seq), "neighbors": neighbors, "mpr": mprs}
 
 
 def match_bb_beacon_manufacturer_data(data: bytes) -> bool:

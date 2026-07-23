@@ -11,14 +11,17 @@ if _ROOT not in sys.path:
 from src.transport.advertising import (  # noqa: E402
     BB_BEACON_AD,
     BB_BEACON_ADV_DATA,
+    BB_BEACON_COMPANY_ID,
     BB_BEACON_MAGIC,
     BB_BEACON_PROTOCOL_VERSION,
     LEAdvertiser,
     bb_beacon_ad_hex,
     build_bb_beacon_ad,
     build_bb_beacon_adv_data,
+    build_presence_manufacturer_value,
     match_bb_beacon_in_ad,
     match_bb_beacon_manufacturer_data,
+    parse_presence_manufacturer_value,
 )
 
 # TODO: recaler ces fixtures sur la sortie capturée des boards (btmgmt advinfo / info).
@@ -84,6 +87,53 @@ def test_match_bb_beacon_in_ad() -> None:
     assert match_bb_beacon_in_ad(prefixed)
     assert not match_bb_beacon_in_ad(b"\x02\x01\x06")
     assert not match_bb_beacon_in_ad(bytes.fromhex("0606FFFF424201"))
+
+
+def _mfg_ad_structure(value: bytes) -> bytes:
+    """Wrap a manufacturer VALUE into a full AD structure (len, type 0xFF, company, value)."""
+    payload = BB_BEACON_COMPANY_ID.to_bytes(2, "little") + value
+    return bytes([1 + len(payload), 0xFF]) + payload
+
+
+def test_presence_value_roundtrip() -> None:
+    anon = bytes(range(8))
+    nbrs = [bytes([i]) * 8 for i in range(1, 4)]
+    mpr = [bytes([9]) * 8]
+    value = build_presence_manufacturer_value(anon, 42, nbrs, mpr)
+    # The presence value keeps the plain-beacon prefix so discovery still matches.
+    assert value[:3] == BB_BEACON_MAGIC + bytes([BB_BEACON_PROTOCOL_VERSION])
+    assert match_bb_beacon_manufacturer_data(value)
+    assert match_bb_beacon_in_ad(_mfg_ad_structure(value))
+
+    parsed = parse_presence_manufacturer_value(value)
+    assert parsed is not None
+    assert parsed["anon_id"] == anon
+    assert parsed["seq"] == 42
+    assert parsed["neighbors"] == nbrs
+    assert parsed["mpr"] == mpr
+
+
+def test_presence_value_truncates_to_budget() -> None:
+    anon = bytes(range(8))
+    nbrs = [bytes([i % 256]) * 8 for i in range(60)]  # 60 * 8 = 480 bytes > budget
+    mpr = [bytes([7]) * 8 for _ in range(5)]
+    value = build_presence_manufacturer_value(anon, 1, nbrs, mpr)
+    assert len(value) <= 247
+    parsed = parse_presence_manufacturer_value(value)
+    assert parsed is not None
+    assert parsed["anon_id"] == anon
+    # Neighbors are kept (prefix), MPRs dropped first under pressure.
+    assert 0 < len(parsed["neighbors"]) <= len(nbrs)
+    assert parsed["neighbors"] == nbrs[: len(parsed["neighbors"])]
+
+
+def test_presence_parse_rejects_plain_beacon_and_garbage() -> None:
+    assert parse_presence_manufacturer_value(BB_BEACON_MAGIC + b"\x01") is None
+    assert parse_presence_manufacturer_value(b"\x00\x01\x02") is None
+    assert parse_presence_manufacturer_value(b"") is None
+    # Truncated presence (claims neighbors it does not carry) → None, never raises.
+    truncated = BB_BEACON_MAGIC + bytes([0x01, 0x01]) + bytes(8) + b"\x00\x00\x00\x01" + bytes([5])
+    assert parse_presence_manufacturer_value(truncated) is None
 
 
 def test_instance_present_advinfo_and_info_fallback() -> None:
