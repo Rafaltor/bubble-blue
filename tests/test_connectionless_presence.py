@@ -86,6 +86,30 @@ def test_ignores_our_own_broadcast() -> None:
     assert mgr.heard_anon_ids() == frozenset()
 
 
+def test_link_plan_relay_dials_no_leaves() -> None:
+    # B (middle of a line A-B-C) hears A and C, each a non-relay listing only B.
+    b = _make_manager(_X)
+    x, y, z = b.anon_id, compute_anon_id(_GK, _Y), compute_anon_id(_GK, _Z)
+    b.ingest_public_hello(y, 1, [x], [], is_relay=False)
+    b.ingest_public_hello(z, 1, [x], [], is_relay=False)
+    plan = b.connectionless_link_plan()
+    assert plan["am_relay"] is True
+    assert plan["sym"] == {y, z}
+    # A relay never dials leaves; leaves dial it.
+    assert plan["relays"] == set()
+
+
+def test_link_plan_leaf_targets_relay_dominator() -> None:
+    # A (leaf) hears B which advertises itself as a relay and lists A and C.
+    a = _make_manager(_X)
+    x, y, z = a.anon_id, compute_anon_id(_GK, _Y), compute_anon_id(_GK, _Z)
+    a.ingest_public_hello(y, 1, [x, z], [], is_relay=True)
+    plan = a.connectionless_link_plan()
+    assert plan["am_relay"] is False
+    assert plan["sym"] == {y}
+    assert plan["relays"] == {y}
+
+
 if __name__ == "__main__":
     test_relay_elected_without_any_l2cap_link()
     print("✅ relay elected with zero L2CAP links")
@@ -95,4 +119,8 @@ if __name__ == "__main__":
     print("✅ local presence value round-trips heard neighbors")
     test_ignores_our_own_broadcast()
     print("✅ ignores our own broadcast")
+    test_link_plan_relay_dials_no_leaves()
+    print("✅ relay link plan dials no leaves")
+    test_link_plan_leaf_targets_relay_dominator()
+    print("✅ leaf link plan targets relay dominator")
     print("\n✅ All connectionless presence tests passed")

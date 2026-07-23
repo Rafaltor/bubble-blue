@@ -41,6 +41,7 @@ def test_decrypt_fail_does_not_quarantine() -> None:
     fake_transport.disconnect = MagicMock()
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
     fake_hello.has_learned_public_hello.return_value = True
 
@@ -76,6 +77,7 @@ def test_protocol_silence_expels_and_quarantines() -> None:
     fake_transport.disconnect = MagicMock()
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
     fake_hello.has_learned_public_hello.return_value = False
 
@@ -118,6 +120,7 @@ def test_presence_candidate_feeds_connect_targets() -> None:
     fake_transport.connections.return_value = []
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
 
     with (
@@ -146,6 +149,7 @@ def test_incoming_connection_refused_during_quarantine() -> None:
     fake_transport.disconnect = MagicMock()
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
     fake_hello.has_learned_public_hello.return_value = False
 
@@ -204,6 +208,7 @@ def test_eperm_connect_fail_sets_backoff() -> None:
     )
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
 
     with (
@@ -251,6 +256,7 @@ def test_eperm_triggers_auto_bond_then_reconnect() -> None:
     fake_transport.connect = MagicMock(side_effect=_connect)
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
     fake_sup = MagicMock()
     fake_sup.setup_ok = True
@@ -296,6 +302,7 @@ def test_eperm_auto_bond_failure_applies_backoff() -> None:
     )
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
     fake_sup = MagicMock()
     fake_sup.setup_ok = True
@@ -340,6 +347,7 @@ def test_mute_stops_scanner_and_transport() -> None:
     fake_transport.mute = MagicMock()
     fake_hello = MagicMock()
     fake_hello.is_relay = False
+    fake_hello.is_connectionless = False
     fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
 
     scanner = MagicMock()

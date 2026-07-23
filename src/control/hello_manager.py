@@ -64,6 +64,8 @@ class HelloManager:
         self._connectionless = False
         self._heard_ttl_s = max(1.0, float(cfg.neighbor_timeout_s))
         self._heard: dict[bytes, float] = {}
+        # anon_id -> CDS relay flag advertised in that peer's public Hello.
+        self._peer_is_relay: dict[bytes, bool] = {}
         self._heard_lock = threading.Lock()
 
         self.anon_id = compute_anon_id(self._bootstrap_key, self._local_bd)
@@ -277,13 +279,15 @@ class HelloManager:
         seq: int,
         neighbor_anon_ids: list[bytes],
         mpr_anon_ids: list[bytes] | None = None,
+        *,
+        is_relay: bool = False,
     ) -> None:
         """
         Ingest a public Hello heard over the air (no L2CAP link, no private part).
 
-        Updates the neighbor/topology tables (advertised 1-hop lists + MPR set)
-        and marks the sender as currently heard, then refreshes the relay role.
-        Ignores our own broadcast.
+        Updates the neighbor/topology tables (advertised 1-hop lists + MPR set),
+        records the sender's advertised CDS role, marks it as currently heard, then
+        refreshes our own relay role. Ignores our own broadcast.
         """
         aid = bytes(anon_id)
         if aid == self.anon_id:
@@ -299,7 +303,34 @@ class HelloManager:
         self.table.update_from_hello(parsed_public, None)
         with self._heard_lock:
             self._heard[aid] = time.monotonic()
+            self._peer_is_relay[aid] = bool(is_relay)
         self.refresh_cds_role(verbose=not self._quiet)
+
+    @property
+    def is_connectionless(self) -> bool:
+        """True when the CDS backbone is elected from over-the-air Hellos."""
+        return self._connectionless
+
+    def connectionless_link_plan(self) -> dict[str, Any]:
+        """
+        CDS-backbone link plan (anon_ids) for the connectionless connection policy.
+
+        Returns ``am_relay`` (this node is a CDS relay), ``sym`` (symmetric heard
+        neighbors), ``relays`` (symmetric neighbors that are CDS relays) and
+        ``cds`` (the elected relay set over the heard topology). The bb_api layer
+        maps these anon_ids to BD addresses to decide which links to open.
+        """
+        from src.forwarding.cds import local_symmetric_peers
+
+        heard = self.heard_anon_ids()
+        sym = {bytes(a) for a in local_symmetric_peers(self.table, self.anon_id, heard)}
+        with self._heard_lock:
+            relays = {a for a in sym if self._peer_is_relay.get(a, False)}
+        return {
+            "am_relay": bool(self._is_cds),
+            "sym": sym,
+            "relays": relays,
+        }
 
     def heard_anon_ids(self) -> frozenset[bytes]:
         """anon_ids whose public Hello was heard within the TTL (excludes self)."""
@@ -329,7 +360,7 @@ class HelloManager:
         mpr = {bytes(a) for a in compute_local_mpr(self.table, self.anon_id)} & set(heard)
         seq = self._next_seq()
         return build_presence_manufacturer_value(
-            self.anon_id, seq, neighbors, sorted(mpr)
+            self.anon_id, seq, neighbors, sorted(mpr), is_relay=bool(self._is_cds)
         )
 
     def _known_neighbor_pairs(self) -> list[tuple[bytes, str]]:

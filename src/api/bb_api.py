@@ -355,7 +355,11 @@ class BBNode:
             if parsed is None:
                 continue
             hello.ingest_public_hello(
-                parsed["anon_id"], parsed["seq"], parsed["neighbors"], parsed["mpr"]
+                parsed["anon_id"],
+                parsed["seq"],
+                parsed["neighbors"],
+                parsed["mpr"],
+                is_relay=parsed.get("is_relay", False),
             )
             self._presence_addr[parsed["anon_id"].hex()] = (
                 bd.upper(),
@@ -526,8 +530,17 @@ class BBNode:
         addrs.discard(local)
         return frozenset(addrs) if addrs else None
 
+    def _is_connectionless(self) -> bool:
+        return self._hello_mgr is not None and self._hello_mgr.is_connectionless
+
     def _connect_targets(self) -> set[str]:
-        """Peers to dial: allowlist ∪ discovered BB candidates (filtered if lab)."""
+        """
+        Peers to dial.
+
+        Connectionless mode: only the CDS-backbone links this node is responsible
+        for (see :meth:`_backbone_dial_targets`) — a sparse backbone instead of a
+        full mesh. Legacy mode: allowlist ∪ discovered BB candidates.
+        """
         if self._cfg is None:
             cfg = load_config(
                 interface=self._interface,
@@ -537,6 +550,14 @@ class BBNode:
             cfg = self._cfg
         local = cfg.local_bd_addr.upper()
         allow = self._restrictive_allowlist()
+
+        backbone = self._backbone_dial_targets()
+        if backbone is not None:
+            if allow is not None:
+                backbone &= allow
+            backbone.discard(local)
+            return backbone
+
         targets: set[str] = set()
         if allow is not None:
             targets.update(allow)
@@ -546,6 +567,53 @@ class BBNode:
                     targets.add(bd)
         targets.discard(local)
         return targets
+
+    def _backbone_dial_targets(self) -> set[str] | None:
+        """
+        BD addresses this node should dial to build the CDS backbone (connectionless).
+
+        Direction is encoded here so ``_connect_peers`` does not apply the legacy
+        lower-BD tie-break:
+          - RELAY  → dials backbone edges to relay neighbors with a higher anon_id
+                     (the lower-anon relay owns the edge; the other side accepts).
+          - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
+                     relay never dials leaves, so the leaf always initiates.
+          - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
+            empty backbone) → every node dials the globally smallest-anon node it
+            hears, forming a connected star so DATA still has an L2CAP path.
+        Returns ``None`` when not in connectionless mode.
+        """
+        hello = self._hello_mgr
+        if hello is None or not hello.is_connectionless:
+            return None
+        plan = hello.connectionless_link_plan()
+        sym: set[bytes] = plan["sym"]
+        if not sym:
+            return set()
+        local_aid = hello.anon_id
+        relays: set[bytes] = plan["relays"]
+
+        def _i(aid: bytes) -> int:
+            return int.from_bytes(aid, "big")
+
+        with self._lock:
+            aid_to_bd = {
+                bytes.fromhex(h): bd for h, (bd, _at) in self._presence_addr.items()
+            }
+
+        def _to_bd(aids: set[bytes]) -> set[str]:
+            return {aid_to_bd[a] for a in aids if a in aid_to_bd}
+
+        if plan["am_relay"]:
+            return _to_bd({a for a in relays if _i(a) > _i(local_aid)})
+        if relays:
+            dominator = min(relays, key=_i)
+            return _to_bd({dominator})
+        # Empty-CDS fallback: attach to the smallest-anon node in the neighbourhood.
+        center = min(sym | {local_aid}, key=_i)
+        if center == local_aid:
+            return set()
+        return _to_bd({center}) if center in sym else set()
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
@@ -615,6 +683,7 @@ class BBNode:
             return
         now = time.monotonic()
         local = self._require_cfg().local_bd_addr.upper()
+        connectionless = self._is_connectionless()
         connections = self._transport.connections()
         # Reconcile state for peers already connected (any pass).
         for bd in list(connections):
@@ -634,7 +703,10 @@ class BBNode:
                 continue
             if now < self._protocol_quarantine_until.get(bd, 0.0):
                 continue
-            if local >= bd:
+            # Legacy mode uses a lower-BD tie-break to avoid both sides dialing.
+            # Connectionless mode already encodes the dialer in the backbone plan
+            # (leaves dial relays regardless of BD order), so skip the filter.
+            if not connectionless and local >= bd:
                 continue
             # New attempt window after backoff (or first try): allow one bond.
             self._bond_attempted.discard(bd)
