@@ -311,6 +311,11 @@ class MgmtLEScanner:
         self._stop = threading.Event()
         self._discovering = False
         self._started = False
+        # Optional radio time-sharing hooks: invoked around each scan window so a
+        # caller can pause a concurrent advertiser that would otherwise starve
+        # discovery on single-antenna controllers. Set by the owner after init.
+        self.on_window_start: Callable[[], None] | None = None
+        self.on_window_end: Callable[[], None] | None = None
 
     def start(self) -> None:
         if self._started:
@@ -385,6 +390,7 @@ class MgmtLEScanner:
         up silently dark.
         """
         self._discovering = False
+        self._fire(self.on_window_start)
         self._send(MGMT_OP_START_DISCOVERY)
         deadline = time.monotonic() + self._window_s
         reheal_done = False
@@ -412,6 +418,15 @@ class MgmtLEScanner:
                 break
             self._handle_packet(pkt)
         self._send(MGMT_OP_STOP_DISCOVERY)
+        self._fire(self.on_window_end)
+
+    def _fire(self, cb: Callable[[], None] | None) -> None:
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:  # noqa: BLE001 — hooks must never break scanning
+            self._log(f"scan window hook failed: {exc!r}")
 
     def _handle_packet(self, pkt: bytes) -> None:
         ev = parse_mgmt_event(pkt)
