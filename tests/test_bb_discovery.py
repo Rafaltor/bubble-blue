@@ -247,8 +247,8 @@ def test_eperm_triggers_auto_bond_then_reconnect() -> None:
     fake_transport.connections.return_value = []
     calls: list[str] = []
 
-    def _connect(bd: str, addr_type: str | None = None) -> None:
-        _ = addr_type
+    def _connect(bd: str, addr_type: str | None = None, force: bool = False) -> None:
+        _ = (addr_type, force)
         calls.append(bd)
         if len(calls) == 1:
             raise OSError(errno.EPERM, "Permission denied")

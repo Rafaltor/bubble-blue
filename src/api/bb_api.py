@@ -598,12 +598,12 @@ class BBNode:
           - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
                      relay never dials leaves, so the leaf always initiates.
           - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → full mesh among heard peers: each node dials the peers
-            with a HIGHER anon_id than its own, so every edge is dialed exactly once
-            (by its lower-anon endpoint) with no double-dial and no tie-break race.
-            In a clique this is the CDS-correct shape anyway (everyone is a direct
-            neighbour), and it matches the bidirectional multi-connection pattern
-            that forms a stable mesh on these boards.
+            empty backbone) → full BIDIRECTIONAL mesh: every node dials every heard
+            symmetric peer. Both endpoints try; whichever side's inbound accept
+            succeeds wins and the transport drops the duplicate. This is robust to
+            per-board connectability quirks (some boards accept inbound more
+            reliably than others) and matches the legacy pattern that forms a
+            stable multi-node mesh; the one-dial-per-pass + backoff avoids storms.
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -632,9 +632,9 @@ class BBNode:
         if relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: full mesh. Dial every heard peer with a higher
-        # anon_id than ours; each edge is dialed once by its lower-anon endpoint.
-        return _to_bd({a for a in sym if _i(a) > _i(local_aid)})
+        # Empty-CDS fallback: full bidirectional mesh — dial every heard symmetric
+        # peer. Both endpoints try; the transport dedups the duplicate link.
+        return _to_bd(sym)
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
@@ -734,7 +734,9 @@ class BBNode:
             addr_type = self._peer_addr_types.get(bd)
             try:
                 if self._cfg and self._cfg.transport_kind == "ble_l2cap":
-                    self._transport.connect(bd, addr_type=addr_type)
+                    # Connectionless mode already fixed the dial direction in the
+                    # backbone plan; force past the transport's BD tie-break.
+                    self._transport.connect(bd, addr_type=addr_type, force=connectionless)
                 else:
                     self._transport.connect(bd)
                 self._connect_last_err.pop(bd, None)
@@ -751,7 +753,7 @@ class BBNode:
                     self._bond_attempted.add(bd)
                     if self._try_auto_bond(bd, addr_type):
                         try:
-                            self._transport.connect(bd, addr_type=addr_type)
+                            self._transport.connect(bd, addr_type=addr_type, force=connectionless)
                             self._connect_last_err.pop(bd, None)
                             self._connect_backoff_until.pop(bd, None)
                             self._connect_streak.pop(bd, None)

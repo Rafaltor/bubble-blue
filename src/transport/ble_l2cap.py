@@ -254,7 +254,9 @@ class BLEL2CAPTransport:
         except OSError:
             pass
 
-    def connect(self, bd_addr: str, *, addr_type: int | str | None = None) -> None:
+    def connect(
+        self, bd_addr: str, *, addr_type: int | str | None = None, force: bool = False
+    ) -> None:
         bd_addr = bd_addr.upper()
         local = self._cfg.local_bd_addr.upper()
         if bd_addr == local:
@@ -271,7 +273,11 @@ class BLEL2CAPTransport:
             )
             return
 
-        if not _should_initiate_connect(self._cfg.local_bd_addr, bd_addr):
+        # The lower-BD tie-break avoids both sides dialing in legacy full-mesh.
+        # ``force`` bypasses it so a caller that already decided the dial direction
+        # (e.g. the connectionless CDS backbone plan) is honoured instead of being
+        # silently vetoed here.
+        if not force and not _should_initiate_connect(self._cfg.local_bd_addr, bd_addr):
             return
 
         is_new = False
