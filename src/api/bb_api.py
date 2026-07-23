@@ -321,12 +321,28 @@ class BBNode:
                 adv.start()
                 self._dbus_advertiser = adv
                 # Single-antenna controllers (Broadcom/Pi) starve LE discovery
-                # while extended advertising is active — the node then advertises
-                # but hears nobody. Time-share the radio: pause the presence
-                # broadcast for each scan window, resume it in the gap.
+                # while advertising is active — the node then advertises but hears
+                # nobody. Time-share the radio: pause BOTH the presence broadcast
+                # and the transport's connectable advertising for each scan window
+                # and resume them in the gap. Both must be paused; leaving either
+                # up keeps the scan starved.
                 if scanner is not None:
-                    scanner.on_window_start = adv.pause
-                    scanner.on_window_end = adv.resume
+                    transport = self._transport
+                    pause_tx = getattr(transport, "pause_advertising", None)
+                    resume_tx = getattr(transport, "resume_advertising", None)
+
+                    def _scan_begin() -> None:
+                        adv.pause()
+                        if pause_tx is not None:
+                            pause_tx()
+
+                    def _scan_end() -> None:
+                        if resume_tx is not None:
+                            resume_tx()
+                        adv.resume()
+
+                    scanner.on_window_start = _scan_begin
+                    scanner.on_window_end = _scan_end
             except Exception as e:  # noqa: BLE001
                 self._dispatch_log(f"presence advertiser unavailable: {e!r}")
                 self._dbus_advertiser = None

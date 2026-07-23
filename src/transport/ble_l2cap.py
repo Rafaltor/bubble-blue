@@ -167,6 +167,14 @@ class BLEL2CAPTransport:
         self._stop_evt = threading.Event()
         self._advertiser = LEAdvertiser(interface=interface, quiet=quiet)
 
+    def pause_advertising(self) -> None:
+        """Pause the connectable LE advertising (radio time-share with scan)."""
+        self._advertiser.pause()
+
+    def resume_advertising(self) -> None:
+        """Resume the connectable LE advertising after :meth:`pause_advertising`."""
+        self._advertiser.resume()
+
     def _rearm_advertising(self) -> None:
         """Non-blocking advertising re-arm after connect/disconnect (legacy LE)."""
         if not self._advertiser.running:

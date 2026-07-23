@@ -311,6 +311,7 @@ class LEAdvertiser:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
+        self._paused = False
 
     @staticmethod
     def ad_hex() -> str:
@@ -359,12 +360,38 @@ class LEAdvertiser:
 
     def ensure(self) -> None:
         """Re-arm the advertising instance if the controller dropped it."""
-        if not self._started:
+        if not self._started or self._paused:
             return
         try:
             self._ensure_instance(force=False)
         except Exception as exc:
             self._log(f"ensure error: {exc}")
+
+    def pause(self) -> None:
+        """
+        Remove the advertising instance without stopping the watchdog thread.
+
+        Used to time-share the radio with LE discovery on single-antenna
+        controllers that cannot advertise and scan at once. The watchdog skips
+        re-arming while paused; :meth:`resume` brings the instance back.
+        """
+        if not self._started or self._paused:
+            return
+        self._paused = True
+        try:
+            self._remove_instance()
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"pause error: {exc}")
+
+    def resume(self) -> None:
+        """Re-arm the advertising instance after :meth:`pause`."""
+        if not self._started or not self._paused:
+            return
+        self._paused = False
+        try:
+            self._ensure_instance(force=True)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"resume error: {exc}")
 
     def _prepare_controller(self) -> None:
         self._run(self._hci_index, "power on")
