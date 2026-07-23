@@ -28,6 +28,7 @@ from __future__ import annotations
 import select
 import socket
 import struct
+import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -267,3 +268,172 @@ def mgmt_scan_records(
                 pass
 
     return records
+
+
+class MgmtLEScanner:
+    """
+    Continuous, self-healing MGMT LE discovery for one adapter.
+
+    A background thread keeps a persistent MGMT control socket with LE discovery
+    *always on*, parsing every ``Device Found`` event into BB records. Unlike the
+    windowed one-shot scan, there are no blind gaps between windows — every BB
+    beacon is captured on each detection — which is what makes discovery reliable
+    when several nodes contend for the radio.
+
+    Self-healing: if the controller stops discovery (``Discovering`` off) or a
+    ``Start Discovery`` command fails (e.g. *Busy* after a stale session), the
+    loop re-issues ``Stop`` then ``Start`` so a node never ends up silently
+    "dark" (no scanning) for the rest of its lifetime.
+
+    :meth:`snapshot` returns the records seen within ``record_ttl_s`` and is what
+    :class:`~src.control.presence_scanner.PresenceScanner` polls via its
+    ``records_provider`` hook.
+    """
+
+    def __init__(
+        self,
+        index: int,
+        *,
+        window_s: float = 3.0,
+        gap_s: float = 7.0,
+        record_ttl_s: float = 25.0,
+        log: Callable[[str], None] | None = None,
+    ) -> None:
+        self._index = int(index)
+        self._window_s = max(0.5, float(window_s))
+        self._gap_s = max(0.0, float(gap_s))
+        self._ttl = max(1.0, float(record_ttl_s))
+        self._log = log or (lambda _msg: None)
+        self._records: dict[str, tuple[ScanDeviceRecord, float]] = {}
+        self._lock = threading.Lock()
+        self._sock: socket.socket | None = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._discovering = False
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop,
+            name=f"bb-le-scan-hci{self._index}",
+            daemon=True,
+        )
+        self._thread.start()
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=4.0)
+            self._thread = None
+        self._started = False
+
+    @property
+    def running(self) -> bool:
+        return self._started
+
+    def snapshot(self, _window_s: float | None = None) -> dict[str, ScanDeviceRecord]:
+        """Return BB records seen within the TTL (drop-in ``records_provider``)."""
+        now = time.monotonic()
+        with self._lock:
+            return {
+                bd: rec for bd, (rec, ts) in self._records.items() if now - ts <= self._ttl
+            }
+
+    def _send(self, opcode: int) -> None:
+        if self._sock is not None:
+            try:
+                _send_cmd(self._sock, opcode, self._index, bytes([LE_DISCOVERY_ADDR_MASK]))
+            except OSError as exc:
+                self._log(f"MGMT cmd 0x{opcode:04x} failed on hci{self._index}: {exc!r}")
+
+    def _loop(self) -> None:
+        try:
+            self._sock = _open_mgmt_socket()
+        except OSError as exc:
+            self._log(f"MGMT socket open failed on hci{self._index}: {exc!r} (need root?)")
+            return
+        try:
+            while not self._stop.is_set():
+                self._run_window()
+                if self._gap_s > 0.0 and self._stop.wait(self._gap_s):
+                    break
+        finally:
+            self._send(MGMT_OP_STOP_DISCOVERY)
+            if self._sock is not None:
+                try:
+                    self._sock.close()
+                except OSError:
+                    pass
+                self._sock = None
+
+    def _run_window(self) -> None:
+        """One discovery window: Start → drain events for window_s → Stop.
+
+        Self-heals within the window: if discovery does not come up (Busy/failed
+        after a stale session), it re-issues Stop+Start once so a node never ends
+        up silently dark.
+        """
+        self._discovering = False
+        self._send(MGMT_OP_START_DISCOVERY)
+        deadline = time.monotonic() + self._window_s
+        reheal_done = False
+        while not self._stop.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                ready, _, _ = select.select([self._sock], [], [], min(1.0, remaining))
+            except OSError:
+                break
+            if not ready:
+                if not self._discovering and not reheal_done:
+                    reheal_done = True
+                    self._send(MGMT_OP_STOP_DISCOVERY)
+                    self._send(MGMT_OP_START_DISCOVERY)
+                continue
+            try:
+                pkt = self._sock.recv(4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                break
+            if not pkt:
+                break
+            self._handle_packet(pkt)
+        self._send(MGMT_OP_STOP_DISCOVERY)
+
+    def _handle_packet(self, pkt: bytes) -> None:
+        ev = parse_mgmt_event(pkt)
+        if ev is None or ev.index != self._index:
+            return
+        if ev.code == MGMT_EV_DEVICE_FOUND:
+            self._merge(ev.params)
+        elif ev.code == MGMT_EV_DISCOVERING and len(ev.params) >= 2:
+            self._discovering = ev.params[1] == 1
+        elif ev.code == MGMT_EV_CMD_COMPLETE and len(ev.params) >= 3:
+            opcode = ev.params[0] | (ev.params[1] << 8)
+            status = ev.params[2]
+            if opcode == MGMT_OP_START_DISCOVERY:
+                self._discovering = status == 0
+                if status != 0:
+                    self._log(f"MGMT start-discovery status=0x{status:02x} on hci{self._index}")
+        elif ev.code == MGMT_EV_CMD_STATUS and len(ev.params) >= 3:
+            status = ev.params[0]
+            opcode = ev.params[1] | (ev.params[2] << 8)
+            if opcode == MGMT_OP_START_DISCOVERY and status != 0:
+                self._log(f"MGMT start-discovery cmdstatus=0x{status:02x} on hci{self._index}")
+
+    def _merge(self, params: bytes) -> None:
+        rec_map: dict[str, ScanDeviceRecord] = {}
+        if not merge_device_found(rec_map, params):
+            return
+        now = time.monotonic()
+        with self._lock:
+            for bd, rec in rec_map.items():
+                self._records[bd] = (rec, now)

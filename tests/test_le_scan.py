@@ -9,10 +9,13 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import time  # noqa: E402
+
 from src.control.presence_scanner import PresenceScanner  # noqa: E402
 from src.transport.discovery import ScanDeviceRecord  # noqa: E402
 from src.transport.le_scan import (  # noqa: E402
     MGMT_EV_DEVICE_FOUND,
+    MgmtLEScanner,
     hci_index_from_interface,
     merge_device_found,
     mgmt_scan_records,
@@ -130,6 +133,37 @@ def test_mgmt_scan_records_over_socketpair() -> None:
         ours.close()
         peer.close()
     assert set(records) == {"11:22:33:44:55:66"}
+
+
+def test_mgmt_le_scanner_continuous_snapshot() -> None:
+    """MgmtLEScanner should accumulate BB records from a live socket into snapshot()."""
+    ours, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    scanner = MgmtLEScanner(0, record_ttl_s=5.0)
+
+    def fake_open():
+        return ours
+
+    import src.transport.le_scan as le_scan_mod
+
+    orig = le_scan_mod._open_mgmt_socket
+    le_scan_mod._open_mgmt_socket = fake_open  # type: ignore[assignment]
+    try:
+        scanner.start()
+        peer.send(_device_found_packet(0, "11:22:33:44:55:66", 1, -30, _BB_EIR_WITH_FLAGS))
+        peer.send(_device_found_packet(0, "AA:BB:CC:DD:EE:01", 1, -60, _APPLE_EIR))
+        deadline = time.time() + 3.0
+        snap: dict = {}
+        while time.time() < deadline:
+            snap = scanner.snapshot()
+            if "11:22:33:44:55:66" in snap:
+                break
+            time.sleep(0.05)
+    finally:
+        scanner.stop()
+        le_scan_mod._open_mgmt_socket = orig  # type: ignore[assignment]
+        peer.close()
+    assert set(snap) == {"11:22:33:44:55:66"}
+    assert snap["11:22:33:44:55:66"].addr_type == "public"
 
 
 def test_presence_scanner_records_provider_skips_info() -> None:

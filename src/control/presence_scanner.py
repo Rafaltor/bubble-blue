@@ -145,7 +145,14 @@ class PresenceScanner:
         )
 
     def defer_next_pass(self, delay_s: float = POST_CONNECT_DEFER_S) -> None:
-        """Skip the next scan pass if it would start within *delay_s* (post-connect courtesy)."""
+        """Skip the next scan pass if it would start within *delay_s* (post-connect courtesy).
+
+        No-op when a ``records_provider`` is used: polling an in-memory MGMT
+        snapshot costs no radio time, so there is nothing to defer for and the
+        courtesy would only slow discovery of the *other* peers.
+        """
+        if self._records_provider is not None:
+            return
         delay = max(0.0, float(delay_s))
         with self._lock:
             until = time.monotonic() + delay

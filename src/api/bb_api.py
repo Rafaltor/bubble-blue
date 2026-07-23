@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import os
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -23,7 +24,7 @@ from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
 from src.transport.base import ManagedTransport
 from src.transport.factory import make_transport
-from src.transport.le_scan import hci_index_from_interface, mgmt_scan_records
+from src.transport.le_scan import MgmtLEScanner, hci_index_from_interface
 from src.transport.pairing_agent import PairingAgentSupervisor
 
 LogFn = Callable[[str, bool], None]
@@ -109,6 +110,7 @@ class BBNode:
         self._bond_attempted: set[str] = set()
         self._active_peers: set[str] = set()
         self._presence_scanner: PresenceScanner | None = None
+        self._le_scanner: MgmtLEScanner | None = None
         self._discovered_candidates: dict[str, str] = {}
         self._peer_addr_types: dict[str, str] = {}
         self._peer_admission_deadline: dict[str, float] = {}
@@ -215,19 +217,18 @@ class BBNode:
             if self._cfg.transport_kind == "ble_l2cap":
                 hci_index = hci_index_from_interface(self._interface)
                 scan_log = None if self._quiet else self._dispatch_log
-
-                def _mgmt_records_provider(
-                    window_s: float,
-                    _idx: int = hci_index,
-                    _log=scan_log,
-                ) -> dict:
-                    return mgmt_scan_records(_idx, window_s, log=_log)
-
+                self._le_scanner = MgmtLEScanner(hci_index, log=scan_log)
+                self._le_scanner.start()
+                # Radio duty-cycling lives in MgmtLEScanner; the PresenceScanner
+                # just polls its in-memory snapshot, so poll often (cheap) for
+                # low discovery latency.
                 self._presence_scanner = PresenceScanner(
                     quiet=self._quiet,
                     on_candidate=self._on_presence_candidate,
                     idle_check=self._presence_scanner_idle,
-                    records_provider=_mgmt_records_provider,
+                    records_provider=self._le_scanner.snapshot,
+                    scan_period_s=2.0,
+                    steady_period_s=4.0,
                 )
                 self._presence_scanner.start()
 
@@ -247,6 +248,9 @@ class BBNode:
             if self._presence_scanner is not None:
                 self._presence_scanner.stop()
                 self._presence_scanner = None
+            if self._le_scanner is not None:
+                self._le_scanner.stop()
+                self._le_scanner = None
             if self._hello_mgr is not None:
                 self._hello_mgr.stop()
             if self._transport is not None:
@@ -287,6 +291,9 @@ class BBNode:
             if self._presence_scanner is not None:
                 self._presence_scanner.stop()
                 self._presence_scanner = None
+            if self._le_scanner is not None:
+                self._le_scanner.stop()
+                self._le_scanner = None
             transport = self._transport
         if transport is not None and hasattr(transport, "mute"):
             transport.mute()
@@ -516,14 +523,20 @@ class BBNode:
             return
         now = time.monotonic()
         local = self._require_cfg().local_bd_addr.upper()
+        connections = self._transport.connections()
+        # Reconcile state for peers already connected (any pass).
+        for bd in list(connections):
+            self._connect_last_err.pop(bd, None)
+            self._connect_backoff_until.pop(bd, None)
+            self._connect_streak.pop(bd, None)
+            self._bond_attempted.discard(bd)
+        # Attempt at most ONE new connection per pass. Firing every pending link
+        # at once creates a connection storm (each L2CAP connect is radio-heavy
+        # while also advertising + scanning): peers see EPERM/refused/timeouts and
+        # already-established links drop. Staggering one dial per pass spreads
+        # establishment out so live links stay up while the mesh fills in.
         for bd in sorted(self._connect_targets()):
-            if bd == local:
-                continue
-            if bd in self._transport.connections():
-                self._connect_last_err.pop(bd, None)
-                self._connect_backoff_until.pop(bd, None)
-                self._connect_streak.pop(bd, None)
-                self._bond_attempted.discard(bd)
+            if bd == local or bd in connections:
                 continue
             if now < self._connect_backoff_until.get(bd, 0.0):
                 continue
@@ -558,11 +571,12 @@ class BBNode:
                             self._connect_backoff_until.pop(bd, None)
                             self._connect_streak.pop(bd, None)
                             self._bond_attempted.discard(bd)
-                            continue
+                            return
                         except OSError as e2:
                             e = e2
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
+            return
 
     def _try_auto_bond(self, bd: str, addr_type: str | None) -> bool:
         """
@@ -619,7 +633,9 @@ class BBNode:
         self._dispatch_log(f"connect {bd} failed: {e}")
 
     def _connect_loop(self) -> None:
-        while not self._connect_stop.wait(4.0):
+        # Jittered interval so independently-booted nodes don't dial in lockstep
+        # (lockstep dialing re-creates the very connection storm we stagger to avoid).
+        while not self._connect_stop.wait(2.5 + random.uniform(0.0, 1.5)):
             try:
                 self._check_protocol_admission()
                 self._connect_peers()
