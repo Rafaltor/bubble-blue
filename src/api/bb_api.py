@@ -598,14 +598,14 @@ class BBNode:
           - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
                      relay never dials leaves, so the leaf always initiates.
           - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → a STAR toward the smallest-anon node (the hub): every
-            other node dials the hub, the hub dials nobody and only accepts. This
-            is the minimal connected backbone (hub = dominator, others = leaves),
-            so DATA reaches every node via the hub with the fewest links. Because
-            the transport BD tie-break is bypassed in connectionless mode, the
-            leaf→hub dial is honoured regardless of BD order, and no dial passes
-            are wasted on unreachable leaf↔leaf edges (which slowed convergence in
-            a full mesh).
+            empty backbone) → full BIDIRECTIONAL mesh: dial every heard symmetric
+            peer. A fixed-hub star is NOT used because "heard" (passive advertising
+            reception) reaches farther than a sustainable L2CAP link: two nodes can
+            hear each other yet be unable to connect (edge-of-range). A fixed hub
+            that some leaf cannot reach would isolate that leaf, whereas the full
+            mesh lets every node link whatever it can actually reach and relays the
+            rest. Unreachable edges self-suppress via connect backoff (ETIMEDOUT),
+            so they stop crowding the one-dial-per-pass budget after a couple tries.
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -634,13 +634,10 @@ class BBNode:
         if relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: star toward the smallest-anon hub. Leaves dial the
-        # hub; the hub dials nobody and only accepts. Minimal connected backbone,
-        # no wasted leaf-leaf dials.
-        hub = min(sym | {local_aid}, key=_i)
-        if hub == local_aid:
-            return set()
-        return _to_bd({hub})
+        # Empty-CDS fallback: full bidirectional mesh — dial every heard symmetric
+        # peer. Robust to edge-of-range links (heard but not connectable): each
+        # node links whatever it can reach and the mesh relays the rest.
+        return _to_bd(sym)
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
