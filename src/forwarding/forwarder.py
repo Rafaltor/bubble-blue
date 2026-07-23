@@ -595,7 +595,7 @@ class PacketForwarder:
                 deliver_fn = self._try_deliver
 
             self._hello_mgr.refresh_cds_role()
-            if self._hello_mgr.is_relay:
+            if self._should_relay():
                 self._relay_then_deliver(ingress, data, hdr, src, seq, dst, local, deliver_fn)
             elif self._for_us(dst, local):
                 deliver_fn(ingress, data, hdr)
@@ -943,6 +943,24 @@ class PacketForwarder:
     @staticmethod
     def _for_us(dst: str, local: str) -> bool:
         return dst == local or dst == BROADCAST_BD_ADDR
+
+    def _should_relay(self) -> bool:
+        """
+        Whether this node forwards packets it receives.
+
+        A CDS relay forwards by design. But the CDS role is elected from the
+        advertising-*heard* topology, which can be a complete graph (everyone
+        hears everyone) even when the actual L2CAP links form a star because two
+        nodes are within advertising range yet cannot hold a connection
+        (edge-of-range). In that case the heard-topology CDS is empty (no relay)
+        while the star's centre must still bridge its leaves. So also relay
+        whenever this node holds 2+ L2CAP links: it is a bridge in the real link
+        graph and must forward for the mesh to be connected. The seen-cache and
+        TTL keep this flood loop-free and bounded.
+        """
+        if self._hello_mgr.is_relay:
+            return True
+        return len(self._other_peers(exclude=None)) >= 2
 
     def route_l2cap_peer(self, dst_bd_addr: str) -> str:
         """Pick an L2CAP link to reach ``dst_bd_addr`` (direct neighbor or multihop relay)."""
