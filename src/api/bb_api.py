@@ -598,12 +598,14 @@ class BBNode:
           - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
                      relay never dials leaves, so the leaf always initiates.
           - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → full BIDIRECTIONAL mesh: every node dials every heard
-            symmetric peer. Both endpoints try; whichever side's inbound accept
-            succeeds wins and the transport drops the duplicate. This is robust to
-            per-board connectability quirks (some boards accept inbound more
-            reliably than others) and matches the legacy pattern that forms a
-            stable multi-node mesh; the one-dial-per-pass + backoff avoids storms.
+            empty backbone) → a STAR toward the smallest-anon node (the hub): every
+            other node dials the hub, the hub dials nobody and only accepts. This
+            is the minimal connected backbone (hub = dominator, others = leaves),
+            so DATA reaches every node via the hub with the fewest links. Because
+            the transport BD tie-break is bypassed in connectionless mode, the
+            leaf→hub dial is honoured regardless of BD order, and no dial passes
+            are wasted on unreachable leaf↔leaf edges (which slowed convergence in
+            a full mesh).
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -632,9 +634,13 @@ class BBNode:
         if relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: full bidirectional mesh — dial every heard symmetric
-        # peer. Both endpoints try; the transport dedups the duplicate link.
-        return _to_bd(sym)
+        # Empty-CDS fallback: star toward the smallest-anon hub. Leaves dial the
+        # hub; the hub dials nobody and only accepts. Minimal connected backbone,
+        # no wasted leaf-leaf dials.
+        hub = min(sym | {local_aid}, key=_i)
+        if hub == local_aid:
+            return set()
+        return _to_bd({hub})
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
