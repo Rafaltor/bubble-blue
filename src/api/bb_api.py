@@ -598,11 +598,14 @@ class BBNode:
           - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
                      relay never dials leaves, so the leaf always initiates.
           - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → every node dials the globally smallest-anon node it
-            hears, forming a connected star so DATA still has an L2CAP path. A star
-            is used (not a chain) because these controllers do not reliably act as
-            central and peripheral at once, which a chain's middle nodes require;
-            the star keeps roles bipartite (leaves dial, the center only accepts).
+            empty backbone) → an INVERTED star: the globally smallest-anon node is
+            the hub and DIALS every other node it hears; the others only accept.
+            This is the only bipartite shape that fits the controller limits found
+            on the target boards: a peripheral accepts a single inbound link, and a
+            node cannot be central and peripheral at once. Making the leaves the
+            (single-inbound) peripherals and the hub the multi-outbound central
+            keeps every node pure-role and within the one-inbound cap, so DATA has
+            an L2CAP path to all nodes (the hub relays between leaves).
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -631,12 +634,14 @@ class BBNode:
         if relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: attach to the smallest-anon node in the neighbourhood
-        # (bipartite star — leaves dial, center only accepts).
-        center = min(sym | {local_aid}, key=_i)
-        if center == local_aid:
-            return set()
-        return _to_bd({center}) if center in sym else set()
+        # Empty-CDS fallback: INVERTED star. The smallest-anon node is the hub and
+        # dials every heard peer (central, multi-outbound); everyone else only
+        # accepts the hub's inbound (peripheral, single inbound). This respects the
+        # controller's one-inbound-per-peripheral cap and avoids dual-role nodes.
+        hub = min(sym | {local_aid}, key=_i)
+        if hub == local_aid:
+            return _to_bd(sym)
+        return set()
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
