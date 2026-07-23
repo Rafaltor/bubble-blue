@@ -613,10 +613,9 @@ class BBNode:
             return None
         plan = hello.connectionless_link_plan()
         sym: set[bytes] = plan["sym"]
-        if not sym:
-            return set()
         local_aid = hello.anon_id
         relays: set[bytes] = plan["relays"]
+        heard: set[bytes] = set(hello.heard_anon_ids())
 
         def _i(aid: bytes) -> int:
             return int.from_bytes(aid, "big")
@@ -629,15 +628,19 @@ class BBNode:
         def _to_bd(aids: set[bytes]) -> set[str]:
             return {aid_to_bd[a] for a in aids if a in aid_to_bd}
 
-        if plan["am_relay"]:
+        if sym and plan["am_relay"]:
             return _to_bd({a for a in relays if _i(a) > _i(local_aid)})
-        if relays:
+        if sym and relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: full bidirectional mesh — dial every heard symmetric
-        # peer. Robust to edge-of-range links (heard but not connectable): each
-        # node links whatever it can reach and the mesh relays the rest.
-        return _to_bd(sym)
+        # Empty-CDS / no-symmetric fallback: dial every HEARD peer with a known
+        # reachable address, not just symmetric ones. An L2CAP link is a separate
+        # bidirectional channel: a node can dial a peer it hears even if that peer
+        # does not (yet) hear its beacon back — the connection still establishes.
+        # Requiring symmetry stranded edge nodes whose advertised neighbour list
+        # was truncated or intermittently received (dial_targets stayed empty).
+        # Unreachable dials self-suppress via ETIMEDOUT backoff.
+        return _to_bd(heard - {local_aid})
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
