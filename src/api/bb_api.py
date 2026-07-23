@@ -310,12 +310,11 @@ class BBNode:
                     interface=hci_index,
                     company_id=BB_BEACON_COMPANY_ID,
                     value=hello.build_local_presence_value(),
-                    # Presence is a pure beacon: it must be NON-connectable so it
-                    # never competes with (or gets consumed by) the L2CAP
-                    # transport's own connectable advertising. A "peripheral"
-                    # (connectable) presence advert stops after the first central
-                    # connects, which made a second leaf unable to reach a
-                    # already-connected relay/center. "broadcast" keeps beaconing.
+                    # Presence is a pure beacon: NON-connectable so it never
+                    # competes with (or gets consumed by) the L2CAP transport's
+                    # own connectable advertising. A connectable presence advert
+                    # stops after the first central connects, which left a second
+                    # leaf unable to reach an already-connected relay/center.
                     adv_type="broadcast",
                     log=(lambda m: None) if self._quiet else self._dispatch_log,
                 )

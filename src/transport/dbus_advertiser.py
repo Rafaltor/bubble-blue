@@ -61,25 +61,46 @@ _ADV_IFACE = "org.bluez.LEAdvertisement1"
 
 if _DBUS_IMPORT_ERROR is None:
 
-    class _Advertisement(ServiceInterface):
-        """A single ``org.bluez.LEAdvertisement1`` object with fixed properties."""
+    class _BroadcastAdvertisement(ServiceInterface):
+        """
+        Non-connectable ``org.bluez.LEAdvertisement1`` (Type=``broadcast``).
 
-        def __init__(
-            self,
-            *,
-            company_id: int,
-            value: bytes,
-            adv_type: str,
-            discoverable: bool,
-        ) -> None:
+        BlueZ rejects the ``Discoverable`` property on a broadcast advertisement
+        ("Failed to parse advertisement"), so this variant deliberately does NOT
+        expose it — a broadcast beacon is never discoverable/connectable.
+        """
+
+        def __init__(self, *, company_id: int, value: bytes) -> None:
             super().__init__(_ADV_IFACE)
-            self._type = adv_type
+            self._mfg = {int(company_id): Variant("ay", bytes(value))}
+
+        @dbus_property(access=PropertyAccess.READ)
+        def Type(self) -> "s":  # noqa: N802,F821
+            return "broadcast"
+
+        @dbus_property(access=PropertyAccess.READ)
+        def ManufacturerData(self) -> "a{qv}":  # noqa: N802,F821
+            return self._mfg
+
+        @dbus_property(access=PropertyAccess.READ)
+        def IncludeTxPower(self) -> "b":  # noqa: N802,F821
+            return False
+
+        @method()
+        def Release(self):  # noqa: N802
+            return
+
+    class _PeripheralAdvertisement(ServiceInterface):
+        """Connectable ``org.bluez.LEAdvertisement1`` (Type=``peripheral``)."""
+
+        def __init__(self, *, company_id: int, value: bytes, discoverable: bool) -> None:
+            super().__init__(_ADV_IFACE)
             self._discoverable = discoverable
             self._mfg = {int(company_id): Variant("ay", bytes(value))}
 
         @dbus_property(access=PropertyAccess.READ)
         def Type(self) -> "s":  # noqa: N802,F821
-            return self._type
+            return "peripheral"
 
         @dbus_property(access=PropertyAccess.READ)
         def ManufacturerData(self) -> "a{qv}":  # noqa: N802,F821
@@ -96,6 +117,15 @@ if _DBUS_IMPORT_ERROR is None:
         @method()
         def Release(self):  # noqa: N802
             return
+
+    def _make_advertisement(
+        *, company_id: int, value: bytes, adv_type: str, discoverable: bool
+    ):
+        if adv_type == "broadcast":
+            return _BroadcastAdvertisement(company_id=company_id, value=value)
+        return _PeripheralAdvertisement(
+            company_id=company_id, value=value, discoverable=discoverable
+        )
 
 
 class DBusLEAdvertiser:
@@ -221,7 +251,7 @@ class DBusLEAdvertiser:
         await self._unregister_current()
         self._counter += 1
         path = f"/org/bluez/bb/adv{self._counter}"
-        adv = _Advertisement(
+        adv = _make_advertisement(
             company_id=self._company_id,
             value=value,
             adv_type=self._adv_type,
