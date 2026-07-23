@@ -119,28 +119,38 @@ def connect_coc(
     addr_type: int = LE_ADDR_TYPE,
     timeout: float = 30.0,
 ) -> None:
-    """``connect`` with ``EINPROGRESS`` (115) handling — common on BlueZ LE."""
-    addr = le_addr(bd_addr, psm=psm, addr_type=addr_type)
-    try:
-        sock.connect(addr)
-        return
-    except OSError as e:
-        if e.errno not in (errno.EINPROGRESS, errno.EALREADY):
-            raise
+    """Non-blocking ``connect`` with a hard ``timeout``.
 
-    _, writable, exceptional = select.select([], [sock], [sock], timeout)
-    if exceptional:
-        err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-        if err:
-            raise OSError(err, os.strerror(err))
-    if not writable:
-        raise OSError(
-            errno.ETIMEDOUT,
-            f"BLE L2CAP connect to {bd_addr.upper()} timed out after {timeout:g}s",
-        )
-    err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-    if err:
-        raise OSError(err, os.strerror(err))
+    The socket is switched to non-blocking so ``connect`` returns immediately
+    with ``EINPROGRESS`` and the ``select`` below actually bounds the wait; a
+    blocking socket would ignore ``timeout`` and could hang for a long time on
+    an unreachable/non-connectable peer, stalling the whole dial loop. Blocking
+    mode is restored before returning so the recv loop reads normally.
+    """
+    addr = le_addr(bd_addr, psm=psm, addr_type=addr_type)
+    sock.setblocking(False)
+    try:
+        try:
+            sock.connect(addr)
+        except OSError as e:
+            if e.errno not in (errno.EINPROGRESS, errno.EALREADY):
+                raise
+            _, writable, exceptional = select.select([], [sock], [sock], timeout)
+            if exceptional:
+                err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if err:
+                    raise OSError(err, os.strerror(err))
+            if not writable:
+                raise OSError(
+                    errno.ETIMEDOUT,
+                    f"BLE L2CAP connect to {bd_addr.upper()} timed out "
+                    f"after {timeout:g}s",
+                )
+            err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            if err:
+                raise OSError(err, os.strerror(err))
+    finally:
+        sock.setblocking(True)
 
 
 def open_listener(*, psm: int = PSM_BLE, backlog: int = 10) -> socket.socket:

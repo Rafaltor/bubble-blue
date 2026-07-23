@@ -58,6 +58,12 @@ from src.transport.fragmentation import (  # noqa: E402
 )
 
 
+# Per-attempt outbound dial timeout. Kept short so a dial to a momentarily
+# unreachable/non-connectable peer fails fast instead of stalling the one-dial-
+# per-pass connect loop (a reachable peer connects well under a second).
+_DIAL_TIMEOUT_S = 8.0
+
+
 def _ts() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f%z")
 
@@ -290,7 +296,12 @@ class BLEL2CAPTransport:
         sock: socket.socket | None = None
         for try_type in le_addr_types_to_try(addr_type):
             try:
-                sock = open_outbound(bd_addr, psm=self._psm, addr_type=try_type)
+                sock = open_outbound(
+                    bd_addr,
+                    psm=self._psm,
+                    addr_type=try_type,
+                    timeout=_DIAL_TIMEOUT_S,
+                )
                 break
             except OSError as e:
                 last_err = e
