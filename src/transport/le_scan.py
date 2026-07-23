@@ -337,6 +337,11 @@ class MgmtLEScanner:
     def running(self) -> bool:
         return self._started
 
+    @property
+    def record_ttl_s(self) -> float:
+        """How long a device stays in :meth:`snapshot` after it was last heard."""
+        return self._ttl
+
     def snapshot(self, _window_s: float | None = None) -> dict[str, ScanDeviceRecord]:
         """Return BB records seen within the TTL (drop-in ``records_provider``)."""
         now = time.monotonic()

@@ -293,7 +293,16 @@ class BBNode:
         D-Bus), and ingests peers' Hellos from the MGMT scan snapshot. If the
         D-Bus advertiser is unavailable we still ingest (read-only awareness).
         """
-        hello.enable_connectionless_topology()
+        # The connectionless "heard" horizon should be as long as the scanner
+        # remembers a device. Otherwise, while a node is busy attempting an
+        # L2CAP dial (which starves its passive scan windows), a neighbour can
+        # expire from `heard` — flapping the CDS role — even though the scanner
+        # snapshot still holds it. Aligning both keeps presence stable.
+        heard_ttl = None
+        scanner = self._le_scanner
+        if scanner is not None:
+            heard_ttl = float(scanner.record_ttl_s)
+        hello.enable_connectionless_topology(ttl_s=heard_ttl)
         hci_index = hci_index_from_interface(self._interface)
         if DBusLEAdvertiser.available():
             try:
