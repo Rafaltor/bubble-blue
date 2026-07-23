@@ -376,10 +376,14 @@ class BBNode:
                 parsed["mpr"],
                 is_relay=parsed.get("is_relay", False),
             )
-            self._presence_addr[parsed["anon_id"].hex()] = (
-                bd.upper(),
-                rec.addr_type or "",
-            )
+            # Resolve the peer's *connectable* L2CAP address from the Hello
+            # payload, not the packet's source address: a non-connectable
+            # presence beacon rotates its source (RPA), which is not dialable.
+            reachable = parsed.get("bd_addr")
+            if reachable:
+                self._presence_addr[parsed["anon_id"].hex()] = (reachable.upper(), "public")
+            else:
+                self._presence_addr[parsed["anon_id"].hex()] = (bd.upper(), rec.addr_type or "")
 
     def _presence_scanner_idle(self) -> bool:
         """True when every non-quarantined discovered candidate is an admitted active peer."""

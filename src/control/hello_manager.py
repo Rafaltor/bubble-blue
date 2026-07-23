@@ -360,7 +360,12 @@ class HelloManager:
         mpr = {bytes(a) for a in compute_local_mpr(self.table, self.anon_id)} & set(heard)
         seq = self._next_seq()
         return build_presence_manufacturer_value(
-            self.anon_id, seq, neighbors, sorted(mpr), is_relay=bool(self._is_cds)
+            self.anon_id,
+            seq,
+            neighbors,
+            sorted(mpr),
+            is_relay=bool(self._is_cds),
+            bd_addr=self._local_bd,
         )
 
     def _known_neighbor_pairs(self) -> list[tuple[bytes, str]]:

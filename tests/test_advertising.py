@@ -99,7 +99,9 @@ def test_presence_value_roundtrip() -> None:
     anon = bytes(range(8))
     nbrs = [bytes([i]) * 8 for i in range(1, 4)]
     mpr = [bytes([9]) * 8]
-    value = build_presence_manufacturer_value(anon, 42, nbrs, mpr, is_relay=True)
+    value = build_presence_manufacturer_value(
+        anon, 42, nbrs, mpr, is_relay=True, bd_addr="14:B5:CD:E8:75:33"
+    )
     # The presence value keeps the plain-beacon prefix so discovery still matches.
     assert value[:3] == BB_BEACON_MAGIC + bytes([BB_BEACON_PROTOCOL_VERSION])
     assert match_bb_beacon_manufacturer_data(value)
@@ -110,13 +112,14 @@ def test_presence_value_roundtrip() -> None:
     assert parsed["anon_id"] == anon
     assert parsed["seq"] == 42
     assert parsed["is_relay"] is True
+    assert parsed["bd_addr"] == "14:B5:CD:E8:75:33"
     assert parsed["neighbors"] == nbrs
     assert parsed["mpr"] == mpr
 
-    # Default role is non-relay.
-    assert parse_presence_manufacturer_value(
-        build_presence_manufacturer_value(anon, 1, nbrs)
-    )["is_relay"] is False
+    # Default role is non-relay and no reachable address advertised.
+    default = parse_presence_manufacturer_value(build_presence_manufacturer_value(anon, 1, nbrs))
+    assert default["is_relay"] is False
+    assert default["bd_addr"] is None
 
 
 def test_presence_value_truncates_to_budget() -> None:
@@ -138,9 +141,15 @@ def test_presence_parse_rejects_plain_beacon_and_garbage() -> None:
     assert parse_presence_manufacturer_value(b"\x00\x01\x02") is None
     assert parse_presence_manufacturer_value(b"") is None
     # Truncated presence (claims neighbors it does not carry) → None, never raises.
-    # prefix(4) + anon_id(8) + seq(4) + flags(1) + n_neighbors=5 but no neighbor bytes.
+    # prefix(4) + anon(8) + seq(4) + flags(1) + bd(6) + n_neighbors=5 but no neighbor bytes.
     truncated = (
-        BB_BEACON_MAGIC + bytes([0x01, 0x01]) + bytes(8) + b"\x00\x00\x00\x01" + bytes([0x00, 5])
+        BB_BEACON_MAGIC
+        + bytes([0x01, 0x02])  # protocol 0x01, presence format 0x02
+        + bytes(8)
+        + b"\x00\x00\x00\x01"
+        + bytes([0x00])
+        + bytes(6)
+        + bytes([5])
     )
     assert parse_presence_manufacturer_value(truncated) is None
 

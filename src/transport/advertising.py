@@ -74,13 +74,20 @@ def bb_beacon_ad_hex() -> str:
 #   anon_id                    (8)
 #   seq                        (4, big-endian)
 #   flags                      (1)  bit0 = CDS relay (RELAY role), other bits reserved
+#   bd_addr                    (6)  reachable L2CAP address (big-endian, 00..00 = none)
 #   n_neighbors                (1)
 #   neighbor_anon_ids          (8 * n_neighbors)
 #   n_mpr                      (1)
 #   mpr_anon_ids               (8 * n_mpr)
+#
+# The bd_addr field is what makes the presence beacon self-contained: a
+# non-connectable ("broadcast") advert rotates its transport-layer source
+# address (RPA), so a scanner cannot derive a peer's connectable L2CAP address
+# from the packet. The Hello therefore states it explicitly.
 # ---------------------------------------------------------------------------
 ANON_ID_SIZE = 8
-PRESENCE_FORMAT_VERSION = 0x01
+BD_ADDR_SIZE = 6
+PRESENCE_FORMAT_VERSION = 0x02
 PRESENCE_FLAG_RELAY = 0x01
 _PRESENCE_PREFIX = BB_BEACON_MAGIC + bytes([BB_BEACON_PROTOCOL_VERSION, PRESENCE_FORMAT_VERSION])
 # Max manufacturer VALUE the controller accepts, leaving room for the company id
@@ -95,6 +102,26 @@ def _coerce_anon_id(anon_id: bytes) -> bytes:
     return b
 
 
+def _bd_addr_to_bytes(bd_addr: str | None) -> bytes:
+    """Pack ``AA:BB:CC:DD:EE:FF`` into 6 big-endian bytes; None/blank -> zeros."""
+    if not bd_addr:
+        return bytes(BD_ADDR_SIZE)
+    parts = bd_addr.strip().split(":")
+    if len(parts) != BD_ADDR_SIZE:
+        return bytes(BD_ADDR_SIZE)
+    try:
+        return bytes(int(p, 16) for p in parts)
+    except ValueError:
+        return bytes(BD_ADDR_SIZE)
+
+
+def _bytes_to_bd_addr(raw: bytes) -> str | None:
+    """Unpack 6 bytes into ``AA:BB:CC:DD:EE:FF``; all-zero -> None (unset)."""
+    if len(raw) != BD_ADDR_SIZE or not any(raw):
+        return None
+    return ":".join(f"{b:02X}" for b in raw)
+
+
 def build_presence_manufacturer_value(
     anon_id: bytes,
     seq: int,
@@ -102,6 +129,7 @@ def build_presence_manufacturer_value(
     mpr_anon_ids: Iterable[bytes] = (),
     *,
     is_relay: bool = False,
+    bd_addr: str | None = None,
 ) -> bytes:
     """
     Encode a public Hello into the Manufacturer Specific Data VALUE (company 0xFFFF).
@@ -110,6 +138,8 @@ def build_presence_manufacturer_value(
     the extended-advertising budget; callers should pass the most relevant neighbors
     first. anon_ids must be 8 bytes each. ``is_relay`` advertises this node's CDS
     role so neighbors can build the backbone without recomputing a global view.
+    ``bd_addr`` is this node's reachable L2CAP address so peers can dial it even
+    when the beacon itself rides a rotating (non-connectable) source address.
     """
     local = _coerce_anon_id(anon_id)
     if not (0 <= int(seq) <= 0xFFFFFFFF):
@@ -118,7 +148,7 @@ def build_presence_manufacturer_value(
     mprs = [_coerce_anon_id(a) for a in mpr_anon_ids]
 
     flags = PRESENCE_FLAG_RELAY if is_relay else 0x00
-    head = _PRESENCE_PREFIX + local + struct.pack("!LB", int(seq), flags)
+    head = _PRESENCE_PREFIX + local + struct.pack("!LB", int(seq), flags) + _bd_addr_to_bytes(bd_addr)
 
     def _assemble(nbrs: list[bytes], mp: list[bytes]) -> bytes:
         out = head + bytes([len(nbrs)])
@@ -144,22 +174,25 @@ def parse_presence_manufacturer_value(value: bytes) -> dict | None:
     """
     Decode a presence Hello from a Manufacturer VALUE (company 0xFFFF payload).
 
-    Returns ``{"anon_id", "seq", "is_relay", "neighbors": [8b...], "mpr": [8b...]}``
-    or ``None`` if the value is a plain beacon / not a well-formed presence Hello.
-    Never raises on malformed input — unknown or truncated payloads simply yield
-    ``None`` so the scanner can keep polling untrusted air data.
+    Returns ``{"anon_id", "seq", "is_relay", "bd_addr", "neighbors": [8b...],
+    "mpr": [8b...]}`` or ``None`` if the value is a plain beacon / not a
+    well-formed presence Hello. Never raises on malformed input — unknown or
+    truncated payloads simply yield ``None`` so the scanner can keep polling
+    untrusted air data.
     """
     if len(value) < len(_PRESENCE_PREFIX):
         return None
     if value[: len(_PRESENCE_PREFIX)] != _PRESENCE_PREFIX:
         return None
     off = len(_PRESENCE_PREFIX)
-    if len(value) < off + ANON_ID_SIZE + 4 + 1 + 1:
+    if len(value) < off + ANON_ID_SIZE + 4 + 1 + BD_ADDR_SIZE + 1:
         return None
     anon_id = value[off : off + ANON_ID_SIZE]
     off += ANON_ID_SIZE
     (seq, flags) = struct.unpack_from("!LB", value, off)
     off += 5
+    bd_addr = _bytes_to_bd_addr(value[off : off + BD_ADDR_SIZE])
+    off += BD_ADDR_SIZE
     n = value[off]
     off += 1
     if len(value) < off + n * ANON_ID_SIZE + 1:
@@ -175,6 +208,7 @@ def parse_presence_manufacturer_value(value: bytes) -> dict | None:
         "anon_id": bytes(anon_id),
         "seq": int(seq),
         "is_relay": bool(flags & PRESENCE_FLAG_RELAY),
+        "bd_addr": bd_addr,
         "neighbors": neighbors,
         "mpr": mprs,
     }
