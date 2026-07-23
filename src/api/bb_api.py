@@ -598,11 +598,11 @@ class BBNode:
           - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
                      relay never dials leaves, so the leaf always initiates.
           - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → nodes form a connected CHAIN sorted by anon_id: each
-            node dials its immediate predecessor (largest anon below its own). A
-            chain (not a star) is used because a star concentrates every link on
-            one node, and a controller only accepts one inbound peripheral link;
-            in the chain each node has at most one inbound and one outbound.
+            empty backbone) → every node dials the globally smallest-anon node it
+            hears, forming a connected star so DATA still has an L2CAP path. A star
+            is used (not a chain) because these controllers do not reliably act as
+            central and peripheral at once, which a chain's middle nodes require;
+            the star keeps roles bipartite (leaves dial, the center only accepts).
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -631,15 +631,12 @@ class BBNode:
         if relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: connected chain sorted by anon_id. Dial the immediate
-        # predecessor (largest anon below ours). The globally smallest node we hear
-        # dials nobody and only accepts inbound. This spreads links so no node needs
-        # more than one inbound peripheral connection (star would overload the min).
-        lower = {a for a in sym if _i(a) < _i(local_aid)}
-        if not lower:
+        # Empty-CDS fallback: attach to the smallest-anon node in the neighbourhood
+        # (bipartite star — leaves dial, center only accepts).
+        center = min(sym | {local_aid}, key=_i)
+        if center == local_aid:
             return set()
-        predecessor = max(lower, key=_i)
-        return _to_bd({predecessor})
+        return _to_bd({center}) if center in sym else set()
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
