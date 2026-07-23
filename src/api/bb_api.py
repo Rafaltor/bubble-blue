@@ -598,14 +598,12 @@ class BBNode:
           - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
                      relay never dials leaves, so the leaf always initiates.
           - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → an INVERTED star: the globally smallest-anon node is
-            the hub and DIALS every other node it hears; the others only accept.
-            This is the only bipartite shape that fits the controller limits found
-            on the target boards: a peripheral accepts a single inbound link, and a
-            node cannot be central and peripheral at once. Making the leaves the
-            (single-inbound) peripherals and the hub the multi-outbound central
-            keeps every node pure-role and within the one-inbound cap, so DATA has
-            an L2CAP path to all nodes (the hub relays between leaves).
+            empty backbone) → full mesh among heard peers: each node dials the peers
+            with a HIGHER anon_id than its own, so every edge is dialed exactly once
+            (by its lower-anon endpoint) with no double-dial and no tie-break race.
+            In a clique this is the CDS-correct shape anyway (everyone is a direct
+            neighbour), and it matches the bidirectional multi-connection pattern
+            that forms a stable mesh on these boards.
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -634,14 +632,9 @@ class BBNode:
         if relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS fallback: INVERTED star. The smallest-anon node is the hub and
-        # dials every heard peer (central, multi-outbound); everyone else only
-        # accepts the hub's inbound (peripheral, single inbound). This respects the
-        # controller's one-inbound-per-peripheral cap and avoids dual-role nodes.
-        hub = min(sym | {local_aid}, key=_i)
-        if hub == local_aid:
-            return _to_bd(sym)
-        return set()
+        # Empty-CDS fallback: full mesh. Dial every heard peer with a higher
+        # anon_id than ours; each edge is dialed once by its lower-anon endpoint.
+        return _to_bd({a for a in sym if _i(a) > _i(local_aid)})
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
