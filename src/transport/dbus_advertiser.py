@@ -209,34 +209,6 @@ class DBusLEAdvertiser:
         except Exception as exc:  # noqa: BLE001
             self._log(f"advertising update failed: {exc!r}")
 
-    def pause(self) -> None:
-        """
-        Stop radiating without tearing down the bus/thread (cheap, reversible).
-
-        Single-antenna controllers (e.g. Broadcom/Pi) cannot run extended
-        advertising and LE discovery at once: while advertising, the scanner is
-        starved and hears nothing. The scanner time-shares the radio by pausing
-        advertising for the duration of each scan window and resuming it in the
-        gap. Keeps the D-Bus connection alive so resume() is a single register.
-        """
-        if not self._started or self._loop is None:
-            return
-        fut = asyncio.run_coroutine_threadsafe(self._unregister_current(), self._loop)
-        try:
-            fut.result(timeout=5.0)
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"advertising pause failed: {exc!r}")
-
-    def resume(self) -> None:
-        """Re-radiate the current payload after :meth:`pause` (no-op if active)."""
-        if not self._started or self._loop is None:
-            return
-        fut = asyncio.run_coroutine_threadsafe(self._register(self._value), self._loop)
-        try:
-            fut.result(timeout=5.0)
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"advertising resume failed: {exc!r}")
-
     def stop(self) -> None:
         if not self._started:
             return

@@ -345,15 +345,21 @@ class HelloManager:
             self._heard = {aid: ts for aid, ts in self._heard.items() if now - ts <= self._heard_ttl_s}
         return frozenset(fresh)
 
-    def build_local_presence_value(self) -> bytes:
+    def build_local_presence_value(self, *, max_value_len: int | None = None) -> bytes:
         """
         Build the Manufacturer Specific Data VALUE for our own public Hello.
 
         Advertises our anon_id, a fresh sequence number, our currently-heard
         symmetric neighbors and the MPR set we elect over them — everything a
-        peer needs to place us in the mesh graph without connecting.
+        peer needs to place us in the mesh graph without connecting. Pass
+        ``max_value_len`` (e.g. ``LEGACY_PRESENCE_MAX_VALUE_LEN``) to produce a
+        compact Hello that fits a legacy 31-byte advertisement — required so
+        controllers that can only do legacy scanning still hear our presence.
         """
-        from src.transport.advertising import build_presence_manufacturer_value
+        from src.transport.advertising import (
+            _MAX_PRESENCE_VALUE_LEN,
+            build_presence_manufacturer_value,
+        )
 
         heard = self.heard_anon_ids()
         neighbors = sorted(heard)
@@ -366,6 +372,7 @@ class HelloManager:
             sorted(mpr),
             is_relay=bool(self._is_cds),
             bd_addr=self._local_bd,
+            max_value_len=_MAX_PRESENCE_VALUE_LEN if max_value_len is None else int(max_value_len),
         )
 
     def _known_neighbor_pairs(self) -> list[tuple[bytes, str]]:

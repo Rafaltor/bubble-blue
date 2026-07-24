@@ -24,10 +24,10 @@ from src.security.epoch import EpochStore
 from src.security.keys import BBKeyStore
 from src.transport.advertising import (
     BB_BEACON_COMPANY_ID,
+    LEGACY_PRESENCE_MAX_VALUE_LEN,
     parse_presence_manufacturer_value,
 )
 from src.transport.base import ManagedTransport
-from src.transport.dbus_advertiser import DBusLEAdvertiser
 from src.transport.factory import make_transport
 from src.transport.le_scan import MgmtLEScanner, hci_index_from_interface
 from src.transport.pairing_agent import PairingAgentSupervisor
@@ -116,8 +116,7 @@ class BBNode:
         self._active_peers: set[str] = set()
         self._presence_scanner: PresenceScanner | None = None
         self._le_scanner: MgmtLEScanner | None = None
-        # Connectionless presence plane (public Hello broadcast + ingest).
-        self._dbus_advertiser: DBusLEAdvertiser | None = None
+        # Connectionless presence plane (public Hello in legacy advert + ingest).
         self._presence_stop = threading.Event()
         self._presence_thread: threading.Thread | None = None
         # anon_id (hex) -> (bd_addr, addr_type) learned from heard presence Hellos.
@@ -303,53 +302,14 @@ class BBNode:
         if scanner is not None:
             heard_ttl = float(scanner.record_ttl_s)
         hello.enable_connectionless_topology(ttl_s=heard_ttl)
-        hci_index = hci_index_from_interface(self._interface)
-        if DBusLEAdvertiser.available():
-            try:
-                adv = DBusLEAdvertiser(
-                    interface=hci_index,
-                    company_id=BB_BEACON_COMPANY_ID,
-                    value=hello.build_local_presence_value(),
-                    # Presence is a pure beacon: NON-connectable so it never
-                    # competes with (or gets consumed by) the L2CAP transport's
-                    # own connectable advertising. A connectable presence advert
-                    # stops after the first central connects, which left a second
-                    # leaf unable to reach an already-connected relay/center.
-                    adv_type="broadcast",
-                    log=(lambda m: None) if self._quiet else self._dispatch_log,
-                )
-                adv.start()
-                self._dbus_advertiser = adv
-                # Single-antenna controllers (Broadcom/Pi) starve LE discovery
-                # while advertising is active — the node then advertises but hears
-                # nobody. Time-share the radio: pause BOTH the presence broadcast
-                # and the transport's connectable advertising for each scan window
-                # and resume them in the gap. Both must be paused; leaving either
-                # up keeps the scan starved.
-                if scanner is not None:
-                    transport = self._transport
-                    pause_tx = getattr(transport, "pause_advertising", None)
-                    resume_tx = getattr(transport, "resume_advertising", None)
-
-                    def _scan_begin() -> None:
-                        adv.pause()
-                        if pause_tx is not None:
-                            pause_tx()
-
-                    def _scan_end() -> None:
-                        if resume_tx is not None:
-                            resume_tx()
-                        adv.resume()
-
-                    scanner.on_window_start = _scan_begin
-                    scanner.on_window_end = _scan_end
-            except Exception as e:  # noqa: BLE001
-                self._dispatch_log(f"presence advertiser unavailable: {e!r}")
-                self._dbus_advertiser = None
-        else:
-            self._dispatch_log(
-                "dbus-fast missing: presence broadcast off (ingest still active)"
-            )
+        # Broadcast the compact presence Hello inside the transport's legacy
+        # connectable advertisement (not extended advertising). Extended
+        # advertising is invisible to controllers that can only do legacy LE
+        # scanning (e.g. Broadcom/Pi), so those boards would never hear anyone's
+        # presence and never form the mesh. A compact Hello (anon_id + reachable
+        # L2CAP address + CDS relay flag) fits the 31-byte legacy budget and is
+        # readable by every scanner, legacy or extended.
+        self._push_presence_advert(hello)
         self._presence_stop.clear()
         self._presence_thread = threading.Thread(
             target=self._presence_loop, name="bb-presence", daemon=True
@@ -362,20 +322,27 @@ class BBNode:
         if thread is not None:
             thread.join(timeout=3.0)
             self._presence_thread = None
-        if self._dbus_advertiser is not None:
-            self._dbus_advertiser.stop()
-            self._dbus_advertiser = None
         self._presence_addr.clear()
+
+    def _push_presence_advert(self, hello: HelloManager) -> None:
+        """Refresh the transport's legacy advertisement with our compact Hello."""
+        transport = self._transport
+        update = getattr(transport, "update_presence", None)
+        if update is None:
+            return
+        value = hello.build_local_presence_value(
+            max_value_len=LEGACY_PRESENCE_MAX_VALUE_LEN
+        )
+        update(value)
 
     def _presence_loop(self) -> None:
         # Jittered so independently-booted nodes don't refresh in lockstep.
         while not self._presence_stop.wait(2.0 + random.uniform(0.0, 1.0)):
             try:
                 self._ingest_presence_from_scan()
-                adv = self._dbus_advertiser
                 hello = self._hello_mgr
-                if adv is not None and hello is not None:
-                    adv.update(hello.build_local_presence_value())
+                if hello is not None:
+                    self._push_presence_advert(hello)
             except Exception as e:  # noqa: BLE001
                 self._dispatch_log(f"presence loop: {e}")
 

@@ -167,13 +167,16 @@ class BLEL2CAPTransport:
         self._stop_evt = threading.Event()
         self._advertiser = LEAdvertiser(interface=interface, quiet=quiet)
 
-    def pause_advertising(self) -> None:
-        """Pause the connectable LE advertising (radio time-share with scan)."""
-        self._advertiser.pause()
+    def update_presence(self, value: bytes) -> None:
+        """
+        Set the connectable advertisement's manufacturer payload.
 
-    def resume_advertising(self) -> None:
-        """Resume the connectable LE advertising after :meth:`pause_advertising`."""
-        self._advertiser.resume()
+        Carries the compact connectionless presence Hello (anon_id + reachable
+        L2CAP address + CDS relay flag) in the legacy 31-byte advertisement so
+        controllers that can only do legacy scanning still hear presence — extended
+        advertising is invisible to a legacy scanner.
+        """
+        self._advertiser.set_value(value)
 
     def _rearm_advertising(self) -> None:
         """Non-blocking advertising re-arm after connect/disconnect (legacy LE)."""

@@ -57,14 +57,38 @@ def bb_beacon_ad_hex() -> str:
     return BB_BEACON_ADV_DATA.hex()
 
 
+# Largest company VALUE that fits a legacy connectable advertisement: the 31-byte
+# AD budget minus the manufacturer AD header (length + type 0xFF + 2-byte company).
+LEGACY_PRESENCE_MAX_VALUE_LEN = 31 - 4
+
+
+def manufacturer_adv_data_hex(value: bytes) -> str:
+    """
+    Build the ``btmgmt add-adv -d`` hex for a Manufacturer Specific Data VALUE.
+
+    ``value`` is the company payload (bytes after the 2-byte company id). Wraps it
+    in one AD structure: ``[len][0xFF][company-id LE][value]``.
+    """
+    ad = (
+        bytes([1 + 2 + len(value), 0xFF])
+        + BB_BEACON_COMPANY_ID.to_bytes(2, "little")
+        + bytes(value)
+    )
+    return ad.hex()
+
+
 # ---------------------------------------------------------------------------
 # Connectionless public Hello carried in Manufacturer Specific Data.
 #
 # Broadcasting the public Hello (anon_id + advertised 1-hop neighbors + MPR set)
 # lets every node build the mesh topology and run the CDS election WITHOUT any
 # L2CAP connection — presence is learned from the air, exactly like the beacon.
-# The payload exceeds the 31-byte legacy AD limit, so it is emitted via bluetoothd
-# Extended Advertising (see :class:`~src.transport.dbus_advertiser.DBusLEAdvertiser`).
+# The full payload (with neighbor/MPR lists) exceeds the 31-byte legacy AD limit,
+# so large Hellos need Extended Advertising (``DBusLEAdvertiser``). The *compact*
+# form (anon_id + flags + reachable bd_addr, empty lists) fits
+# ``LEGACY_PRESENCE_MAX_VALUE_LEN`` and is what the mesh uses by default: every
+# scanner — legacy or extended — can hear presence and dial, and lists are not
+# required for the dense-mesh dial fallback (which dials every heard peer).
 #
 # Layout of the manufacturer VALUE (the bytes AFTER the 2-byte company id, i.e.
 # what ``parse_eir_manufacturer`` returns for company 0xFFFF):
@@ -130,16 +154,19 @@ def build_presence_manufacturer_value(
     *,
     is_relay: bool = False,
     bd_addr: str | None = None,
+    max_value_len: int = _MAX_PRESENCE_VALUE_LEN,
 ) -> bytes:
     """
     Encode a public Hello into the Manufacturer Specific Data VALUE (company 0xFFFF).
 
-    Neighbor and MPR lists are truncated (neighbors first) so the value stays within
-    the extended-advertising budget; callers should pass the most relevant neighbors
-    first. anon_ids must be 8 bytes each. ``is_relay`` advertises this node's CDS
-    role so neighbors can build the backbone without recomputing a global view.
-    ``bd_addr`` is this node's reachable L2CAP address so peers can dial it even
-    when the beacon itself rides a rotating (non-connectable) source address.
+    Neighbor and MPR lists are truncated (MPRs then neighbors) so the value stays
+    within ``max_value_len``; callers should pass the most relevant neighbors first.
+    Pass ``max_value_len=LEGACY_PRESENCE_MAX_VALUE_LEN`` for a compact Hello that
+    fits a legacy 31-byte advertisement (readable by legacy-only scanners); the
+    fixed header alone (anon_id + seq + flags + bd_addr) already fits, so the lists
+    simply drop to empty. anon_ids must be 8 bytes each. ``is_relay`` advertises
+    this node's CDS role. ``bd_addr`` is this node's reachable L2CAP address so
+    peers can dial it even when the beacon rides a rotating source address.
     """
     local = _coerce_anon_id(anon_id)
     if not (0 <= int(seq) <= 0xFFFFFFFF):
@@ -159,12 +186,13 @@ def build_presence_manufacturer_value(
             out += a
         return out
 
+    budget = int(max_value_len)
     value = _assemble(neighbors, mprs)
     # Drop MPRs first, then neighbors, until the value fits the controller budget.
-    while len(value) > _MAX_PRESENCE_VALUE_LEN and mprs:
+    while len(value) > budget and mprs:
         mprs.pop()
         value = _assemble(neighbors, mprs)
-    while len(value) > _MAX_PRESENCE_VALUE_LEN and neighbors:
+    while len(value) > budget and neighbors:
         neighbors.pop()
         value = _assemble(neighbors, mprs)
     return value
@@ -311,11 +339,13 @@ class LEAdvertiser:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
-        self._paused = False
+        # Company payload currently advertised (after the 2-byte company id).
+        # Defaults to the plain beacon; set_value() swaps in the presence Hello.
+        self._value = BB_BEACON_MAGIC + bytes([BB_BEACON_PROTOCOL_VERSION])
 
-    @staticmethod
-    def ad_hex() -> str:
-        return bb_beacon_ad_hex()
+    def ad_hex(self) -> str:
+        """``btmgmt add-adv -d`` hex for the current manufacturer VALUE."""
+        return manufacturer_adv_data_hex(self._value)
 
     def start(self) -> None:
         """Bring up LE advertising and start the watchdog thread."""
@@ -360,38 +390,31 @@ class LEAdvertiser:
 
     def ensure(self) -> None:
         """Re-arm the advertising instance if the controller dropped it."""
-        if not self._started or self._paused:
+        if not self._started:
             return
         try:
             self._ensure_instance(force=False)
         except Exception as exc:
             self._log(f"ensure error: {exc}")
 
-    def pause(self) -> None:
+    def set_value(self, value: bytes) -> None:
         """
-        Remove the advertising instance without stopping the watchdog thread.
+        Replace the advertised Manufacturer Specific Data VALUE and re-arm.
 
-        Used to time-share the radio with LE discovery on single-antenna
-        controllers that cannot advertise and scan at once. The watchdog skips
-        re-arming while paused; :meth:`resume` brings the instance back.
+        ``value`` is the company payload (the bytes after the 2-byte company id),
+        e.g. the compact connectionless presence Hello. It must start with the BB
+        beacon magic so ``match_bb_beacon_in_ad`` still recognises us. Re-arming
+        via ``rm-adv``+``add-adv`` is how bluetoothd/btmgmt swaps a legacy payload.
         """
-        if not self._started or self._paused:
+        value = bytes(value)
+        if value == self._value:
             return
-        self._paused = True
-        try:
-            self._remove_instance()
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"pause error: {exc}")
-
-    def resume(self) -> None:
-        """Re-arm the advertising instance after :meth:`pause`."""
-        if not self._started or not self._paused:
-            return
-        self._paused = False
-        try:
-            self._ensure_instance(force=True)
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"resume error: {exc}")
+        self._value = value
+        if self._started:
+            try:
+                self._ensure_instance(force=True)
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"set_value error: {exc}")
 
     def _prepare_controller(self) -> None:
         self._run(self._hci_index, "power on")
