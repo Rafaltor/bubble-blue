@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Stack actuelle</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+  :root {
+    --bg:#f8f9fa; --surface:#fff; --surface2:#eef1f4; --border:#d8dee6;
+    --accent:#0052cc; --green:#1e7e34; --yellow:#b88700; --text:#1a2340; --muted:#5a6378;
+    --sans:'IBM Plex Sans',sans-serif; --nav-bg:rgba(17,24,39,.95); --nav-border:#2a3548;
+    --nav-muted:#8899aa; --nav-w:11.5rem;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);overflow:hidden;height:100vh;width:100vw}
+  #nav{position:fixed;top:0;left:0;bottom:0;width:var(--nav-w);display:flex;flex-direction:column;gap:.3rem;
+    background:var(--nav-bg);border-right:1px solid var(--nav-border);padding:1rem .75rem;z-index:1000;overflow-y:auto}
+  #nav button{background:none;border:none;color:var(--nav-muted);cursor:pointer;font:500 .72rem var(--sans);
+    padding:.5rem .7rem;border-radius:6px;text-align:left;width:100%}
+  #nav button:hover{color:#fff} #nav button.active{background:var(--accent);color:#fff}
+  #slide-counter{margin-top:auto;padding-top:.75rem;border-top:1px solid var(--nav-border);text-align:center;
+    font-size:.7rem;color:var(--nav-muted)}
+  .slide{position:absolute;top:0;left:var(--nav-w);width:calc(100% - var(--nav-w));height:100%;display:none;
+    padding:2.5rem 3.5rem;flex-direction:column;overflow-y:auto}
+  .slide.active{display:flex;animation:f .28s ease}
+  @keyframes f{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .num{font-size:.7rem;color:var(--accent);letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-bottom:.4rem}
+  h1{font-size:2.4rem;font-weight:700;line-height:1.1;margin-bottom:.55rem}
+  .lead{color:var(--muted);font-size:1.02rem;max-width:50rem;margin-bottom:1rem}
+  .grid{display:grid;gap:.85rem;margin-top:.7rem}.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1rem 1.1rem}
+  .card h3{font-size:.92rem;color:var(--accent);margin-bottom:.35rem}
+  .card p,.card li{font-size:.86rem;color:var(--muted)} .card ul{padding-left:1.1rem}
+  table{width:100%;border-collapse:collapse;margin-top:.7rem;font-size:.86rem}
+  th,td{border:1px solid var(--border);padding:.5rem .65rem;text-align:left;vertical-align:top}
+  th{background:var(--surface2);font-weight:600}
+  code{font-family:ui-monospace,monospace;font-size:.84em;background:var(--surface2);padding:.05rem .3rem;border-radius:4px}
+  .callout{border-left:4px solid var(--accent);background:#eef4ff;padding:.8rem 1rem;border-radius:0 8px 8px 0;margin:1rem 0;font-size:.9rem}
+  a{color:var(--accent)}
+  @media(max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="slide active" id="s1">
+  <div class="num">01</div>
+  <h1>BUBBLE-BLUE — stack tip</h1>
+  <p class="lead">Vue d’ensemble à jour du dépôt (post legacy-presence). Pour le détail CDS :
+    <a href="bb-cds-pipeline.html">bb-cds-pipeline.html</a>.</p>
+  <div class="grid g3">
+    <div class="card"><h3>Transport</h3><p>BLE L2CAP CoC PSM <code>0x0081</code> (ou Classic <code>0x1001</code>)</p></div>
+    <div class="card"><h3>Contrôle</h3><p>Presence OTA + Hello + CDS Wu-Li + ANNOUNCE</p></div>
+    <div class="card"><h3>Sécu</h3><p>AES-256-GCM groupe · X25519/Ed25519 · lien <code>BT_SECURITY_LOW</code></p></div>
+  </div>
+</div>
+
+<div class="slide" id="s2">
+  <div class="num">02</div>
+  <h1>Couches runtime</h1>
+  <table>
+    <tr><th>Couche</th><th>Modules</th><th>Rôle</th></tr>
+    <tr><td>Entrée</td><td><code>bb_node.py</code> · <code>BBNode</code></td><td>CLI chat / scan / topology</td></tr>
+    <tr><td>Transport</td><td><code>ble_l2cap</code> · <code>l2cap</code> · <code>advertising</code> · <code>le_scan</code></td><td>Liens + presence AD + MGMT scan</td></tr>
+    <tr><td>Contrôle</td><td><code>hello_manager</code> · <code>announce</code> · <code>presence_scanner</code></td><td>Voisinage, CDS, identité</td></tr>
+    <tr><td>Forward</td><td><code>cds</code> · <code>forwarder</code></td><td>Élection + multihop opaque</td></tr>
+    <tr><td>Crypto</td><td><code>keys</code> · <code>crypto</code> · <code>packet</code> · <code>signing</code></td><td>Bulle privée</td></tr>
+  </table>
+</div>
+
+<div class="slide" id="s3">
+  <div class="num">03</div>
+  <h1>Mesh ouvert / bulle privée</h1>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Plan topologique (ouvert)</h3>
+      <ul>
+        <li>Presence compacte legacy</li>
+        <li>Auto-dial (CDS ou heard)</li>
+        <li>Hello publics cross-group</li>
+        <li>Forward opaque</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Plan applicatif (privé)</h3>
+      <ul>
+        <li><code>BUBBLE_BLUE_GROUP_KEY</code></li>
+        <li><code>PKT_ANNOUNCE</code> + Hello privé</li>
+        <li>Chat déchiffrable seulement dans la bulle</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">Labo : <code>GROUP_MEMBERS</code> / <code>--topology</code> optionnels. Prod opportuniste : clé + transport.</div>
+</div>
+
+<div class="slide" id="s4">
+  <div class="num">04</div>
+  <h1>Presence &amp; dial (résumé)</h1>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Presence v0x02</h3>
+      <p>AD connectable legacy · anon_id · flag RELAY · BD_ADDR · listes vides (budget 31 B).</p>
+    </div>
+    <div class="card">
+      <h3>Dial</h3>
+      <p>RELAY↔RELAY / LEAF→dominateur ; si CDS vide → dial every heard · 1 dial/passe · 8 s.</p>
+    </div>
+  </div>
+  <p class="lead" style="margin-top:1rem">Détail slides : <a href="bb-cds-pipeline.html">Pipeline CDS</a>.</p>
+</div>
+
+<div class="slide" id="s5">
+  <div class="num">05</div>
+  <h1>Forward &amp; identité</h1>
+  <div class="grid g2">
+    <div class="card"><h3>_should_relay</h3><p>CDS RELAY <strong>ou</strong> ≥ 2 liens L2CAP (pont étoile edge-of-range).</p></div>
+    <div class="card"><h3>ANNOUNCE</h3><p>Burst + périodique · BD → pubkeys · Ed25519 PoP sous clé de groupe.</p></div>
+  </div>
+</div>
+
+<div class="slide" id="s6">
+  <div class="num">06</div>
+  <h1>Lancer sur une board</h1>
+  <table>
+    <tr><th>Étape</th><th>Commande</th></tr>
+    <tr><td>Clone</td><td><code>git clone git@gitlab.inria.fr:bb/bb_v1.git</code></td></tr>
+    <tr><td>Deps</td><td><code>./scripts/install_py314_deps.sh</code></td></tr>
+    <tr><td>Config</td><td><code>cp .env.example .env</code> → clé + <code>ble_l2cap</code></td></tr>
+    <tr><td>BT up</td><td><code>sudo btmgmt -i hci0 power on</code></td></tr>
+    <tr><td>Chat</td><td><code>sudo python3.14 bb_node.py --chat</code></td></tr>
+  </table>
+  <div class="callout">Procédure complète board vierge : voir <code>README.md</code> § Setup board.</div>
+</div>
+
+<div class="slide" id="s7">
+  <div class="num">07</div>
+  <h1>Docs du dépôt</h1>
+  <table>
+    <tr><th>Fichier</th><th>Usage</th></tr>
+    <tr><td><code>README.md</code></td><td>Setup board + architecture</td></tr>
+    <tr><td><code>docs/CONFIGURATION.md</code></td><td>Env vars + protocoles lab</td></tr>
+    <tr><td><code>docs/bb-cds-pipeline.html</code></td><td>Présentation CDS</td></tr>
+    <tr><td><code>docs/bb-stack-actuel.html</code></td><td>Ce deck</td></tr>
+    <tr><td><code>docs/special_security_BB.pdf</code></td><td>Spec sécu</td></tr>
+    <tr><td><code>docs/archive/</code></td><td>Anciens decks (historique)</td></tr>
+  </table>
+</div>
+
+<div id="nav">
+  <button class="active" id="btn1" onclick="goTo(1)">Titre</button>
+  <button id="btn2" onclick="goTo(2)">Couches</button>
+  <button id="btn3" onclick="goTo(3)">Deux plans</button>
+  <button id="btn4" onclick="goTo(4)">Presence</button>
+  <button id="btn5" onclick="goTo(5)">Forward</button>
+  <button id="btn6" onclick="goTo(6)">Lancer</button>
+  <button id="btn7" onclick="goTo(7)">Docs</button>
+  <span id="slide-counter">1 / 7</span>
+</div>
+<script>
+const ids=['s1','s2','s3','s4','s5','s6','s7']; let cur=1, lock=false;
+function goTo(n){document.getElementById(ids[cur-1]).classList.remove('active');
+  document.getElementById('btn'+cur).classList.remove('active'); cur=n;
+  const s=document.getElementById(ids[cur-1]); s.classList.add('active'); s.scrollTop=0;
+  document.getElementById('btn'+cur).classList.add('active');
+  document.getElementById('slide-counter').textContent=cur+' / '+ids.length;}
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'&&cur<ids.length)goTo(cur+1);
+  if(e.key==='ArrowLeft'&&cur>1)goTo(cur-1);
+  if(e.key==='f'||e.key==='F'){if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}
+});
+document.addEventListener('wheel',e=>{
+  if(lock)return; const d=Math.sign(e.deltaY); if(!d)return;
+  const s=document.querySelector('.slide.active');
+  const top=s.scrollTop<=0, bot=s.scrollTop+s.clientHeight>=s.scrollHeight-1;
+  if(d>0&&!bot||d<0&&!top)return;
+  if(d>0&&cur<ids.length){e.preventDefault();lock=true;goTo(cur+1);setTimeout(()=>lock=false,400);}
+  else if(d<0&&cur>1){e.preventDefault();lock=true;goTo(cur-1);setTimeout(()=>lock=false,400);}
+},{passive:false});
+</script>
+</body>
+</html>

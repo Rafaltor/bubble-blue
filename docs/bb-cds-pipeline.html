@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Pipeline CDS (présentation)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+  :root {
+    --bg: #f8f9fa; --surface: #fff; --surface2: #eef1f4; --border: #d8dee6;
+    --accent: #0052cc; --green: #1e7e34; --red: #c0392b; --yellow: #b88700;
+    --text: #1a2340; --muted: #5a6378;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --nav-bg: rgba(17,24,39,.95); --nav-border: #2a3548; --nav-muted: #8899aa;
+    --nav-w: 12rem;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans);
+         overflow: hidden; height: 100vh; width: 100vw; }
+  #nav { position: fixed; top: 0; left: 0; bottom: 0; width: var(--nav-w);
+         display: flex; flex-direction: column; gap: .3rem; background: var(--nav-bg);
+         border-right: 1px solid var(--nav-border); padding: 1rem .75rem; z-index: 1000;
+         overflow-y: auto; }
+  #nav button { background: none; border: none; color: var(--nav-muted); cursor: pointer;
+                font: 500 .72rem var(--sans); padding: .5rem .7rem; border-radius: 6px;
+                text-align: left; width: 100%; }
+  #nav button:hover { color: #fff; }
+  #nav button.active { background: var(--accent); color: #fff; }
+  #slide-counter { margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--nav-border);
+                   text-align: center; font-size: .7rem; color: var(--nav-muted); }
+  .slide { position: absolute; top: 0; left: var(--nav-w); width: calc(100% - var(--nav-w));
+           height: 100%; display: none; padding: 2.5rem 3.5rem; flex-direction: column;
+           overflow-y: auto; }
+  .slide.active { display: flex; animation: fade .28s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .num { font-size: .7rem; color: var(--accent); letter-spacing: .14em; text-transform: uppercase;
+         font-weight: 600; margin-bottom: .4rem; }
+  h1 { font-size: 2.6rem; font-weight: 700; line-height: 1.1; margin-bottom: .6rem; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin: 1.1rem 0 .55rem; }
+  p, li { font-size: .98rem; line-height: 1.45; color: var(--text); }
+  .lead { color: var(--muted); font-size: 1.05rem; max-width: 52rem; margin-bottom: 1.2rem; }
+  .grid { display: grid; gap: .9rem; margin-top: .8rem; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: 1fr 1fr 1fr; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 1rem 1.1rem; }
+  .card h3 { font-size: .95rem; margin-bottom: .35rem; color: var(--accent); }
+  .card p, .card li { font-size: .88rem; color: var(--muted); }
+  .card ul { padding-left: 1.1rem; }
+  .pill { display: inline-block; font-size: .72rem; font-weight: 600; padding: .15rem .5rem;
+          border-radius: 999px; background: var(--surface2); color: var(--accent); margin-right: .35rem; }
+  .pill.g { color: var(--green); } .pill.y { color: var(--yellow); } .pill.r { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; margin-top: .7rem; font-size: .88rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--surface2); font-weight: 600; }
+  code { font-family: ui-monospace, monospace; font-size: .84em; background: var(--surface2);
+         padding: .05rem .3rem; border-radius: 4px; }
+  .flow { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1rem 0; }
+  .flow .step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+                padding: .65rem .85rem; font-size: .85rem; font-weight: 600; min-width: 7.5rem; text-align: center; }
+  .flow .arrow { color: var(--accent); font-weight: 700; }
+  .callout { border-left: 4px solid var(--accent); background: #eef4ff; padding: .85rem 1rem;
+             border-radius: 0 8px 8px 0; margin: 1rem 0; font-size: .92rem; }
+  .callout.warn { border-left-color: var(--yellow); background: #fff8e8; }
+  .callout.ok { border-left-color: var(--green); background: #edf7ef; }
+  svg.diagram { width: 100%; max-width: 720px; margin: .8rem 0; }
+  .kbd { font-size: .75rem; color: var(--muted); margin-top: auto; padding-top: 1.5rem; }
+  @media (max-width: 900px) { .g2, .g3 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<div class="slide active" id="s1">
+  <div class="num">01 — Introduction</div>
+  <h1>Pipeline CDS<br>BUBBLE-BLUE</h1>
+  <p class="lead">Présentation synthétique du chemin complet : présence OTA → élection
+    RELAY/LEAF → politique de dial L2CAP → forward multihop. Ce que le code fait
+    aujourd’hui sur BLE (legacy connectable AD).</p>
+  <div class="grid g3">
+    <div class="card"><h3>Problème</h3><p>Former un mesh multi-hop sans liste d’adresses préconfigurée, avec un backbone de relais minimal.</p></div>
+    <div class="card"><h3>Réponse</h3><p>CDS Wu-Li (paper §2.4.2) + plan de liens connectionless + filet de sécu (≥2 liens L2CAP).</p></div>
+    <div class="card"><h3>Livrable</h3><p>Chat chiffré multi-hop sur boards Rubik / Arduino UNO Q, bulle privée par clé de groupe.</p></div>
+  </div>
+  <p class="kbd">← → ou molette · F plein écran</p>
+</div>
+
+<!-- 2 -->
+<div class="slide" id="s2">
+  <div class="num">02 — Objectif CDS</div>
+  <h1>Pourquoi un CDS ?</h1>
+  <p class="lead">Un Connected Dominating Set = sous-ensemble de nœuds <strong>RELAY</strong> qui
+    dominent le graphe et restent connectés entre eux. Les autres sont <strong>LEAF</strong>.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Sans CDS (full mesh)</h3>
+      <ul>
+        <li>Chaque nœud dial tous les autres</li>
+        <li>Explosion de liens BLE (churn, timeouts)</li>
+        <li>Forward partout = flood coûteux</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Avec CDS (backbone)</h3>
+      <ul>
+        <li>Relais interconnectés</li>
+        <li>Feuilles se rattachent à un dominateur</li>
+        <li>Forward ciblé sur le backbone</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">Réf. algo : Wu &amp; Li 1999 · formulation paper arXiv:2509.00967 §2.4.2 ·
+    code <code>src/forwarding/cds.py</code> (<code>am_i_cds</code>).</div>
+</div>
+
+<!-- 3 -->
+<div class="slide" id="s3">
+  <div class="num">03 — Pipeline bout-en-bout</div>
+  <h1>Les 6 étapes</h1>
+  <div class="flow">
+    <div class="step">1. Presence AD</div><span class="arrow">→</span>
+    <div class="step">2. Scan MGMT</div><span class="arrow">→</span>
+    <div class="step">3. Ingest Hello</div><span class="arrow">→</span>
+    <div class="step">4. am_i_cds</div><span class="arrow">→</span>
+    <div class="step">5. Dial plan</div><span class="arrow">→</span>
+    <div class="step">6. Forward</div>
+  </div>
+  <table>
+    <tr><th>#</th><th>Étape</th><th>Module</th><th>Résultat</th></tr>
+    <tr><td>1</td><td>Beacon compact (legacy AD)</td><td><code>advertising.py</code></td><td>anon_id + flag RELAY + BD_ADDR</td></tr>
+    <tr><td>2</td><td>Découverte LE</td><td><code>le_scan</code> + <code>PresenceScanner</code></td><td>candidats BB + EIR</td></tr>
+    <tr><td>3</td><td>Hello public OTA</td><td><code>HelloManager.ingest_public_hello</code></td><td>table voisins « heard »</td></tr>
+    <tr><td>4</td><td>Élection locale</td><td><code>am_i_cds</code> / <code>refresh_cds_role</code></td><td>RELAY ou LEAF</td></tr>
+    <tr><td>5</td><td>Qui dial qui</td><td><code>_backbone_dial_targets</code></td><td>liens L2CAP sparses (ou full heard)</td></tr>
+    <tr><td>6</td><td>Relais paquets</td><td><code>forwarder._should_relay</code></td><td>CDS <em>ou</em> ≥2 liens L2CAP</td></tr>
+  </table>
+</div>
+
+<!-- 4 -->
+<div class="slide" id="s4">
+  <div class="num">04 — Presence OTA</div>
+  <h1>Hello sans connexion</h1>
+  <p class="lead">Chaque nœud diffuse un Hello public dans le Manufacturer Data d’une
+    publicité <strong>legacy connectable</strong> (pas Extended AD — invisible sur beaucoup de contrôleurs Pi).</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Format presence v0x02 (compact)</h3>
+      <ul>
+        <li>Magic <code>BB</code> + proto <code>0x01</code> + format <code>0x02</code></li>
+        <li><code>anon_id</code> 8 B · <code>seq</code> · flags (bit0 = RELAY)</li>
+        <li>BD_ADDR L2CAP joignable (6 B)</li>
+        <li>Listes voisins/MPR : <strong>vides</strong> (budget ~27 B)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Conséquence design</h3>
+      <ul>
+        <li>Tout scanner legacy entend la présence</li>
+        <li>Élection CDS « air » faible (pas de listes)</li>
+        <li>Compensé par politique <span class="pill y">dial every heard</span></li>
+        <li>Flag RELAY toujours utile dès qu’un nœud s’élit</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn">Extended Advertising (D-Bus) a été retiré du chemin prod : les boards
+    qui ne scannent qu’en legacy ne voyaient personne.</div>
+</div>
+
+<!-- 5 -->
+<div class="slide" id="s5">
+  <div class="num">05 — Scan &amp; ingest</div>
+  <h1>De l’air à la table</h1>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Scan MGMT</h3>
+      <p><code>mgmt_scan_records</code> — événement <em>Device Found</em> avec EIR complet à chaque détection
+        (contrairement à <code>bluetoothctl</code> qui n’émet ManufacturerData que sur changement).</p>
+      <p style="margin-top:.5rem">Duty cycle BLE mesh : fenêtre 3 s · période 2 s / steady 4 s.</p>
+    </div>
+    <div class="card">
+      <h3>Ingest</h3>
+      <p><code>_ingest_presence_from_scan</code> parse le Manufacturer Data →
+        <code>ingest_public_hello(..., is_relay=...)</code>.</p>
+      <ul>
+        <li>Met à jour <code>NeighborTable</code></li>
+        <li>Enregistre <code>_heard[anon_id]</code> + TTL</li>
+        <li>Mémorise le flag RELAY annoncé du pair</li>
+        <li>Appelle <code>refresh_cds_role()</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">Mode connectionless : les pairs pour <code>am_i_cds</code> = <code>heard_anon_ids()</code>,
+    pas encore les sockets L2CAP. On sait « qui est autour » avant d’ouvrir un lien.</div>
+</div>
+
+<!-- 6 -->
+<div class="slide" id="s6">
+  <div class="num">06 — Élection Wu-Li</div>
+  <h1>RELAY ou LEAF ?</h1>
+  <p class="lead"><code>am_i_cds(local, table, peers)</code> — décision locale, pas de coordinateur.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Conditions pour être RELAY</h3>
+      <ul>
+        <li>≥ 2 pairs symétriques</li>
+        <li>Au moins une paire de pairs <strong>non adjacents</strong> entre eux (gateway)</li>
+        <li>Non élagué par la règle d’id §2.4.2 (Cases 1/2)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Cas typiques</h3>
+      <ul>
+        <li><span class="pill g">Étoile</span> hub = RELAY, feuilles = LEAF</li>
+        <li><span class="pill">Clique radio</span> tout le monde adjacent → CDS vide → tous LEAF</li>
+        <li><span class="pill y">Ligne A—M—B</span> M = RELAY (seul pont)</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn">Sur le tip legacy, listes voisins OTA vides → symétrie Hello souvent pauvre →
+    CDS air souvent vide. Ce n’est pas un bug : la suite du pipeline compense.</div>
+</div>
+
+<!-- 7 -->
+<div class="slide" id="s7">
+  <div class="num">07 — Politique de dial</div>
+  <h1>Qui ouvre quel lien ?</h1>
+  <p class="lead"><code>BBNode._backbone_dial_targets()</code> — directionnalité explicite, pas de tie-break BD.</p>
+  <table>
+    <tr><th>Situation</th><th>Qui dial</th><th>Cible</th></tr>
+    <tr><td>Je suis RELAY + voisins relays</td><td>RELAY</td><td>autres relays d’anon_id <strong>plus grand</strong> (un seul sens)</td></tr>
+    <tr><td>Des relays existent, je suis LEAF</td><td>LEAF</td><td>dominateur = relay d’anon_id minimal</td></tr>
+    <tr><td>Aucun relay CDS (CDS vide)</td><td>Chacun</td><td><strong>tous les peers heard</strong> avec BD_ADDR connu</td></tr>
+  </table>
+  <div class="grid g2" style="margin-top:1rem">
+    <div class="card">
+      <h3>Pourquoi pas un hub fixe ?</h3>
+      <p>« Heard » (AD) porte plus loin qu’un lien L2CAP durable. Un hub hors de portée isole des feuilles. Le full-heard laisse chaque nœud lier ce qu’il peut vraiment atteindre.</p>
+    </div>
+    <div class="card">
+      <h3>Garde-fous RF</h3>
+      <ul>
+        <li>1 dial / passe de connect</li>
+        <li>Timeout dial 8 s (non-bloquant)</li>
+        <li><code>force=True</code> (bypass tie-break BD)</li>
+        <li>Backoff ETIMEDOUT → arrête de saturer</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- 8 -->
+<div class="slide" id="s8">
+  <div class="num">08 — Schéma dial</div>
+  <h1>Deux régimes</h1>
+  <svg class="diagram" viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" aria-label="CDS backbone vs dial-heard">
+    <text x="160" y="24" text-anchor="middle" fill="#0052cc" font-family="IBM Plex Sans" font-size="14" font-weight="600">CDS connu (backbone)</text>
+    <circle cx="80" cy="120" r="28" fill="#fff" stroke="#0052cc" stroke-width="2"/>
+    <text x="80" y="124" text-anchor="middle" font-size="12" font-family="IBM Plex Sans">R1</text>
+    <circle cx="240" cy="120" r="28" fill="#fff" stroke="#0052cc" stroke-width="2"/>
+    <text x="240" y="124" text-anchor="middle" font-size="12" font-family="IBM Plex Sans">R2</text>
+    <circle cx="80" cy="220" r="22" fill="#eef1f4" stroke="#5a6378" stroke-width="1.5"/>
+    <text x="80" y="224" text-anchor="middle" font-size="11" font-family="IBM Plex Sans">L</text>
+    <circle cx="240" cy="220" r="22" fill="#eef1f4" stroke="#5a6378" stroke-width="1.5"/>
+    <text x="240" y="224" text-anchor="middle" font-size="11" font-family="IBM Plex Sans">L</text>
+    <line x1="108" y1="120" x2="212" y2="120" stroke="#0052cc" stroke-width="2"/>
+    <line x1="80" y1="198" x2="80" y2="148" stroke="#5a6378" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <line x1="240" y1="198" x2="240" y2="148" stroke="#5a6378" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="160" y="100" text-anchor="middle" font-size="10" fill="#0052cc" font-family="IBM Plex Sans">relay→relay (id↑)</text>
+    <text x="40" y="175" font-size="10" fill="#5a6378" font-family="IBM Plex Sans">leaf→dom</text>
+
+    <line x1="360" y1="40" x2="360" y2="260" stroke="#d8dee6"/>
+
+    <text x="540" y="24" text-anchor="middle" fill="#b88700" font-family="IBM Plex Sans" font-size="14" font-weight="600">CDS vide → dial heard</text>
+    <circle cx="480" cy="130" r="24" fill="#fff" stroke="#b88700" stroke-width="2"/>
+    <text x="480" y="134" text-anchor="middle" font-size="12" font-family="IBM Plex Sans">A</text>
+    <circle cx="600" cy="90" r="24" fill="#fff" stroke="#b88700" stroke-width="2"/>
+    <text x="600" y="94" text-anchor="middle" font-size="12" font-family="IBM Plex Sans">B</text>
+    <circle cx="600" cy="180" r="24" fill="#fff" stroke="#b88700" stroke-width="2"/>
+    <text x="600" y="184" text-anchor="middle" font-size="12" font-family="IBM Plex Sans">C</text>
+    <line x1="504" y1="120" x2="576" y2="100" stroke="#b88700" stroke-width="1.5"/>
+    <line x1="504" y1="145" x2="576" y2="170" stroke="#b88700" stroke-width="1.5"/>
+    <line x1="600" y1="114" x2="600" y2="156" stroke="#b88700" stroke-width="1.5"/>
+    <text x="540" y="230" text-anchor="middle" font-size="11" fill="#5a6378" font-family="IBM Plex Sans">chaque nœud dial ce qu’il entend</text>
+  </svg>
+  <div class="callout ok">En lab dense (tout le monde s’entend en AD), on tombe souvent dans le régime de droite —
+    et le mesh se forme quand même.</div>
+</div>
+
+<!-- 9 -->
+<div class="slide" id="s9">
+  <div class="num">09 — Forward</div>
+  <h1>Qui relaie les paquets ?</h1>
+  <p class="lead"><code>PacketForwarder._should_relay()</code> — deuxième filet après l’élection OTA.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Règle</h3>
+      <p>Forward si :</p>
+      <ul>
+        <li><span class="pill g">CDS RELAY</span> <code>hello_mgr.is_relay</code>, <em>ou</em></li>
+        <li><span class="pill y">≥ 2 liens L2CAP</span> actifs (pont dans le graphe réel)</li>
+      </ul>
+      <p style="margin-top:.6rem">Anti-boucle : cache « seen » + TTL.</p>
+    </div>
+    <div class="card">
+      <h3>Pourquoi ≥ 2 liens ?</h3>
+      <p>AD = graphe complet → CDS vide. L2CAP = étoile (portée réelle). Le centre
+        n’est pas RELAY OTA mais <strong>doit</strong> bridger ses feuilles, sinon le multihop est cassé.</p>
+    </div>
+  </div>
+  <div class="callout">Forward <strong>opaque</strong> : un relais d’un autre groupe ne déchiffre pas ;
+    il transporte quand même (bulles privées / mesh ouvert).</div>
+</div>
+
+<!-- 10 -->
+<div class="slide" id="s10">
+  <div class="num">10 — Identité &amp; bulle</div>
+  <h1>Après le topologique</h1>
+  <div class="grid g2">
+    <div class="card">
+      <h3>PKT_ANNOUNCE</h3>
+      <ul>
+        <li>Burst au démarrage + périodique</li>
+        <li>Lie BD_ADDR → X25519 + Ed25519 (PoP)</li>
+        <li>Chiffré sous clé de groupe</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Deux plans</h3>
+      <ul>
+        <li><strong>Topo</strong> : presence, CDS, dial, forward — ouvert</li>
+        <li><strong>Appli</strong> : chat, crypto — <code>GROUP_KEY</code></li>
+      </ul>
+      <p style="margin-top:.5rem">Lien BLE en <code>BT_SECURITY_LOW</code> (pas de pairing).</p>
+    </div>
+  </div>
+  <table>
+    <tr><th>Échec crypto</th><th>Effet mesh</th></tr>
+    <tr><td>Mauvaise clé</td><td>Log « paquet non déchiffrable » — <em>jamais</em> d’expulsion du relais</td></tr>
+    <tr><td>Silence protocolaire Hello</td><td>Expulsion + quarantaine (admission L2CAP)</td></tr>
+  </table>
+</div>
+
+<!-- 11 -->
+<div class="slide" id="s11">
+  <div class="num">11 — Story de démo</div>
+  <h1>Script de présentation (5 min)</h1>
+  <ol style="padding-left:1.2rem; display:grid; gap:.65rem; margin-top:.8rem; max-width:46rem">
+    <li><strong>Contexte</strong> — mesh BLE multi-hop, pas de liste d’adresses.</li>
+    <li><strong>Presence</strong> — montrer un log « candidat découvert » sans <code>--topology</code>.</li>
+    <li><strong>Rôle</strong> — ligne d’état <code>RELAY · N peer(s)</code> / LEAF.</li>
+    <li><strong>Dial</strong> — expliquer backbone vs dial-heard (slide 8).</li>
+    <li><strong>Chat</strong> — message A→B via M ; sur M : non déchiffrable si autre clé.</li>
+    <li><strong>Filet</strong> — « même si CDS air vide, ≥2 liens font forward ».</li>
+  </ol>
+  <div class="callout ok" style="margin-top:1.2rem">Commande démo :
+    <code>sudo python3.14 bb_node.py --chat</code> · même <code>GROUP_KEY</code> + <code>TRANSPORT=ble_l2cap</code> partout.</div>
+</div>
+
+<!-- 12 -->
+<div class="slide" id="s12">
+  <div class="num">12 — Carte code</div>
+  <h1>Où lire dans le repo</h1>
+  <table>
+    <tr><th>Fichier</th><th>Rôle CDS</th></tr>
+    <tr><td><code>src/forwarding/cds.py</code></td><td>Wu-Li / MPR, <code>am_i_cds</code></td></tr>
+    <tr><td><code>src/control/hello_manager.py</code></td><td>Connectionless, heard, link plan, presence value</td></tr>
+    <tr><td><code>src/api/bb_api.py</code></td><td>Presence plane, ingest, <code>_backbone_dial_targets</code></td></tr>
+    <tr><td><code>src/transport/advertising.py</code></td><td>Codec presence v0x02 + legacy budget</td></tr>
+    <tr><td><code>src/forwarding/forwarder.py</code></td><td><code>_should_relay</code> (CDS ∨ ≥2 liens)</td></tr>
+    <tr><td><code>docs/CONFIGURATION.md</code></td><td>Timers, validation labo</td></tr>
+  </table>
+  <p class="kbd" style="margin-top:1.5rem">Fin — questions</p>
+</div>
+
+<div id="nav">
+  <button onclick="goTo(1)" class="active" id="btn1">Intro</button>
+  <button onclick="goTo(2)" id="btn2">Pourquoi CDS</button>
+  <button onclick="goTo(3)" id="btn3">Pipeline</button>
+  <button onclick="goTo(4)" id="btn4">Presence</button>
+  <button onclick="goTo(5)" id="btn5">Scan</button>
+  <button onclick="goTo(6)" id="btn6">Élection</button>
+  <button onclick="goTo(7)" id="btn7">Dial</button>
+  <button onclick="goTo(8)" id="btn8">Schéma</button>
+  <button onclick="goTo(9)" id="btn9">Forward</button>
+  <button onclick="goTo(10)" id="btn10">Identité</button>
+  <button onclick="goTo(11)" id="btn11">Démo 5 min</button>
+  <button onclick="goTo(12)" id="btn12">Carte code</button>
+  <span id="slide-counter">1 / 12</span>
+</div>
+
+<script>
+  const slideIds = ['s1','s2','s3','s4','s5','s6','s7','s8','s9','s10','s11','s12'];
+  let current = 1;
+  const total = slideIds.length;
+  let wheelLock = false;
+  function goTo(n) {
+    document.getElementById(slideIds[current-1]).classList.remove('active');
+    document.getElementById('btn'+current).classList.remove('active');
+    current = n;
+    const slide = document.getElementById(slideIds[current-1]);
+    slide.classList.add('active'); slide.scrollTop = 0;
+    document.getElementById('btn'+current).classList.add('active');
+    document.getElementById('slide-counter').textContent = current + ' / ' + total;
+  }
+  function canChange(dir) {
+    const s = document.querySelector('.slide.active');
+    if (!s) return true;
+    const top = s.scrollTop <= 0;
+    const bot = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
+    return dir > 0 ? bot : top;
+  }
+  document.addEventListener('wheel', (e) => {
+    if (wheelLock) return;
+    const d = Math.sign(e.deltaY); if (!d || !canChange(d)) return;
+    if (d > 0 && current < total) { e.preventDefault(); wheelLock = true; goTo(current+1); setTimeout(()=>wheelLock=false,450); }
+    else if (d < 0 && current > 1) { e.preventDefault(); wheelLock = true; goTo(current-1); setTimeout(()=>wheelLock=false,450); }
+  }, { passive: false });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' && current < total) goTo(current+1);
+    if (e.key === 'ArrowLeft' && current > 1) goTo(current-1);
+    if (e.key === 'f' || e.key === 'F') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+</script>
+</body>
+</html>

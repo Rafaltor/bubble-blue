@@ -9,8 +9,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 AES_KEY_SIZE = 32      # bytes (AES-256)
 AES_NONCE_SIZE = 12    # bytes (recommended GCM nonce size)
 AES_TAG_SIZE = 16      # bytes (GCM tag size)
-SESSION_KEY_SIZE = 32  # bytes (AES-256 session key)
-ENC_SESSION_KEY_SIZE = 60  # nonce(12) + ciphertext(32) + tag(16)
+SESSION_KEY_SIZE = 32  # bytes (AES-256 session / message key)
 WRAPPED_MSG_KEY_SIZE = 48  # ciphertext(32) + tag(16); zero nonce on wire
 
 # Per-packet keys from derive_packet_key() are unique — fixed zero nonce is safe.
@@ -18,108 +17,8 @@ _ZERO_NONCE = bytes(AES_NONCE_SIZE)
 
 
 def generate_session_key() -> bytes:
-    """Generate a random 32-byte session key using os.urandom."""
-    # Session keys are one-time keys (per packet) to limit blast radius.
+    """Generate a random 32-byte key (message keys, self-tests)."""
     return os.urandom(SESSION_KEY_SIZE)
-
-
-def encrypt_session_key(group_key: bytes, session_key: bytes) -> bytes:
-    """
-    Encrypt session_key with group_key using AES-256-GCM.
-    Returns nonce(12) + ciphertext(32) + tag(16) = 60 bytes.
-    Raises ValueError if keys are not correct length.
-    """
-    # group_key is the pre-shared group secret (Solution B MVP).
-    if len(group_key) != AES_KEY_SIZE:
-        raise ValueError(f"group_key must be {AES_KEY_SIZE} bytes (got {len(group_key)})")
-    if len(session_key) != SESSION_KEY_SIZE:
-        raise ValueError(f"session_key must be {SESSION_KEY_SIZE} bytes (got {len(session_key)})")
-
-    aesgcm = AESGCM(group_key)
-    nonce = os.urandom(AES_NONCE_SIZE)  # unique per encryption under the same key
-
-    # No AAD is specified for wrapping the session key; we rely on GCM integrity.
-    ciphertext_with_tag = aesgcm.encrypt(nonce, session_key, None)
-
-    # For a 32-byte plaintext, AESGCM returns 32 bytes ciphertext + 16 bytes tag = 48 bytes.
-    encrypted = nonce + ciphertext_with_tag
-    if len(encrypted) != ENC_SESSION_KEY_SIZE:
-        raise RuntimeError(
-            f"Unexpected wrapped session key length: {len(encrypted)} (expected {ENC_SESSION_KEY_SIZE})"
-        )
-    return encrypted
-
-
-def decrypt_session_key(group_key: bytes, encrypted: bytes) -> bytes:
-    """
-    Decrypt encrypted session key.
-    Input: nonce(12) + ciphertext(32) + tag(16) = 60 bytes.
-    Returns 32-byte session key.
-    Raises InvalidTag if group_key is wrong (tampered/wrong group).
-    Raises ValueError if encrypted is wrong length.
-    """
-    if len(group_key) != AES_KEY_SIZE:
-        raise ValueError(f"group_key must be {AES_KEY_SIZE} bytes (got {len(group_key)})")
-    if len(encrypted) != ENC_SESSION_KEY_SIZE:
-        raise ValueError(f"encrypted session key must be {ENC_SESSION_KEY_SIZE} bytes (got {len(encrypted)})")
-
-    nonce = encrypted[:AES_NONCE_SIZE]
-    ciphertext_with_tag = encrypted[AES_NONCE_SIZE:]
-
-    # AESGCM.decrypt verifies the tag and raises InvalidTag on failure.
-    aesgcm = AESGCM(group_key)
-    session_key = aesgcm.decrypt(nonce, ciphertext_with_tag, None)
-
-    if len(session_key) != SESSION_KEY_SIZE:
-        raise RuntimeError(
-            f"Unexpected decrypted session key length: {len(session_key)} (expected {SESSION_KEY_SIZE})"
-        )
-    return session_key
-
-
-def encrypt_payload(session_key: bytes, plaintext: bytes, aad: bytes) -> tuple[bytes, bytes]:
-    """
-    Encrypt plaintext with AES-256-GCM.
-    aad = routing header bytes (authenticated but not encrypted).
-    Returns (nonce, ciphertext_with_tag).
-    nonce is 12 random bytes.
-    ciphertext_with_tag = ciphertext + 16-byte tag.
-    """
-    if len(session_key) != AES_KEY_SIZE:
-        raise ValueError(f"session_key must be {AES_KEY_SIZE} bytes (got {len(session_key)})")
-
-    # AAD (routing header) is integrity-protected but remains in cleartext for forwarding.
-    nonce = os.urandom(AES_NONCE_SIZE)
-    aesgcm = AESGCM(session_key)
-    ciphertext_with_tag = aesgcm.encrypt(nonce, plaintext, aad)
-    return nonce, ciphertext_with_tag
-
-
-def decrypt_payload(session_key: bytes, nonce: bytes, ciphertext_with_tag: bytes, aad: bytes) -> bytes:
-    """
-    Decrypt and verify payload.
-    Returns plaintext.
-    Raises InvalidTag if verification fails.
-    """
-    if len(session_key) != AES_KEY_SIZE:
-        raise ValueError(f"session_key must be {AES_KEY_SIZE} bytes (got {len(session_key)})")
-    if len(nonce) != AES_NONCE_SIZE:
-        raise ValueError(f"nonce must be {AES_NONCE_SIZE} bytes (got {len(nonce)})")
-    if len(ciphertext_with_tag) < AES_TAG_SIZE:
-        raise ValueError("ciphertext_with_tag is too short (missing tag)")
-
-    # Tag verification also covers the AAD; any changes to routing header bytes will fail.
-    aesgcm = AESGCM(session_key)
-    return aesgcm.decrypt(nonce, ciphertext_with_tag, aad)
-
-
-# Convenience aliases that match package exports.
-def encrypt(session_key: bytes, plaintext: bytes, aad: bytes) -> tuple[bytes, bytes]:
-    return encrypt_payload(session_key, plaintext, aad)
-
-
-def decrypt(session_key: bytes, nonce: bytes, ciphertext_with_tag: bytes, aad: bytes) -> bytes:
-    return decrypt_payload(session_key, nonce, ciphertext_with_tag, aad)
 
 
 def encrypt_with_key(packet_key: bytes, plaintext: bytes, aad: bytes) -> dict[str, bytes]:

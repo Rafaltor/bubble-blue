@@ -82,8 +82,7 @@ def _print_mesh_hints(cfg: BubbleBlueConfig, *, interface: str) -> None:
         print(f"[APP] outbound dial list: {', '.join(cfg.group_members)}", flush=True)
     else:
         print(
-            "[APP] WARNING: BUBBLE_BLUE_GROUP_MEMBERS empty — "
-            "set other boards' addresses or use --topology",
+            "[APP] open mesh: no GROUP_MEMBERS — discovery via presence beacon + auto-dial",
             flush=True,
         )
     for msg in config_warnings(interface=interface):
@@ -140,7 +139,8 @@ def run_chat(
             ChatLog.interrupt(f"dial: {', '.join(targets)}")
         elif n == 0:
             ChatLog.interrupt(
-                "aucun peer — --topology ADDR ou BUBBLE_BLUE_GROUP_MEMBERS dans .env"
+                "aucun peer encore — attente discovery (presence) ou "
+                "--topology / GROUP_MEMBERS en labo"
             )
         ChatLog.interrupt("tape /help pour les commandes (/private …)")
         aliases = load_chat_aliases()

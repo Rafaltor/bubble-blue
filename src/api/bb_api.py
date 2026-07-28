@@ -288,9 +288,8 @@ class BBNode:
         Bring up the connectionless presence plane for BLE L2CAP.
 
         Elects the CDS backbone from over-the-air public Hellos (no link needed),
-        broadcasts our own public Hello via Extended Advertising (bluetoothd
-        D-Bus), and ingests peers' Hellos from the MGMT scan snapshot. If the
-        D-Bus advertiser is unavailable we still ingest (read-only awareness).
+        broadcasts a compact presence Hello via the transport's legacy connectable
+        advertisement, and ingests peers' Hellos from the MGMT scan snapshot.
         """
         # The connectionless "heard" horizon should be as long as the scanner
         # remembers a device. Otherwise, while a node is busy attempting an

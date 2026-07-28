@@ -2,197 +2,120 @@
 
 ## Mesh ouvert et bulles privées
 
-BUBBLE-BLUE est conçu comme un **mesh ouvert au niveau topologique** et des **bulles privées au niveau applicatif**.
+BUBBLE-BLUE is an **open topological mesh** with **private application bubbles**.
 
-### Plan topologique (ouvert)
+### Topological plane (open)
 
-Accessible à **tout nœud BB**, indépendamment de `BUBBLE_BLUE_GROUP_KEY` :
+Accessible to **any BB node**, independent of `BUBBLE_BLUE_GROUP_KEY`:
 
-| Mécanisme | Module | Comportement |
-|-----------|--------|--------------|
-| Beacon universel | `src/transport/advertising.py` (`LEAdvertiser`) | AD statique : Flags `0x06` + Manufacturer Data company `0xFFFF`, magic ASCII `BB`, version protocole `0x01` |
-| Scan périodique | `src/control/presence_scanner.py` (`PresenceScanner`) + `src/transport/le_scan.py` (`mgmt_scan_records`) | Scan LE 3 s via **socket MGMT** (événements *Device Found* → EIR complet à chaque détection), filtre candidats BB ; duty cycle adaptatif (15 s actif → 60 s une fois tous les candidats admis connectés) ; courtoisie post-connexion (10 s) |
-| Sécurité lien BLE | `src/transport/ble_coc.py` (`apply_le_flowctl`) | `BT_SECURITY_LOW` : CoC ouvert sans chiffrement lien ni pairing (crypto assurée au niveau appli BB) |
-| Agent pairing (dormant) | `src/transport/pairing_agent.py` (`PairingAgentSupervisor`) | NoInputNoOutput / Just Works ; inutilisé en `LOW`, requis seulement si on repasse en `MEDIUM` |
-| Auto-connect | transport L2CAP / `BBNode` | Établissement de liens vers les candidats détectés (sans adresses préconfigurées) |
-| Hellos publics | `src/control/hello.py` | Partie publique lisible par tous ; anon_ids appris sur le fil (cross-group) |
-| CDS / RELAY | `src/control/hello_manager.py`, `src/forwarding/cds.py` | Élection RELAY/LEAF sur la topologie anonyme ; forward **opaque** des `PKT_DATA` |
+| Mechanism | Module | Behaviour |
+|-----------|--------|-----------|
+| Presence AD | `src/transport/advertising.py` (`LEAdvertiser` / `update_presence`) | Legacy **connectable** Manufacturer Data: magic `BB`, protocol `0x01`, presence format **`0x02`**, compact Hello (anon_id, seq, CDS flag, BD_ADDR). Neighbor/MPR lists empty under `LEGACY_PRESENCE_MAX_VALUE_LEN` (~27 B value). |
+| Periodic scan | `PresenceScanner` + `le_scan.mgmt_scan_records` | LE scan window **3 s**; BLE mesh defaults **period 2 s** / **steady 4 s** (set in `BBNode`); MGMT *Device Found* carries full EIR each hit |
+| Link security | `ble_coc.apply_le_flowctl` | `BT_SECURITY_LOW` — no link encryption / pairing; app-layer crypto only |
+| Pairing agent | `pairing_agent.PairingAgentSupervisor` | Dormant under `LOW`; needed only if returning to `MEDIUM` |
+| Auto-dial | `BBNode._backbone_dial_targets` | CDS backbone when relays known; else **dial every heard peer**; one dial/pass; 8 s timeout; `force=True` |
+| Public Hellos | `hello` / `HelloManager` | OTA + L2CAP; anon_ids learned on the wire (cross-group) |
+| CDS / relay | `hello_manager`, `cds`, `forwarder._should_relay` | Wu-Li election; forward if CDS RELAY **or** ≥2 L2CAP links |
 
-Un relais inter-groupe **reste connecté** et **continue de forwarder** même s’il ne peut pas déchiffrer le trafic d’un autre groupe.
+A foreign-group relay stays connected and **forwards opaque** `PKT_DATA` even when it cannot decrypt.
 
-### Plan applicatif (privé)
+### Application plane (private)
 
-Gouverné uniquement par la **clé de groupe** :
+Governed only by the **group key**:
 
-- **Identité** — résolution via la partie **privée** des Hellos (membres du même groupe uniquement).
-- **Chiffrement** — `PKT_DATA` chiffrés AES-GCM avec clé dérivée du groupe ; sans la clé : log `paquet non déchiffrable (mauvaise clé ?) de <src>` **au plus**, jamais d’expulsion du relais.
-- **Chat** — seuls les nœuds partageant la même `BUBBLE_BLUE_GROUP_KEY` déchiffrent les messages du groupe.
+- **Identity** — `PKT_ANNOUNCE` (signed Ed25519) + private Hello fields bind BD_ADDR → pubkeys for same-group peers.
+- **Encryption** — AES-256-GCM per packet; wrong key → log `paquet non déchiffrable` at most, never eject the relay.
+- **Chat** — only nodes sharing `BUBBLE_BLUE_GROUP_KEY` decrypt group messages.
 
-### Overrides restrictifs (labo)
+### Lab overrides
 
-Ces réglages **ne font pas partie du modèle opportuniste** ; ils servent à cadrer une expérience :
-
-| Mécanisme | Effet |
+| Mechanism | Effect |
 |-----------|--------|
-| `BUBBLE_BLUE_GROUP_MEMBERS` | Liste de pairs à composer / allowlist de dial |
-| `BUBBLE_BLUE_TOPOLOGY` / `--topology` | Topologie forcée (ex. ligne A—M—B) ; restreint accept/connect |
-| `--peer` | Pair unique en complément |
+| `BUBBLE_BLUE_GROUP_MEMBERS` | Dial / allowlist |
+| `BUBBLE_BLUE_TOPOLOGY` / `--topology` | Forced topology (e.g. line A—M—B) |
+| `--peer` | Single peer |
 
-En mode mesh ouvert, un `.env` **réduit** (clé + transport) suffit ; les adresses BD ne sont pas requises.
-
----
-
-## Protocole de validation — 3 boards, deux temps
-
-Matériel : trois boards BB (ex. 2× Rubik Pi + 1× UNO Q), portée radio commune, Python 3.14 + `BUBBLE_BLUE_TRANSPORT=ble_l2cap` si applicable.
-
-### Temps 1 — Auto-établissement (mesh complet opportuniste)
-
-**Objectif :** vérifier que le plan topologique ouvert suffit sans configuration d’adresses.
-
-**Configuration `.env` (identique sur les 3 nœuds, sauf clé si vous testez déjà le même groupe) :**
-
-```bash
-BUBBLE_BLUE_GROUP_KEY=<64 hex chars, même clé partout>
-BUBBLE_BLUE_TRANSPORT=ble_l2cap   # ou bt_classic selon le labo
-# Pas de BUBBLE_BLUE_GROUP_MEMBERS
-# Pas de BUBBLE_BLUE_TOPOLOGY
-```
-
-**Procédure :**
-
-1. Démarrer les trois nœuds, sans `--topology` ni membres :
-   ```bash
-   sudo python3.14 bb_node.py --chat
-   ```
-2. **Attendu (< 30 s) :** full mesh — chaque nœud affiche **2 peer(s)** (ou 3 connexions symétriques selon affichage), Hellos échangés, rôles CDS stabilisés.
-3. **Kill / restart** d’un nœud (ex. board du milieu) :
-   - **Éviction** — les deux autres voient `peer déconnecté` ; le candidat disparaît du voisinage après timeout.
-   - **Réintégration auto** — au redémarrage, le nœud est re-découvert (beacon + scan), reconnecté, réapparaît dans les tables Hello sans reconfiguration manuelle des BD_ADDR.
-
-**Critères de succès :** aucune adresse saisie à la main ; mesh 3-cliques en moins de 30 s ; recovery après restart sans éditer `.env`.
-
-### Temps 2 — Relais inter-groupe (test décisif, vision du préprint)
-
-**Objectif :** démontrer qu’un nœud **M** d’un **groupe différent** devient RELAY et transporte le trafic chiffré entre **A** et **B** sans pouvoir le lire — scénario central de l’article (arXiv:2509.00967).
-
-**Configuration :**
-
-| Nœud | Rôle | Group key | Topologie |
-|------|------|-----------|-----------|
-| **A** | extrémité | `GK_A` (clé groupe A) | `--topology <BD_M>` |
-| **M** | milieu (relais) | `GK_M` (**≠** `GK_A`) | `--topology <BD_A>,<BD_B>` |
-| **B** | extrémité | `GK_A` (même clé que A) | `--topology <BD_M>` |
-
-Topologie L2CAP forcée en **ligne A — M — B** (adjacence radio réelle ou placement physique). A et B partagent la même clé ; M a une clé distincte.
-
-**Exemple de lancement :**
-
-```bash
-# Sur A (noter BD_ADDR de M après scan ou logs) :
-sudo python3.14 bb_node.py --chat --topology AA:BB:CC:DD:EE:M0
-
-# Sur M (clé différente dans .env) :
-sudo python3.14 bb_node.py --chat --topology AA:BB:CC:DD:EE:A0,AA:BB:CC:DD:EE:B0
-
-# Sur B (même clé que A) :
-sudo python3.14 bb_node.py --chat --topology AA:BB:CC:DD:EE:M0
-```
-
-**Attendu :**
-
-1. **Tables Hello** — M apparaît dans les voisinages de A et B (partie publique) ; A et B voient M ; topologie 2-hop cohérente (tests similaires : `tests/test_cross_group_hello.py`).
-2. **Rôle CDS** — M affiche **RELAY** (gateway entre deux pairs symétriques non adjacents dans sa vue).
-3. **Forward opaque** — M forwarde les `PKT_DATA` de A vers B (et inversement) ; sur M, logs **`paquet non déchiffrable`** au plus — **jamais** de drop ni d’expulsion de M du mesh.
-4. **Chat multihop** — depuis A, message vers B (alias ou BD_ADDR) **traverse M** et arrive déchiffrable chez B ; M ne voit que des octets opaques.
-
-**Critères d’échec :** M expulsé ou absent des tables ; M en LEAF alors qu’il est le seul pont A↔B ; A et B ne peuvent pas chatter via M ; M déchiffre le trafic du groupe A.
+Open mesh `.env`: **group key + transport** only.
 
 ---
 
-## What is **not** machine-specific (protocol defaults)
+## Validation — open mesh (3+ boards)
+
+Hardware: BB boards in common radio range, Python 3.14, `BUBBLE_BLUE_TRANSPORT=ble_l2cap`.
+
+**`.env` (same on all nodes of a bubble):**
+
+```bash
+BUBBLE_BLUE_GROUP_KEY=<64 hex chars>
+BUBBLE_BLUE_TRANSPORT=ble_l2cap
+# no GROUP_MEMBERS / TOPOLOGY
+```
+
+**Procedure:**
+
+```bash
+sudo python3.14 bb_node.py --chat
+```
+
+**Expect:**
+
+1. Presence heard → candidates → L2CAP links without typing BD_ADDRs.
+2. `PKT_ANNOUNCE` burst then periodic identity bindings.
+3. Multihop chat when the L2CAP graph is connected (relay via CDS or ≥2-link bridges).
+4. Kill/restart a node → rediscovery via presence + reconnect without editing `.env`.
+
+**Success criteria:** no manual addresses; recovery after restart; chat decryptable inside the bubble.
+
+---
+
+## Validation — cross-group relay (line A—M—B)
+
+Demonstrates a middle node **M** with a **different** group key that still bridges A↔B.
+
+| Node | Role | Group key | Topology |
+|------|------|-----------|----------|
+| **A** | endpoint | `GK_A` | `--topology <BD_M>` |
+| **M** | relay | `GK_M` ≠ `GK_A` | `--topology <BD_A>,<BD_B>` |
+| **B** | endpoint | `GK_A` | `--topology <BD_M>` |
+
+**Expect:** M is RELAY (or ≥2-link bridge); M logs `paquet non déchiffrable` for A↔B chat; A and B decrypt end-to-end; M is never ejected.
+
+Related unit coverage: `tests/test_cross_group_hello.py`.
+
+---
+
+## Protocol defaults (not board-specific)
 
 | Setting | Value | Where |
 |---------|-------|--------|
-| L2CAP PSM | `0x1001` | `config.py` |
+| L2CAP PSM (Classic) | `0x1001` | `config.PSM_BT_CLASSIC` |
+| L2CAP PSM (BLE CoC) | `0x0081` | `config.PSM_BLE` |
 | Hello interval | 5 s | `config.py` |
 | Neighbor timeout | 15 s | `config.py` |
+| Dial timeout (BLE) | 8 s | `ble_l2cap._DIAL_TIMEOUT_S` |
+| ANNOUNCE burst / interval | see `config.py` | `ANNOUNCE_*` |
 | TTL max | 10 | `config.py` |
 | Replay window | 256 | `config.py` |
-| Packet types / crypto sizes | constants | `config.py`, `src/security/` |
 
-These are the same on every node unless you change the code.
+## Required per deployment
 
-## What **was** specific to the lab setup (now generalized)
-
-| Item | Before | General behaviour now |
-|------|--------|------------------------|
-| `.env.example` | Real BD_ADDR (`40:D9:…`, `14:B5:…`) + zero key | Empty placeholders + comments |
-| `BUBBLE_BLUE_GROUP_MEMBERS` | All boards listed including offline | Documented: list only **reachable** peers; local addr auto-ignored |
-| `BUBBLE_BLUE_LOCAL_BD_ADDR` | Comment only | Implemented in `config.py` |
-| `BUBBLE_BLUE_TOPOLOGY` | N/A | New env var (same as `--topology`) |
-| `BUBBLE_BLUE_INTERFACE` | N/A | New env var (default `hci0`) |
-| `--topology` required for chat | Easy to forget | Falls back to `.env` members / `BUBBLE_BLUE_TOPOLOGY` |
-| `BUBBLE_BLUE_REMOTE_BD_ADDR` | Single fixed peer | Optional legacy; prefer `GROUP_MEMBERS` |
-| Presentation HTML | Example logs with your BD_ADDR | Documentation only (unchanged) |
-| Self-tests (`cds.py`, `hello.py`, …) | Example addresses in `if __name__` blocks | Harmless test fixtures (not used at runtime) |
-
-## Required per deployment (every group of boards)
-
-1. **`BUBBLE_BLUE_GROUP_KEY`** — defines the **private bubble** (who decrypts group chat). Same key on all nodes that should read each other's messages.
-2. **Peer list (optional — lab override only)** — at least one of:
-   - `BUBBLE_BLUE_GROUP_MEMBERS` in `.env`, or
-   - `BUBBLE_BLUE_TOPOLOGY` in `.env`, or
-   - `bb_node.py --topology ADDR,...`, or
-   - `bb_node.py --peer ADDR` (single peer).
-
-   Omit entirely for **open-mesh auto-discovery** (see [validation Temps 1](#temps-1--auto-établissement-mesh-complet-opportuniste)). When set, each node lists **other** nodes it should connect to (not its own BD_ADDR).
-
-## Minimal recipes
-
-### Open mesh (3 boards, no addresses)
-
-See [Temps 1 — Auto-établissement](#temps-1--auto-établissement-mesh-complet-opportuniste): `.env` with group key + transport only, `bb_node.py --chat` on each board.
-
-### Two boards (chat, explicit peers — lab)
-
-```bash
-# On each board: copy .env.example → .env, set the SAME group key,
-# and GROUP_MEMBERS = the other board's BD_ADDR only.
-
-sudo python3 bb_node.py --chat
-```
-
-### Listen-only + one dialer (no .env members)
-
-```bash
-# Board A (accepts any incoming):
-sudo python3 bb_node.py --chat
-
-# Board B:
-sudo python3 bb_node.py --chat --topology <BD_ADDR_OF_A>
-```
-
-### Cross-group relay (3 boards, line A—M—B)
-
-See [Temps 2 — Relais inter-groupe](#temps-2--relais-inter-groupe-test-décisif-vision-du-préprint): different key on M, `--topology` forcing a line.
-
-### Discover peer BD_ADDR
-
-```bash
-sudo python3 bb_node.py --scan 8
-```
+1. **`BUBBLE_BLUE_GROUP_KEY`** — private bubble (who decrypts chat).
+2. **`BUBBLE_BLUE_TRANSPORT`** — prefer `ble_l2cap` for current presence plane.
+3. **Peer list** — optional lab only (`GROUP_MEMBERS` / `TOPOLOGY` / `--topology` / `--peer`).
 
 ## Environment variables
 
 | Variable | Purpose |
 |----------|---------|
 | `BUBBLE_BLUE_GROUP_KEY` | 32-byte AES key (hex, 64 chars) |
-| `BUBBLE_BLUE_GROUP_MEMBERS` | Comma-separated peers to dial / allowlist |
+| `BUBBLE_BLUE_TRANSPORT` | `ble_l2cap` or `bt_classic` |
+| `BUBBLE_BLUE_GROUP_MEMBERS` | Lab dial / allowlist |
 | `BUBBLE_BLUE_TOPOLOGY` | Same as `--topology` |
-| `BUBBLE_BLUE_REMOTE_BD_ADDR` | Optional single peer (`--peer`) |
+| `BUBBLE_BLUE_REMOTE_BD_ADDR` | Optional single peer |
 | `BUBBLE_BLUE_INTERFACE` | HCI device (default `hci0`) |
 | `BUBBLE_BLUE_LOCAL_BD_ADDR` | Override if `hciconfig` fails |
+| `BUBBLE_BLUE_CHAT_ALIASES` | `/private` aliases |
 
 ## CLI (`bb_node.py`)
 
@@ -200,76 +123,63 @@ sudo python3 bb_node.py --scan 8
 |------|---------|
 | `--chat` | Interactive chat |
 | `--topology` | Peers (overrides env topology) |
-| `--peer` | Single peer (merged with members) |
-| `--interface` | HCI (default from env or `hci0`) |
-| `--scan SEC` | BLE inquiry |
-| `--send` / `--dst` | Send one message (non-chat mode) |
+| `--peer` | Single peer |
+| `--interface` | HCI |
+| `--scan SEC` | LE inquiry / presence |
+| `--send` / `--dst` | One-shot send |
+| `--identity` | Print local BD_ADDR + pubkeys |
 
-## Common mistakes
+## BLE coexistence (scan vs links)
 
-- **Offline peer in `GROUP_MEMBERS`** → `Connection timed out` / `Host is down` (remove it from the list, or use open mesh without members).
-- **Different group keys on A and B** → `paquet non déchiffrable` on receive (expected on M in Temps 2 ; wrong if A and B should chat).
-- **No peer list in lab mode** → node listens but never dials → `0 peer(s)` until the other side connects or beacon auto-connect kicks in.
-- **Allowlist too strict (`--topology`)** → incoming connection rejected if peer BD_ADDR not in topology (intentional for Temps 2 line topology).
-- **Confusing planes** → a foreign-group RELAY showing `paquet non déchiffrable` is **normal** ; it must still forward and stay in the mesh.
+Long LE scan windows can starve supervision on legacy controllers (kernel default ~420 ms).
 
-## BLE coexistence (scan vs active links)
+Mitigations in software:
 
-On legacy controllers, a long LE scan window can starve connection supervision events and drop active L2CAP links (kernel default supervision timeout ≈ **420 ms** vs scan windows of several seconds).
+| Mechanism | BLE mesh default | Module |
+|-----------|------------------|--------|
+| Scan window | **3 s** | `PresenceScanner` |
+| Active period | **2 s** | `BBNode` → scanner |
+| Steady period | **4 s** | `BBNode` → scanner |
+| Post-connect courtesy | **10 s** | `defer_next_pass()` |
+| Dial budget | **1 dial / connect pass** | `BBNode._connect_peers` |
 
-BUBBLE-BLUE mitigates this in software:
+### Why MGMT (not `bluetoothctl scan`)
 
-| Mechanism | Default | Module |
-|-----------|---------|--------|
-| Scan window | **3 s** | `PresenceScanner.scan_window_s` |
-| Active discovery period | **15 s** | `scan_period_s` while unknown / unconnected candidates remain |
-| Steady period | **60 s** | `steady_period_s` when every non-quarantined discovered candidate is an admitted active peer (`idle_check` from `BBNode`) |
-| Post-connect courtesy | **10 s** | `defer_next_pass()` after each peer connect — skips the next scan pass if it would fall inside the deferral window (SMP, GATT, first Hello) |
+`bluetoothctl` only prints `ManufacturerData` when it **changes**. A stable BB presence never re-emits `[CHG] ManufacturerData` → invisible. MGMT *Device Found* delivers full EIR every detection (`src/transport/le_scan.py`).
 
-### Découverte via socket MGMT (et non `bluetoothctl scan`)
-
-Le scan LE passe par un **socket de contrôle MGMT** (`src/transport/le_scan.py`, `mgmt_scan_records`), à la manière de `btmgmt find`, et **non** par `bluetoothctl scan le`. Raison : `bluetoothctl` n’imprime `ManufacturerData` que **lorsqu’elle change**. Un beacon BB stable, déjà en cache dans `bluetoothd`, ne ré-émet jamais de ligne `[CHG] ManufacturerData` → il devient invisible au parsing de stdout, et le repli `bluetoothctl info <bd>` par appareil **famine** dans un environnement RF chargé (immeuble plein d’appareils BLE + adresses résolvables tournantes). C’était la cause de l’échec d’auto-découverte qui **obligeait à passer `--topology` à la main**.
-
-L’événement MGMT *Device Found* porte l’**EIR complet à chaque détection**, indépendamment du suivi de changement de `bluetoothd`. Le scanner extrait directement le Manufacturer Data BB (`company 0xFFFF`, magic `BB`) et le type d’adresse, sans aucun `bluetoothctl` : plus de parsing fragile, plus de round-robin `info`, et **`--topology` redevient facultatif** (auto-découverte fiable Arduino ↔ Rubik). Nécessite les privilèges MGMT (root / `CAP_NET_ADMIN`) ; en cas d’échec d’ouverture socket, la fenêtre de scan renvoie un résultat vide (loggé) et le scanner continue.
-
-### Optional lab tweak (debugfs)
-
-If links still drop under heavy RF or very old controllers, raise the **central supervision timeout** (units of 10 ms):
+### Optional debugfs tweak
 
 ```bash
-# Default is often 42 (= 420 ms). Suggest 300 (= 3 s) for demanding labs:
 echo 300 | sudo tee /sys/kernel/debug/bluetooth/hci0/supervision_timeout
 ```
 
-Requires debugfs mounted; replace `hci0` with your interface. This is **optional** when the adaptive scanner duty cycle is sufficient.
+(units of 10 ms; 300 ≈ 3 s). Optional when adaptive duty cycle is enough.
 
-### Pairing agent (Just Works)
+### Link security: `BT_SECURITY_LOW`
 
-`PairingAgentSupervisor` keeps an interactive `bluetoothctl` with verified `NoInputNoOutput` default agent. **Do not** fire-and-forget `agent NoInputNoOutput` after `bluetoothctl` starts — it auto-registers `KeyboardDisplay` and silently rejects a later NoInputNoOutput, leading to numeric-comparison MITM and ~20 s disconnects (Reason **0x13**). Sequence: `agent off` → `agent NoInputNoOutput` → `default-agent` → `pairable on`.
+CoC opens without SMP bonding. Confidentiality/integrity are application-layer (AES-GCM, X25519 pairwise, Ed25519 attestations). Headers remain cleartext to a passive sniffer — intentional for an open mesh.
 
-### Sécurité du lien BLE : `BT_SECURITY_LOW` (pas de pairing)
+To restore link encryption, switch `sec_low` → `sec_medium` in `apply_le_flowctl` and run pairing agents on **both** sides first.
 
-Le CoC L2CAP est ouvert en **`BT_SECURITY_LOW`** (aucun chiffrement au niveau du lien), voir `apply_le_flowctl` dans `src/transport/ble_coc.py`. **Aucun pairing / bonding n’est requis** : la confidentialité et l’intégrité sont assurées par la couche applicative BB (AES-256-GCM par paquet, clés pairwise X25519, clé de groupe, attestations Ed25519). Le chiffrement du lien BlueZ serait redondant.
+## Présentations HTML
 
-**Conséquences (le comportement voulu pour un chat de groupe) :**
+| Fichier | Usage |
+|---------|--------|
+| [bb-cds-pipeline.html](bb-cds-pipeline.html) | Présentation synthétique du pipeline CDS |
+| [bb-stack-actuel.html](bb-stack-actuel.html) | Vue stack tip (courte) |
+| [archive/](archive/) | Anciens decks (historique) |
 
-- Un nouveau membre rejoint le mesh **sans intervention manuelle** ; le CoC s’ouvre nu dès la découverte.
-- Plus d’échec `EPERM` sur pair non-bondé, donc plus de boucle connect/déconnect liée au (re-)pairing SMP (Reason **0x13** / `device_confirm_passkey`).
+## Residual design notes (honest)
 
-**Arbitrage (métadonnées) :** en `LOW`, un sniffer BLE passif à portée peut lire le **header de routing en clair** (type de paquet, `src`/`dst`, `seq`, `ts`). Le contenu (payloads + partie privée des Hello) reste chiffré AES-GCM, et toute trame forgée/altérée est rejetée par le tag GCM — cohérent avec les lignes « outsider » de la table d’adversaire.
+- **Empty OTA neighbor lists** under legacy AD → weak CDS election from air alone; **dial-every-heard** compensates in dense radio meshes.
+- **Adv+scan contention** can still churn fragile boards; Extended Advertising was retired because many controllers only hear legacy AD.
+- **`sim/`** models forwarding/CDS logically; it does **not** simulate OTA presence advertising.
+- Security PDF: [special_security_BB.pdf](special_security_BB.pdf) (mostly aligned; identity file store vs derived-identity recommendation in §3.1).
 
-> Pour rétablir le chiffrement du lien (au prix d’un bonding préalable), repasser `sec_low` → `sec_medium` dans `apply_le_flowctl`.
+## Common mistakes
 
-### Bond automatique Just Works (dormant, hérité)
-
-`PairingAgentSupervisor.ensure_bonded` et le chemin d’auto-bond sur `EPERM` dans `BBNode` restent en place mais **ne se déclenchent plus** en `BT_SECURITY_LOW` (aucun `EPERM` n’est levé). Ils ne redeviennent utiles que si vous repassez le lien en `MEDIUM`. Dans ce cas :
-
-1. **Les DEUX boards** doivent avoir `PairingAgentSupervisor` actif **avant** toute tentative de connexion / bond auto. Just Works n’est choisi que si **les deux** côtés déclarent `NoInputNoOutput`.
-2. **Aucun `bluetoothctl` manuel** ne doit rester ouvert (réenregistre `KeyboardDisplay` → numeric comparison).
-3. Au démarrage le supervisor logue un avertissement s’il détecte d’autres PID `bluetoothctl` et appelle `verify_just_works_capability()`.
-
-Diagnostic (mode `MEDIUM` uniquement) :
-
-```bash
-journalctl -u bluetooth -b | grep -E 'device_confirm_passkey|Failed requesting authentication'
-```
+- Offline peer left in `GROUP_MEMBERS` → dial timeouts (prefer open mesh).
+- Different keys on A and B when they should chat → `paquet non déchiffrable`.
+- Expecting M to decrypt foreign traffic in the cross-group test → wrong; M must only forward.
+- Mixing `ble_l2cap` and `bt_classic` in one mesh → incompatible transports.
+- Documenting PSM as only `0x1001` → wrong for BLE (`0x0081`).

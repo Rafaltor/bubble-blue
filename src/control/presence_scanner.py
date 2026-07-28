@@ -1,9 +1,10 @@
 """
 Periodic LE discovery of Bubble-Blue nodes via universal presence beacons.
 
-Uses extended ``bluetoothctl`` parsing from ``src.transport.discovery`` and
-recognizes candidates whose Manufacturer Specific Data starts with
-``BB_BEACON_MAGIC``.
+Primary path: MGMT *Device Found* records (``src.transport.le_scan``) carrying
+full EIR each detection. Fallback parsers in ``src.transport.discovery`` remain
+for tests / offline fixtures. Candidates match Manufacturer Specific Data that
+starts with ``BB_BEACON_MAGIC`` (plain beacon or compact presence Hello).
 """
 
 from __future__ import annotations

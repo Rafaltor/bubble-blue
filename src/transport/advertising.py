@@ -83,18 +83,17 @@ def manufacturer_adv_data_hex(value: bytes) -> str:
 # Broadcasting the public Hello (anon_id + advertised 1-hop neighbors + MPR set)
 # lets every node build the mesh topology and run the CDS election WITHOUT any
 # L2CAP connection — presence is learned from the air, exactly like the beacon.
-# The full payload (with neighbor/MPR lists) exceeds the 31-byte legacy AD limit,
-# so large Hellos need Extended Advertising (``DBusLEAdvertiser``). The *compact*
-# form (anon_id + flags + reachable bd_addr, empty lists) fits
-# ``LEGACY_PRESENCE_MAX_VALUE_LEN`` and is what the mesh uses by default: every
-# scanner — legacy or extended — can hear presence and dial, and lists are not
-# required for the dense-mesh dial fallback (which dials every heard peer).
+# The full payload (with neighbor/MPR lists) exceeds the 31-byte legacy AD limit.
+# Production therefore uses the *compact* form (anon_id + flags + reachable
+# bd_addr, empty lists) that fits ``LEGACY_PRESENCE_MAX_VALUE_LEN``: every
+# scanner — legacy or extended — can hear presence and dial. Neighbor/MPR lists
+# are not required for the dense-mesh dial fallback (dial every heard peer).
 #
 # Layout of the manufacturer VALUE (the bytes AFTER the 2-byte company id, i.e.
 # what ``parse_eir_manufacturer`` returns for company 0xFFFF):
 #   BB_BEACON_MAGIC            (2)  b"BB"   ] identical to the plain beacon, so
 #   BB_BEACON_PROTOCOL_VERSION (1)  0x01    ] match_bb_beacon_in_ad still matches
-#   PRESENCE_FORMAT_VERSION    (1)  0x01    -> presence extension marker
+#   PRESENCE_FORMAT_VERSION    (1)  0x02    -> presence extension marker
 #   anon_id                    (8)
 #   seq                        (4, big-endian)
 #   flags                      (1)  bit0 = CDS relay (RELAY role), other bits reserved

@@ -1,5 +1,3 @@
-__all__ = ["encrypt", "decrypt"]
+__all__ = ["encrypt_with_key", "decrypt_with_key"]
 
-from .crypto import decrypt, encrypt
-
-# Legacy API moved to src.security.legacy
+from .crypto import decrypt_with_key, encrypt_with_key

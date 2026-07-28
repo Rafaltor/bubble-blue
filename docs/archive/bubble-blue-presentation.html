@@ -1,0 +1,2614 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BUBBLE-BLUE — Choix Technologiques</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --surface2: #eef1f4;
+    --border: #d8dee6;
+    --accent: #0052cc;
+    --accent2: #0052cc;
+    --green: #1e7e34;
+    --red: #c0392b;
+    --yellow: #b88700;
+    --text: #1a2340;
+    --text-muted: #5a6378;
+    --sans: 'IBM Plex Sans', sans-serif;
+    --nav-bg: rgba(17, 24, 39, 0.95);
+    --nav-border: #2a3548;
+    --nav-text: #c5cdd8;
+    --nav-text-muted: #8899aa;
+    --nav-width: 11.625rem;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* NAVIGATION */
+  #nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--nav-width);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+    background: var(--nav-bg);
+    border-right: 1px solid var(--nav-border);
+    padding: 1rem 0.75rem;
+    z-index: 1000;
+    overflow-y: auto;
+  }
+
+  #nav button {
+    background: none;
+    border: none;
+    color: var(--nav-text-muted);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+    text-align: left;
+    width: 100%;
+  }
+  #nav button:hover { color: #ffffff; }
+  #nav button.active { background: var(--accent); color: #ffffff; }
+  #slide-counter {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    color: var(--nav-text-muted);
+    margin-top: auto;
+    padding: 0.75rem 0.5rem 0;
+    border-top: 1px solid var(--nav-border);
+    text-align: center;
+  }
+
+  /* SLIDES */
+  .slide {
+    position: absolute;
+    top: 0;
+    left: var(--nav-width);
+    width: calc(100% - var(--nav-width));
+    height: 100%;
+    display: none;
+    padding: 3rem 4rem;
+    flex-direction: column;
+    justify-content: flex-start;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .slide.active { display: flex; animation: fadeIn 0.3s ease; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* SLIDE HEADER */
+  .slide-num {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+  }
+
+  h2 {
+    font-size: 1.8rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+    color: var(--text);
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+
+  .subtitle {
+    font-family: var(--sans);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 2rem;
+  }
+
+  /* TITLE SLIDE */
+  .title-slide {
+    justify-content: center;
+    background: var(--bg);
+  }
+
+  .title-slide h1 {
+    font-size: 5rem;
+    color: var(--text);
+    margin-bottom: 0.3rem;
+  }
+
+  .title-meta {
+    display: flex;
+    gap: 2rem;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .meta-item { display: flex; flex-direction: column; gap: 0.3rem; }
+  .meta-label { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .meta-value { font-family: var(--sans); font-size: 0.9rem; color: var(--accent); font-weight: 500; }
+
+  .plan-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.75rem;
+    margin-top: 2.5rem;
+  }
+
+  .plan-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    position: relative;
+  }
+  .plan-item::before {
+    content: attr(data-num);
+    position: absolute;
+    top: 0.5rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 1.5rem;
+    color: var(--border);
+    font-weight: 700;
+  }
+  .plan-item-title { font-size: 0.75rem; font-weight: 600; color: var(--accent); margin-bottom: 0.3rem; }
+  .plan-item-sub { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); }
+
+  /* TABLES */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    margin-bottom: 1.5rem;
+  }
+
+  th {
+    background: var(--surface2);
+    color: var(--text);
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    font-weight: 600;
+  }
+
+  td {
+    padding: 0.55rem 0.8rem;
+    border: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: middle;
+  }
+
+  tr:nth-child(even) td { background: rgba(26, 35, 64, 0.04); }
+
+  .cell-good { color: var(--green); font-weight: 600; }
+  .cell-bad { color: var(--red); }
+  .cell-warn { color: var(--yellow); }
+  .cell-neutral { color: var(--text-muted); }
+
+  /* COMPARISON BOXES */
+  .compare-grid { display: grid; gap: 1rem; }
+  .compare-2 { grid-template-columns: 1fr 1fr; }
+  .compare-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .compare-questions {
+    grid-template-columns: 1fr 1fr 1fr;
+    margin-bottom: 1rem;
+  }
+  .compare-questions .compare-box { padding: 0.9rem 1rem; }
+  .compare-questions .box-title { font-size: 0.85rem; margin-bottom: 0.5rem; }
+  .compare-questions .box-list li { font-size: 0.68rem; }
+
+  .compare-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    position: relative;
+  }
+
+  .compare-box.winner { border-color: var(--green); }
+  .compare-box.loser { border-color: var(--border); opacity: 0.85; }
+  .compare-box.winner::after {
+    content: '✅ RETENU';
+    position: absolute;
+    top: 0.75rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 0.6rem;
+    color: var(--green);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .compare-box.loser::after {
+    content: '❌ ÉLIMINÉ';
+    position: absolute;
+    top: 0.75rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 0.6rem;
+    color: var(--red);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+  .compare-box.winner.plain::after,
+  .compare-box.loser.plain::after { content: none; }
+
+  tr.row-bb td { background: rgba(30, 126, 52, 0.06); }
+  tr.row-bb td:first-child {
+    border-left: 4px solid var(--green);
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .table-compact { font-size: 0.7rem; margin-bottom: 1rem; }
+  .table-compact th,
+  .table-compact td { padding: 0.45rem 0.55rem; }
+  .compare-box.phase2::after {
+    content: '🔄 PHASE 2';
+    position: absolute;
+    top: 0.75rem; right: 0.75rem;
+    font-family: var(--sans);
+    font-size: 0.6rem;
+    color: var(--yellow);
+    letter-spacing: 0.1em;
+    font-weight: 600;
+  }
+
+  .box-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .box-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .box-list li {
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding-left: 1rem;
+    position: relative;
+  }
+  .box-list li::before { content: '→'; position: absolute; left: 0; color: var(--accent); }
+  .box-list li.good { color: var(--green); }
+  .box-list li.bad { color: var(--red); }
+  .box-list li.warn { color: var(--yellow); }
+
+  /* STAT BOXES */
+  .stat-row {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .stat-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .stat-label { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat-value { font-family: var(--sans); font-size: 1.4rem; font-weight: 700; }
+  .stat-context { font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); }
+  .stat-box.green .stat-value { color: var(--green); }
+  .stat-box.red .stat-value { color: var(--red); }
+  .stat-box.blue .stat-value { color: var(--accent); }
+  .stat-box.yellow .stat-value { color: var(--yellow); }
+
+  /* VERDICT BOX */
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-top: 1rem;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+  }
+  .verdict-label {
+    font-size: 0.65rem;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  /* ROADMAP */
+  .roadmap {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  .roadmap-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .roadmap-item::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .roadmap-item.p1::before { background: var(--green); }
+  .roadmap-item.p2::before { background: var(--accent); }
+  .roadmap-item.p3::before { background: var(--yellow); }
+  .roadmap-item.p4::before { background: var(--text-muted); }
+
+  .phase-label {
+    font-family: var(--sans);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+  .p1 .phase-label { color: var(--green); }
+  .p2 .phase-label { color: var(--accent); }
+  .p3 .phase-label { color: var(--yellow); }
+  .p4 .phase-label { color: var(--text-muted); }
+
+  .phase-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.75rem; }
+
+  .phase-items {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .phase-items li {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    padding-left: 0.8rem;
+    position: relative;
+  }
+  .phase-items li::before { content: '·'; position: absolute; left: 0; color: var(--accent); }
+
+  /* LAYOUT HELPERS */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    flex: 1;
+  }
+
+  .section-label {
+    font-family: var(--sans);
+    font-size: 0.65rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+
+  /* ARCH DIAGRAM */
+  .arch-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 1rem 0;
+  }
+  .arch-layer {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: border-color 0.2s;
+  }
+  .arch-layer:hover { border-color: var(--accent); }
+  .arch-layer-name { font-weight: 600; font-size: 0.85rem; }
+  .arch-layer-desc { font-family: var(--sans); font-size: 0.7rem; color: var(--text-muted); }
+  .arch-layer-tech { font-family: var(--sans); font-size: 0.7rem; color: var(--accent); font-weight: 500; }
+  .arch-layer.highlight { border-color: var(--accent); background: var(--surface); border-left: 4px solid var(--accent); }
+
+  .arch-stack.seq { margin: 0; gap: 0.35rem; }
+  .arch-stack.seq .arch-layer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    padding: 0.55rem 0.9rem;
+  }
+  .arch-stack.seq .arch-layer-tech {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 0.65rem;
+    line-height: 1.35;
+  }
+  .arch-stack.seq.pipeline { gap: 0.25rem; margin-bottom: 0.75rem; }
+  .arch-stack.seq.pipeline .arch-layer { padding: 0.45rem 0.75rem; }
+  .arch-stack.seq.pipeline .arch-layer-name { font-size: 0.75rem; }
+  .arch-stack.seq.pipeline .arch-layer-desc,
+  .arch-stack.seq.pipeline .arch-layer-tech { font-size: 0.62rem; }
+
+  .formula-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    line-height: 1.55;
+    color: var(--text);
+    margin-bottom: 0.75rem;
+  }
+  .formula-box code { font-size: 0.66rem; color: var(--accent); }
+
+  /* UNICAST CALC */
+  .calc-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.6rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 0.4rem;
+    font-family: var(--sans);
+    font-size: 0.75rem;
+  }
+  .calc-label { color: var(--text-muted); flex: 1; }
+  .calc-bar-wrap { flex: 2; height: 6px; background: var(--border); border-radius: 3px; }
+  .calc-bar { height: 100%; border-radius: 3px; }
+  .calc-value { width: 80px; text-align: right; font-weight: 700; }
+  .bar-red { background: var(--red); }
+  .bar-yellow { background: var(--yellow); }
+  .bar-green { background: var(--green); }
+  .bar-blue { background: var(--accent); }
+
+  /* BATTERY */
+  .battery-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin: 0.5rem 0;
+  }
+  .battery-bar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .battery-fill-wrap {
+    height: 12px;
+    background: var(--border);
+    border-radius: 6px;
+    margin: 0.5rem 0;
+    overflow: hidden;
+  }
+  .battery-fill { height: 100%; border-radius: 6px; }
+
+  /* PROGRESS BARS FOR OVERHEAD */
+  .overhead-item {
+    margin-bottom: 0.6rem;
+  }
+  .overhead-header {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    margin-bottom: 0.25rem;
+  }
+  .overhead-bar-wrap {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .overhead-bar { height: 100%; border-radius: 4px; }
+
+  /* KEYBOARD HINT */
+  .kbd-hint {
+    position: fixed;
+    top: 1.5rem;
+    right: 2rem;
+    font-family: var(--sans);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.6rem;
+  }
+</style>
+</head>
+<body>
+<div style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#b88700;color:#fff;font:600 .85rem sans-serif;padding:.55rem 1rem;text-align:center">
+  Deck archivé — tip actuel :
+  <a href="../bb-cds-pipeline.html" style="color:#fff;text-decoration:underline">CDS pipeline</a>
+  ·
+  <a href="../bb-stack-actuel.html" style="color:#fff;text-decoration:underline">Stack actuelle</a>
+</div>
+
+
+<div class="kbd-hint">
+  <kbd class="kbd">←</kbd><kbd class="kbd">→</kbd> naviguer
+  <kbd class="kbd">F</kbd> plein écran
+</div>
+
+<!-- SLIDE 1: TITRE -->
+<div class="slide title-slide active" id="s1">
+  <div>
+    <div class="slide-num">PROJET STAGE — BUBBLE-BLUE</div>
+    <h1>BUBBLE-BLUE</h1>
+    <h2 style="color: var(--text-muted); font-weight: 400; font-size: 1.3rem;">Choix Technologiques pour l'Implémentation</h2>
+    <p style="font-family: var(--sans); font-size: 0.78rem; color: var(--text-muted); margin-top: 1rem; max-width: 600px; line-height: 1.7;">
+      Analyse comparative des technologies de transport, forwarding, sécurité et langage pour implémenter le protocole BB — réseau privé multihop Bluetooth sans infrastructure.
+    </p>
+    <div class="title-meta">
+      <div class="meta-item">
+        <span class="meta-label">Ingénieur de Recherche</span>
+        <span class="meta-value">Paul-Maxence Baraton</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Boards cibles</span>
+        <span class="meta-value">Rubik Pi 3 (BT 5.0) + Arduino UNO Q (BT 5.1)</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Référence</span>
+        <span class="meta-value">arXiv:2509.00967</span>
+      </div>
+    </div>
+    <div class="plan-grid" style="margin-top: 2rem;">
+      <div class="plan-item" data-num="1">
+        <div class="plan-item-title">BT Classic vs BLE</div>
+        <div class="plan-item-sub">Transport radio</div>
+      </div>
+      <div class="plan-item" data-num="2">
+        <div class="plan-item-title">L2CAP vs RFCOMM vs GATT</div>
+        <div class="plan-item-sub">Couche protocole</div>
+      </div>
+      <div class="plan-item" data-num="3">
+        <div class="plan-item-title">CDS vs MPR</div>
+        <div class="plan-item-sub">Forwarding</div>
+      </div>
+      <div class="plan-item" data-num="4">
+        <div class="plan-item-title">AES-GCM vs CCM</div>
+        <div class="plan-item-sub">Sécurité</div>
+      </div>
+      <div class="plan-item" data-num="5">
+        <div class="plan-item-title">Python vs C</div>
+        <div class="plan-item-sub">Langage</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 2: CONTEXTE BB -->
+<div class="slide" id="s2">
+  <div class="slide-num">00 — CONTEXTE BB</div>
+  <h2>BUBBLE-BLUE — Contexte et Besoins</h2>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Qu'est-ce que BB ?</div>
+      <ul class="box-list">
+        <li>BB est un protocole de communication privée multihop utilisant uniquement Bluetooth (sans réseau cellulaire ni infrastructure Wi-Fi)</li>
+        <li>Permet à un petit groupe d'appareils d'échanger des messages chiffrés</li>
+        <li>Utilise des ensembles dominants connexes (CDS) pour une dissémination contrôlée</li>
+        <li>Comme Bluetooth n'offre pas de diffusion native, toutes les transmissions passent par des séquences d'unicasts</li>
+        <li>Référence : arXiv:2509.00967 — Achir, Jacquet (2025)</li>
+        <li>Double usage : militaire (liaisons tactiques chiffrées) et civil (messagerie mesh privée)</li>
+      </ul>
+      <div class="verdict" style="margin-top: 1rem;">
+        <div class="verdict-label">Cadre d'évaluation</div>
+        BB impose 7 contraintes architecturales indépendantes du transport radio. Chaque choix technologique de cette présentation est évalué contre ces 7 besoins.
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Besoins architecturaux de BB</div>
+      <table>
+        <thead>
+          <tr><th>Besoin</th><th>Description</th><th>Contrainte technique</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Confidentialité groupe</td><td>Seuls les membres lisent</td><td class="cell-good">AES bout-en-bout applicatif</td></tr>
+          <tr><td>Multihop sans infra</td><td>Pas d'opérateur requis</td><td class="cell-good">Dissémination via CDS/MPR</td></tr>
+          <tr><td>Anti-rejeu</td><td>Rejeu de paquets bloqué</td><td class="cell-warn">Séquences + compteurs LL</td></tr>
+          <tr><td>Voisinage dynamique</td><td>Nœuds mobiles supportés</td><td class="cell-warn">Hello périodiques (5 s)</td></tr>
+          <tr><td>Révocation membre</td><td>Exclure un nœud compromis</td><td class="cell-good">En-tête de clés par paquet</td></tr>
+          <tr><td>Surcoût minimal</td><td>Batterie préservée</td><td class="cell-good">Unicasts L2CAP optimisés</td></tr>
+          <tr><td>Sans infrastructure</td><td>Autonome et furtif</td><td class="cell-good">Cycle de service BLE</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: ÉTAT DE L'ART -->
+<div class="slide" id="s3">
+  <div class="slide-num">00 — ÉTAT DE L'ART</div>
+  <h2>Solutions existantes — Positionnement de BB</h2>
+
+  <div class="section-label">Comparaison des projets existants</div>
+  <table class="table-compact">
+    <thead>
+      <tr>
+        <th>Projet</th><th>Transport</th><th>Chiffrement E2E</th><th>Store &amp; Forward</th>
+        <th>iOS</th><th>Android</th><th>Actif</th><th>Pertinence</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>BitChat</strong></td>
+        <td>BLE pur (7 sauts)</td>
+        <td>Noise Protocol <span class="cell-good">✅</span></td>
+        <td>Queue locale <span class="cell-warn">⚠️</span></td>
+        <td class="cell-good">✅</td>
+        <td>Port <span class="cell-warn">⚠️</span></td>
+        <td class="cell-good">✅</td>
+        <td>★★★★★</td>
+      </tr>
+      <tr>
+        <td><strong>Briar</strong></td>
+        <td>BT Classic + BLE</td>
+        <td>Bramble/Axolotl <span class="cell-good">✅</span></td>
+        <td>Sync graphe <span class="cell-good">✅</span></td>
+        <td class="cell-bad">❌</td>
+        <td class="cell-good">✅</td>
+        <td class="cell-good">✅</td>
+        <td>★★★★★</td>
+      </tr>
+      <tr>
+        <td><strong>BLEMeshChat</strong></td>
+        <td>BLE pur</td>
+        <td>libsodium <span class="cell-good">✅</span></td>
+        <td>Partiel <span class="cell-warn">⚠️</span></td>
+        <td class="cell-good">✅</td>
+        <td class="cell-good">✅</td>
+        <td class="cell-bad">❌</td>
+        <td>★★★★</td>
+      </tr>
+      <tr>
+        <td><strong>Bridgefy</strong></td>
+        <td>BLE</td>
+        <td>Signal <span class="cell-good">✅</span></td>
+        <td>Partiel <span class="cell-warn">⚠️</span></td>
+        <td class="cell-good">✅</td>
+        <td class="cell-good">✅</td>
+        <td class="cell-warn">✅ Propriétaire</td>
+        <td>★★★</td>
+      </tr>
+      <tr>
+        <td><strong>Reticulum</strong></td>
+        <td>Linux BLE</td>
+        <td>X25519/AES-256 <span class="cell-good">✅</span></td>
+        <td>LXMF <span class="cell-good">✅</span></td>
+        <td class="cell-warn">⚠️</td>
+        <td class="cell-warn">⚠️</td>
+        <td class="cell-good">✅</td>
+        <td>★★★</td>
+      </tr>
+      <tr class="row-bb">
+        <td><strong>BUBBLE-BLUE</strong></td>
+        <td>BLE L2CAP CoC → Wi-Fi → 5G</td>
+        <td>AES-GCM→Noise <span class="cell-good">✅</span></td>
+        <td>CDS/MPR <span class="cell-good">✅</span></td>
+        <td class="cell-good">✅</td>
+        <td class="cell-good">✅</td>
+        <td class="cell-good">✅</td>
+        <td class="cell-neutral">—</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="section-label">Vide que BB comble</div>
+  <div class="compare-grid compare-2">
+    <div class="compare-box loser plain">
+      <div class="box-title">Ce que personne ne fait</div>
+      <ul class="box-list">
+        <li class="bad">BLE pur + iOS + Android + E2E + protocole ouvert → Aucun projet actif</li>
+        <li>Briar : pas iOS, BT Classic pas BLE pur</li>
+        <li>BitChat : Android non officiel, pas audité, identité usurpable</li>
+        <li>Tous : flooding ou GATT — pas de CDS/MPR</li>
+      </ul>
+    </div>
+    <div class="compare-box winner plain">
+      <div class="box-title" style="color: var(--green);">Avantage compétitif BB</div>
+      <ul class="box-list">
+        <li class="good">Seul protocole avec CDS/MPR sur BLE L2CAP CoC</li>
+        <li class="good">Spécification formelle ouverte (arXiv:2509.00967)</li>
+        <li class="good">Portage Android natif via createL2capChannel()</li>
+        <li class="good">Intégration hardware Qualcomm (NPU, ARMv8 Crypto)</li>
+        <li class="good">Architecture TAL : même code BLE → Wi-Fi → 5G</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Positionnement</div>
+    BitChat prouve la faisabilité (100 000 users en BLE mesh).
+    Briar prouve la rigueur protocolaire (audit Cure53 + ETH Zurich).
+    BB vise les deux — avec CDS/MPR que personne n'a encore implémenté,
+    et un portage Android natif L2CAP CoC comme première cible mobile.
+  </div>
+</div>
+
+<!-- SLIDE 4: BITCHAT 1/2 -->
+<div class="slide" id="s4">
+  <div class="slide-num">ÉTAT DE L'ART — BITCHAT (1/2)</div>
+  <h2>BitChat — Architecture et Transport BLE</h2>
+  <h3>iOS/macOS · CoreBluetooth GATT · 25 900 stars · Modèle d'inspiration architecture — pas de réutilisation de code</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Stack protocolaire — 4 couches</div>
+      <div class="arch-stack seq">
+        <div class="arch-layer" style="border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">Application Layer</span>
+          <span class="arch-layer-desc">BitchatMessage — chat IRC, messages privés, geo-channels Nostr</span>
+          <span class="arch-layer-tech">NIP-17 Nostr fallback si connectivité disponible</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">Session Layer — BitchatPacket</span>
+          <span class="arch-layer-desc">Routing TTL · Fragmentation · Déduplication</span>
+          <span class="arch-layer-tech">Header fixe 13 bytes : Version(1) + Type(1) + TTL(1) + Timestamp(8) + Flags(1) + Length(2)</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--red);">
+          <span class="arch-layer-name">Encryption Layer</span>
+          <span class="arch-layer-desc">Noise_XX_25519_ChaChaPoly_SHA256</span>
+          <span class="arch-layer-tech">Curve25519 DH · ChaCha20-Poly1305 AEAD · SHA-256</span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">Transport Layer — TAL</span>
+          <span class="arch-layer-desc">Abstraction multi-transport</span>
+          <span class="arch-layer-tech">BLE (CoreBluetooth) · Wi-Fi Direct · Nostr Relay</span>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">⚠️ Pourquoi on ne réutilise pas le code BitChat</div>
+      <div class="compare-grid compare-2" style="margin-bottom: 0.75rem;">
+        <div class="compare-box loser plain">
+          <ul class="box-list">
+            <li class="bad">BitChat est en Swift (iOS) — incompatible Linux / Android</li>
+            <li class="bad">Utilise CoreBluetooth GATT — BB utilise L2CAP CoC</li>
+            <li class="bad">Architecture couplée à iOS — pas portable</li>
+            <li class="bad">Licence Unlicense mais architecture incompatible avec BB</li>
+          </ul>
+        </div>
+        <div class="compare-box winner plain">
+          <ul class="box-list">
+            <li class="good">On s'inspire de l'architecture TAL multi-transport</li>
+            <li class="good">On adopte le pipeline déduplication (Bloom filter)</li>
+            <li class="good">On retient le format binaire compact (pas JSON)</li>
+            <li class="good">On implémente le jitter window anti-collision</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Gestion des connexions BLE</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Paramètre</th><th>Valeur</th><th>Rôle BB</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Budget connexions</td><td>8 max simultanées</td><td>Limite la charge radio</td></tr>
+          <tr><td>RSSI 0 connexions</td><td>-90 dBm</td><td>Accepte tout le monde</td></tr>
+          <tr><td>RSSI 4+ connexions</td><td>-60 dBm</td><td>Seulement les proches</td></tr>
+          <tr><td>RSSI défaut</td><td>-70 dBm</td><td>Équilibre portée/charge</td></tr>
+          <tr><td>Advertising</td><td>UUID filtré</td><td>Pas de pairing requis</td></tr>
+          <tr><td>MTU fragment</td><td>469 bytes</td><td>Max BLE sans overhead</td></tr>
+          <tr><td>TTL défaut</td><td>7 sauts</td><td>Limite la propagation</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Pourquoi GATT et pas L2CAP ?</div>
+      <div class="compare-grid compare-2" style="margin-bottom: 0.75rem;">
+        <div class="compare-box loser plain">
+          <div class="box-title">Contrainte iOS (CoreBluetooth)</div>
+          <ul class="box-list">
+            <li class="bad">CoreBluetooth = seule API BLE exposée sur iOS</li>
+            <li class="bad">Pas d'accès L2CAP bas niveau en background</li>
+            <li class="bad">GATT obligatoire pour cross-platform mobile</li>
+            <li>Write-without-response pour compenser la sérialisation</li>
+            <li>MTU max 512 bytes</li>
+          </ul>
+        </div>
+        <div class="compare-box winner plain">
+          <div class="box-title" style="color: var(--green);">Avantage BB sur Linux</div>
+          <ul class="box-list">
+            <li class="good">BlueZ expose L2CAP CoC directement</li>
+            <li class="good">Envoi parallèle natif vers N voisins CDS</li>
+            <li class="good">MTU 1021 bytes (BT Classic) vs 512 bytes</li>
+            <li class="good">Pas de modèle client/serveur rigide</li>
+            <li class="good">Architecture plus propre pour le mesh</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-label">Compatibilité mobile de L2CAP</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Plateforme</th><th>API L2CAP</th><th>Compatible BB</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Linux (Rubik Pi / UNO Q)</td><td>BlueZ BTPROTO_L2CAP</td><td class="cell-good">✅ Native</td></tr>
+          <tr><td>Android 10+</td><td>createL2capChannel()</td><td class="cell-good">✅ Native</td></tr>
+          <tr><td>Android &lt; 10</td><td>Pas d'API publique</td><td class="cell-bad">❌ GATT requis</td></tr>
+          <tr><td>iOS</td><td>CoreBluetooth GATT only</td><td class="cell-bad">❌ Gateway requis</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Leçon BitChat</div>
+    BitChat prouve qu'un mesh BLE fonctionne à grande échelle (100 000 users). Mais GATT impose des contraintes que BB évite grâce à L2CAP. Android 10+ permet un portage BB natif sans gateway — 80% du parc Android.
+  </div>
+</div>
+
+<!-- SLIDE 5: BITCHAT 2/2 -->
+<div class="slide" id="s5">
+  <div class="slide-num">ÉTAT DE L'ART — BITCHAT (2/2)</div>
+  <h2>BitChat — Déduplication, Relay Logic et Store-and-Forward</h2>
+  <h3>Les mécanismes anti-boucle et de persistance — leçons pour BB</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Pipeline de traitement d'un paquet reçu</div>
+      <div class="arch-stack seq pipeline">
+        <div class="arch-layer" style="border-left: 3px solid var(--red);">
+          <span class="arch-layer-name">1. Déduplication</span>
+          <span class="arch-layer-desc">ID = senderID_hex + timestamp_ms + messageType</span>
+          <span class="arch-layer-tech">Bloom filter · 10 000 entrées · faux positifs 0.01% · expiration 5 min</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">2. Validation timestamp</span>
+          <span class="arch-layer-desc">Rejet si écart &gt; ±120 secondes</span>
+          <span class="arch-layer-tech">Anti-replay sans état centralisé</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">3. Destinataire ?</span>
+          <span class="arch-layer-desc">Paquet pour moi → remonter à l'application</span>
+          <span class="arch-layer-tech">Paquet pour autre → décision relay</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">4. Décision relay</span>
+          <span class="arch-layer-desc">TTL = 0 → DROP · Nœud dense → relay probabiliste 50-70%</span>
+          <span class="arch-layer-tech">Ingress suppression : ne pas renvoyer vers la source</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">5. K-of-N Fanout déterministe</span>
+          <span class="arch-layer-desc">Hash(messageID) → sous-ensemble fixe de voisins</span>
+          <span class="arch-layer-tech">Load balancing · pas de coordination · même message = même subset</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">6. Transmission</span>
+          <span class="arch-layer-desc">Write without response vers chaque voisin sélectionné</span>
+          <span class="arch-layer-tech">Fragments staggered pour éviter la saturation</span>
+        </div>
+      </div>
+
+      <div class="section-label">K-of-N vs CDS — Comparaison</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Critère</th><th>K-of-N BitChat</th><th>CDS/MPR BB</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Base de sélection</td><td>Hash(messageID) aléatoire</td><td>Topologie réseau</td></tr>
+          <tr><td>Connaissance requise</td><td>Aucune</td><td>Voisinage 2 sauts</td></tr>
+          <tr><td>Overhead contrôle</td><td>Zéro</td><td>Hello périodiques</td></tr>
+          <tr><td>Couverture garantie</td><td>Probabiliste</td><td class="cell-good">Déterministe ✅</td></tr>
+          <tr><td>Réduction unicasts</td><td>Variable</td><td class="cell-good">-60% à -73% ✅</td></tr>
+          <tr><td>Stabilité sous mobilité</td><td>Bonne</td><td>Bonne</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Store-and-Forward</div>
+      <div class="compare-box winner plain">
+        <div class="box-title" style="color: var(--green);">Cache local avec TTL</div>
+        <ul class="box-list">
+          <li class="good">Messages pour peers offline : queue locale TTL 24h</li>
+          <li class="good">Favoris : stockage potentiellement indéfini</li>
+          <li class="good">Livraison automatique à la reconnexion</li>
+          <li class="good">Nettoyage des messages expirés en background</li>
+          <li class="good">Pas de synchronisation de graphe (contrairement à Briar)</li>
+        </ul>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Fragmentation — Calcul précis</div>
+      <div class="formula-box">
+        <div><code>overhead</code> = 13 (header) + 8 (senderID) + 8 (recipientID) + 13 (fragment metadata) = <strong>42 bytes</strong></div>
+        <div><code>chunk_size</code> = max(64, MTU - 42)</div>
+        <div>Avec MTU 512 bytes → <code>chunk_size</code> = 470 bytes ≈ 469 bytes par défaut</div>
+        <div>Message 1200 bytes → <strong>3 fragments BLE</strong></div>
+      </div>
+
+      <div class="section-label">Leçons directement applicables à BB</div>
+      <ul class="box-list">
+        <li class="good">Pipeline déduplication : adopter le même ordre (Bloom → timestamp → relay)</li>
+        <li class="good">ID dédup format : senderID + timestamp + type → compact et efficace</li>
+        <li class="good">Ingress suppression : ne jamais renvoyer vers la source d'un paquet</li>
+        <li class="good">Jitter avant relay : 20-200ms pour éviter les collisions radio</li>
+        <li class="good">TTL adaptatif : relay probabiliste si degré de connexion élevé</li>
+        <li class="good">Write without response : plus rapide que write with response</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Synthèse BitChat → BB</div>
+    BitChat a résolu empiriquement des problèmes que BB doit résoudre
+    formellement. Leur code n'est pas réutilisable (Swift/GATT) mais leur
+    architecture est notre meilleure référence. Le CDS/MPR de BB donne des
+    garanties topologiques que le K-of-N probabiliste de BitChat n'a pas.
+  </div>
+</div>
+
+<!-- SLIDE 6: BRIAR -->
+<div class="slide" id="s6">
+  <div class="slide-num">ÉTAT DE L'ART — BRIAR</div>
+  <h2>Briar — Rigueur protocolaire et leçons de sécurité</h2>
+  <h3>Android uniquement · Suite Bramble · Audité Cure53 + ETH Zurich 2017/2023</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Suite de protocoles Bramble — 5 couches</div>
+      <div class="arch-stack seq">
+        <div class="arch-layer" style="border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">BSP Clients — Messaging, Groups, Forums</span>
+          <span class="arch-layer-desc">Messagerie, groupes privés, blogs — synchronisation complète</span>
+          <span class="arch-layer-tech">Seul le créateur du groupe peut inviter de nouveaux membres</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">BSP — Bramble Synchronisation Protocol</span>
+          <span class="arch-layer-desc">Synchronisation DAG complet entre contacts de confiance</span>
+          <span class="arch-layer-tech">Graphe de messages immutables — delay-tolerant</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">BTP — Bramble Transport Protocol v4</span>
+          <span class="arch-layer-desc">Chiffrement + rotation périodique des clés de session</span>
+          <span class="arch-layer-tech">XSalsa20Poly1305 · BLAKE2b-256 · rotation = forward secrecy</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">BHP / BQP — Échange de contacts</span>
+          <span class="arch-layer-desc">BQP via QR code physique · BHP via Tor à distance</span>
+          <span class="arch-layer-tech">Curve25519 ECDH · Ed25519 signatures · clé maîtresse dérivée</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--red);">
+          <span class="arch-layer-name">Transport : BT Classic RFCOMM · Wi-Fi · Tor</span>
+          <span class="arch-layer-desc">Transport multi-canal — PAS de BLE pur</span>
+          <span class="arch-layer-tech">Pairing obligatoire · contacts connus uniquement</span>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Vulnérabilités découvertes — ETH Zurich 2023</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Faille</th><th>Protocole</th><th>Statut</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>BHP pas de forward secrecy</td><td>BHP</td><td class="cell-warn">⚠️ Pas encore corrigé</td></tr>
+          <tr><td>MITM introduction contacts</td><td>BHP</td><td class="cell-warn">⚠️ Connu, pas corrigé</td></tr>
+          <tr><td>DoS via gros messages</td><td>BSP</td><td class="cell-good">✅ Corrigé v1.4.22</td></tr>
+          <tr><td>Duplication messages groupe</td><td>BSP</td><td class="cell-good">✅ Corrigé v1.4.22</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Briar vs BB — Deux visions fondamentalement différentes</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Aspect</th><th>Briar</th><th>BB</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Réseau cible</td><td>Contacts de confiance uniquement</td><td>Groupe dynamique</td></tr>
+          <tr><td>Transport BT</td><td>BT Classic RFCOMM</td><td>BLE L2CAP CoC</td></tr>
+          <tr><td>Pairing</td><td>Obligatoire</td><td>Non requis</td></tr>
+          <tr><td>Multihop anonyme</td><td class="cell-bad">❌ Pas de mesh</td><td class="cell-good">✅ Via nœuds CDS</td></tr>
+          <tr><td>Découverte voisins</td><td>Contacts préenregistrés</td><td>Hello périodiques</td></tr>
+          <tr><td>Synchronisation</td><td>DAG complet à chaque rencontre</td><td>Dissémination temps réel</td></tr>
+          <tr><td>iOS</td><td class="cell-bad">❌ Non supporté</td><td class="cell-good">✅ Prévu via gateway</td></tr>
+          <tr><td>Android</td><td class="cell-good">✅ Principal</td><td class="cell-good">✅ Phase 2 L2CAP CoC</td></tr>
+          <tr><td>Code réutilisable pour BB</td><td class="cell-bad">❌ Architecture incompatible</td><td class="cell-neutral">—</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Ce que BB retient de Briar</div>
+      <div class="compare-box winner plain">
+        <div class="box-title" style="color: var(--green);">Leçons de rigueur — pas de code</div>
+        <ul class="box-list">
+          <li class="good">Séparation briar-core / briar-android → notre TAL</li>
+          <li class="good">Rotation périodique des clés BTP → notre key rotation Phase 2</li>
+          <li class="good">Audit sécurité externe planifié dès le début</li>
+          <li class="good">Spécification formelle publique avant implémentation</li>
+          <li class="good">Format binaire BDF structuré → inspiration pour nos paquets BB</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Positionnement Briar → BB</div>
+    Briar résout un problème différent : communication privée entre contacts
+    de confiance. BB résout un problème plus difficile : dissémination privée
+    dans un groupe via des relais potentiellement inconnus.
+    La leçon de Briar pour BB : la rigueur cryptographique et la spécification
+    formelle ne sont pas optionnelles — l'audit ETH Zurich l'a prouvé.
+  </div>
+</div>
+
+<!-- SLIDE 7: STRATÉGIE -->
+<div class="slide" id="s7">
+  <div class="slide-num">ÉTAT DE L'ART — STRATÉGIE</div>
+  <h2>Reticulum & ble-reticulum — S'inspirer sans forker</h2>
+  <h3>Python · Linux · Multi-transport · 5 000 stars<br>— On s'inspire sans forker — Reticulum License incompatible</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Pourquoi Reticulum est le plus proche de BB</div>
+      <div class="arch-stack seq">
+        <div class="arch-layer" style="border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">Applications (LXMF, Nomad Network, Sideband)</span>
+          <span class="arch-layer-desc">Messagerie, chat, transfert fichiers — sur mobile et desktop</span>
+          <span class="arch-layer-tech">Android via Sideband · Python userland</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">Reticulum Core — Multi-hop routing</span>
+          <span class="arch-layer-desc">Routage autoconfigurable basé sur hashes cryptographiques</span>
+          <span class="arch-layer-tech">Identité = X25519/Ed25519 keypair 512-bit</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">Interface System — TAL natif</span>
+          <span class="arch-layer-desc">Abstraction multi-transport extensible — notre modèle exact</span>
+          <span class="arch-layer-tech">send(data) · receive(callback) · même API partout</span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">Interfaces : UDP · TCP · LoRa · Serial · BLE*</span>
+          <span class="arch-layer-desc">*BLE via ble-reticulum community — GATT sur Linux/BlueZ</span>
+          <span class="arch-layer-tech">bleak + asyncio · dual-role Central + Peripheral · RSSI peer selection</span>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">BLE-Reticulum — Ce qu'on peut réutiliser</div>
+      <div class="compare-box winner plain">
+        <div class="box-title" style="color: var(--green);">Logique directement applicable à BB</div>
+        <ul class="box-list">
+          <li class="good">Dual-role Central + Peripheral — déjà implémenté</li>
+          <li class="good">RSSI-based peer selection avec budget connexions</li>
+          <li class="good">3 modes de puissance : aggressive / balanced / saver</li>
+          <li class="good">Fragmentation MTU 20-512 bytes transparente</li>
+          <li class="good">Retry logic + exponential backoff</li>
+          <li class="good">BlueZ + bleak + asyncio — notre stack exact</li>
+          <li class="good">Testé sur Raspberry Pi — proche de Rubik Pi 3</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Pourquoi on ne part pas de Reticulum — mais on s'inspire de ble-reticulum</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Problème</th><th>Reticulum/ble-reticulum</th><th>BB</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Transport BLE</td><td class="cell-bad">GATT via characteristics</td><td class="cell-good">GATT Phase 1 → L2CAP CoC Phase 2</td></tr>
+          <tr><td>Routing</td><td class="cell-bad">Hash cryptographique distribué</td><td class="cell-good">CDS/MPR topologique</td></tr>
+          <tr><td>Licence core</td><td class="cell-bad">Reticulum License ❌ restrictive</td><td class="cell-good">MIT — libre Qualcomm ✅</td></tr>
+          <tr><td>Fork possible</td><td class="cell-bad">❌ Licence incompatible</td><td class="cell-good">✅ S'inspirer sans forker</td></tr>
+          <tr><td>Taille codebase</td><td class="cell-bad">15 000+ lignes Python</td><td class="cell-good">~2 000 lignes ciblées</td></tr>
+          <tr><td>Cible mobile</td><td class="cell-bad">Python seulement</td><td class="cell-good">Android Kotlin Phase 2</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Stratégie retenue — S'inspirer sans forker</div>
+      <div class="compare-grid compare-2" style="margin-bottom: 0.6rem;">
+        <div class="compare-box winner plain">
+          <div class="box-title" style="color: var(--green); font-size: 0.85rem;">De ble-reticulum</div>
+          <ul class="box-list">
+            <li class="good">Architecture TAL multi-transport (concept)</li>
+            <li class="good">Philosophie : même code sur tous les transports</li>
+            <li class="good">asyncio + bleak comme stack Python BLE</li>
+            <li class="warn">Licence : MIT ✅ mais dépend de Reticulum License ❌</li>
+            <li class="warn">Stratégie : lire le code, réécrire proprement dans BB</li>
+            <li class="warn">Citer ble-reticulum dans les remerciements</li>
+            <li class="warn">BB reste 100% MIT — compatible Qualcomm</li>
+          </ul>
+        </div>
+        <div class="compare-box winner plain">
+          <div class="box-title" style="color: var(--green); font-size: 0.85rem;">De BitChat</div>
+          <ul class="box-list">
+            <li class="good">Bloom filter déduplication 10 000 entrées</li>
+            <li class="good">Format binaire compact 13 bytes header</li>
+            <li class="good">Jitter window 20-200ms anti-collision</li>
+            <li class="good">Ingress suppression (pas d'écho source)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="compare-grid compare-2">
+        <div class="compare-box winner plain">
+          <div class="box-title" style="color: var(--green); font-size: 0.85rem;">De Briar</div>
+          <ul class="box-list">
+            <li class="good">Rotation périodique des clés (forward secrecy)</li>
+            <li class="good">Spécification formelle avant implémentation</li>
+            <li class="good">Séparation core/platform pour Android</li>
+          </ul>
+        </div>
+        <div class="compare-box winner plain">
+          <div class="box-title" style="color: var(--green); font-size: 0.85rem;">Uniquement dans BB</div>
+          <ul class="box-list">
+            <li class="good">L2CAP CoC comme transport BLE natif</li>
+            <li class="good">CDS/MPR — aucun projet n'a ça</li>
+            <li class="good">Portage Android via createL2capChannel()</li>
+            <li class="good">Qualcomm ARMv8 Crypto acceleration</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Stratégie BB</div>
+    ble-reticulum prouve que GATT + bleak + asyncio fonctionne
+    sur Raspberry Pi avec dual-role BLE.
+    On s'en inspire sans forker — sa dépendance à Reticulum
+    (licence non-standard) impose de réécrire proprement.
+    BB reste 100% MIT — compatible recherche industrielle Qualcomm.
+  </div>
+</div>
+
+<!-- SLIDE 8: PORTAGE ANDROID -->
+<div class="slide" id="s8">
+  <div class="slide-num">ÉTAT DE L'ART — PORTAGE ANDROID</div>
+  <h2>Portage BB sur Android — Ce qui change, ce qui reste</h2>
+  <h3>Android 10+ supporte L2CAP CoC nativement — portage mécanique, pas architectural</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Ce qui doit être recodé</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Composant</th><th>Phase 1 Linux Python (GATT)</th><th>Phase 2 Android Kotlin (L2CAP CoC)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Transport BLE</td><td>bleak GATT write/notify</td><td><code>BluetoothDevice.createL2capChannel(PSM)</code></td></tr>
+          <tr><td>Écoute serveur</td><td>bleak BleakServer GATT</td><td><code>adapter.listenUsingL2capChannel()</code></td></tr>
+          <tr><td>Envoi données</td><td><code>write_gatt_char(response=False)</code></td><td><code>outputStream.write()</code></td></tr>
+          <tr><td>Réception</td><td><code>start_notify()</code> callback</td><td><code>inputStream.read()</code></td></tr>
+          <tr><td>Chiffrement AES</td><td>Python cryptography lib</td><td><code>javax.crypto</code> AES-GCM natif</td></tr>
+          <tr><td>Parallélisme</td><td>asyncio Python</td><td>Coroutines Kotlin</td></tr>
+          <tr><td>Discovery BLE</td><td>bleak BleakScanner</td><td>BluetoothAdapter Android API</td></tr>
+          <tr><td>Format binaire</td><td>struct Python</td><td>ByteBuffer Java</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-label">Effort de portage estimé</div>
+      <div class="calc-row">
+        <span class="calc-label">Phase 1 Linux Python</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-green" style="width:100%"></div></div>
+        <span class="calc-value cell-good">100%</span>
+      </div>
+      <div style="font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); margin: -0.15rem 0 0.5rem 0.25rem;">Validation protocole — base de tout le travail</div>
+      <div class="calc-row">
+        <span class="calc-label">Phase 2 Android Kotlin</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-blue" style="width:30%"></div></div>
+        <span class="calc-value">~30%</span>
+      </div>
+      <ul class="phase-items" style="margin-top: 0.35rem;">
+        <li>Transport L2CAP CoC Android : 2-3 jours</li>
+        <li>Logique protocole : déjà spécifiée</li>
+        <li>UI basique : 1 semaine</li>
+        <li>Tests intégration : 1 semaine</li>
+      </ul>
+    </div>
+    <div>
+      <div class="section-label">Ce qui NE change PAS</div>
+      <div class="compare-box winner plain">
+        <div class="box-title" style="color: var(--green);">Le protocole BB — Identique sur toutes les plateformes</div>
+        <ul class="box-list">
+          <li class="good">Format des paquets binaires identique</li>
+          <li class="good">Messages Hello — même structure</li>
+          <li class="good">Logique CDS/MPR — même algorithme</li>
+          <li class="good">Chiffrement AES-GCM — même clés et modes</li>
+          <li class="good">PSM L2CAP — même numéro de port</li>
+          <li class="good">Tables de voisinage — même logique</li>
+          <li class="good">Déduplication — même format d'ID</li>
+        </ul>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Architecture TAL — La clé du portage</div>
+      <div class="arch-stack seq" style="margin-bottom: 0.5rem;">
+        <div class="arch-layer" style="border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">Logique BB — Identique</span>
+          <span class="arch-layer-desc">Hello · CDS · AES-GCM · Déduplication · TTL</span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">TAL — Transport Abstraction Layer</span>
+          <span class="arch-layer-desc">send(addr, data) / receive(callback) — interface unique</span>
+        </div>
+      </div>
+      <div class="compare-grid compare-2" style="margin-bottom: 0.75rem;">
+        <div class="compare-box" style="border-left: 3px solid var(--accent);">
+          <div class="box-title" style="font-size: 0.8rem;">Phase 1 — bleak GATT</div>
+          <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted);">Linux · Rubik Pi · UNO Q</div>
+        </div>
+        <div class="compare-box" style="border-left: 3px solid var(--yellow);">
+          <div class="box-title" style="font-size: 0.8rem;">Phase 2 — L2CAP CoC Android</div>
+          <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted);">createL2capChannel() · Android 10+ · 80% du parc</div>
+        </div>
+      </div>
+
+      <div class="section-label">Leçon de Briar</div>
+      <div class="compare-box">
+        <div class="box-title">Architecture multi-plateforme éprouvée</div>
+        <ul class="box-list">
+          <li><code>briar-core/</code> → Java pur, logique protocole partagée</li>
+          <li><code>briar-android/</code> → UI + APIs Android uniquement</li>
+          <li><code>briar-desktop/</code> → UI + APIs desktop uniquement</li>
+          <li>Le core ne change pas selon la plateforme</li>
+          <li>BB doit adopter la même séparation dès Phase 1</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Stratégie portage</div>
+    Phase 1 Linux : GATT + bleak — validation protocole BB.
+    Phase 2 Android : L2CAP CoC via createL2capChannel() natif.
+    Même protocole BB, même PSM, même format de paquets.
+    Le portage Android représente ~30% du travail total.
+  </div>
+</div>
+
+<!-- SLIDE 7: SIGNALISATION BLE -->
+<div class="slide" id="s9">
+  <div class="slide-num">00 — SIGNALISATION BLE</div>
+  <h2>BLE — Signalisation et primitives</h2>
+  <h3>Comprendre le fonctionnement avant de choisir</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Cycle de vie d'une connexion BLE</div>
+      <div class="arch-stack seq">
+        <div class="arch-layer" style="border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">Advertising</span>
+          <span class="arch-layer-desc">Périphérique émet des paquets toutes les 20ms–10s</span>
+          <span class="arch-layer-tech">PDU 31 bytes max — canaux 37, 38, 39</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">Scan &amp; Discovery</span>
+          <span class="arch-layer-desc">Central écoute et détecte les voisins</span>
+          <span class="arch-layer-tech">Active scan → réponse SCAN_RSP possible</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">Connection Request</span>
+          <span class="arch-layer-desc">Central initie — paramètres négociés</span>
+          <span class="arch-layer-tech">Interval: 7.5ms–4s · Latency · Timeout</span>
+        </div>
+        <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">Connection établie</span>
+          <span class="arch-layer-desc">Central ↔ Périphérique — rôles fixés</span>
+          <span class="arch-layer-tech">MTU négocié · L2CAP CoC disponible</span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">Data Exchange</span>
+          <span class="arch-layer-desc">Échange bidirectionnel de paquets L2CAP</span>
+          <span class="arch-layer-tech">PSM · Credits · Flow control</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Primitives BlueZ disponibles sur Rubik Pi + UNO Q</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Primitive</th><th>Rôle</th><th>API Linux</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>hci_open_dev()</code></td><td>Ouvrir interface HCI</td><td>BlueZ C (bas niveau)</td></tr>
+          <tr><td><code>hci_le_set_scan()</code></td><td>Scanner voisins BLE</td><td>BlueZ C (bas niveau)</td></tr>
+          <tr><td><code>BleakScanner</code></td><td>Scanner voisins BLE</td><td class="cell-good">bleak Python ✅ Phase 1</td></tr>
+          <tr><td><code>BleakClient.connect()</code></td><td>Connexion BLE GATT</td><td class="cell-good">bleak Python ✅ Phase 1</td></tr>
+          <tr><td><code>write_gatt_char(response=False)</code></td><td>Envoi données sans ACK</td><td class="cell-good">bleak Python ✅ Phase 1</td></tr>
+          <tr><td><code>start_notify()</code></td><td>Réception notifications</td><td class="cell-good">bleak Python ✅ Phase 1</td></tr>
+          <tr><td><code>socket(AF_BLUETOOTH, BTPROTO_L2CAP)</code></td><td>L2CAP BT Classic uniquement</td><td class="cell-warn">Python natif ⚠️ pas BLE</td></tr>
+          <tr><td>BlueZ D-Bus L2CAP CoC</td><td>L2CAP CoC BLE</td><td class="cell-warn">Phase 2 ⚠️ complexe</td></tr>
+          <tr><td>PR CPython #129288</td><td>L2CAP CoC BLE natif Python</td><td class="cell-warn">Phase 2 ⏳ en cours</td></tr>
+        </tbody>
+      </table>
+      <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem; padding: 0.6rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px;">
+        ⚠️ L2CAP CoC BLE ≠ L2CAP BT Classic<br>
+        L2CAP Python natif fonctionne pour BT Classic uniquement.<br>
+        Pour BLE L2CAP CoC : PR CPython soumise janvier 2025.<br>
+        Phase 1 BB utilise GATT via bleak — mature et documenté.
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Rôles BB sur BLE</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Rôle BB</th><th>Rôle BLE</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Nœud source</td><td>Central</td><td>Initie les connexions vers voisins CDS</td></tr>
+          <tr><td>Nœud relais</td><td>Périphérique</td><td>Accepte les connexions entrantes</td></tr>
+          <tr><td>Nœud hybride</td><td>Central + Périphérique</td><td>Simultané — nécessite BT 5.0+</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Implication BB</div>
+    Tous les nœuds BB doivent opérer en mode hybride Central + Périphérique simultanément. Rubik Pi (BT 5.0) et UNO Q (BT 5.1) supportent ce mode. Lib recommandée : bleak (asyncio natif, cross-platform).
+  </div>
+</div>
+
+<!-- SLIDE 8: ARCHITECTURE -->
+<div class="slide" id="s10">
+  <div class="slide-num">01 — ARCHITECTURE</div>
+  <h2>Stack BB — Architecture en couches</h2>
+  <h3>Transport Abstraction Layer (TAL) — Clé pour la vision multi-transport</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="arch-stack">
+        <div class="arch-layer" style="background: var(--surface); border-color: var(--border); border-left: 3px solid var(--green);">
+          <span class="arch-layer-name">Application BB</span>
+          <span class="arch-layer-tech">Chat sécurisé · Geo-sharing</span>
+        </div>
+        <div class="arch-layer" style="background: var(--surface); border-color: var(--border); border-left: 3px solid var(--yellow);">
+          <span class="arch-layer-name">Sécurité</span>
+          <span class="arch-layer-desc">Chiffrement groupe · Clés · Anti-replay</span>
+          <span class="arch-layer-tech">AES-GCM</span>
+        </div>
+        <div class="arch-layer" style="background: var(--surface); border-color: var(--border); border-left: 3px solid var(--accent);">
+          <span class="arch-layer-name">Contrôle</span>
+          <span class="arch-layer-desc">Voisinage · Découverte</span>
+          <span class="arch-layer-tech">Hello · CDS · MPR</span>
+        </div>
+        <div class="arch-layer highlight">
+          <span class="arch-layer-name">TAL — Transport Abstraction Layer</span>
+          <span class="arch-layer-tech">send(addr, data) · receive(cb)</span>
+        </div>
+        <div class="arch-layer">
+          <div style="display:flex; gap: 0.5rem; align-items: center;">
+            <span style="font-family: var(--sans); font-size: 0.7rem; background: var(--surface2); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 4px; color: var(--accent);">BLE L2CAP CoC</span>
+            <span style="font-family: var(--sans); font-size: 0.7rem; background: var(--surface2); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 4px; color: var(--text);">Wi-Fi Direct</span>
+            <span style="font-family: var(--sans); font-size: 0.7rem; background: var(--surface2); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: 4px; color: var(--text-muted);">5G Gateway</span>
+          </div>
+          <span class="arch-layer-tech">Phase 1 → 2 → 3</span>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Choix à discuter</div>
+      <table>
+        <thead>
+          <tr><th>Couche</th><th>Options</th><th>Critère clé</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Radio</td><td>BT Classic vs <span class="cell-good">BLE</span></td><td>Mobilité, conso</td></tr>
+          <tr><td>Transport</td><td><span class="cell-good">L2CAP</span> vs RFCOMM vs GATT</td><td>Parallélisme</td></tr>
+          <tr><td>Forwarding</td><td><span class="cell-good">CDS</span> → MPR</td><td>Unicasts réduits</td></tr>
+          <tr><td>Sécurité</td><td><span class="cell-good">AES-GCM</span> vs CCM</td><td>Performance</td></tr>
+          <tr><td>Langage</td><td><span class="cell-good">Python</span> → C</td><td>Vitesse dev</td></tr>
+        </tbody>
+      </table>
+      <div class="verdict">
+        <div class="verdict-label">Principe fondateur</div>
+        Le TAL découple l'architecture BB de la technologie radio. Un seul stack BB tourne sur BLE aujourd'hui, Wi-Fi demain, 5G après-demain — sans rien réécrire au-dessus du TAL.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 9: BLE vs BT CLASSIC — CRITÈRES 1 & 2 -->
+<div class="slide" id="s11">
+  <div class="slide-num">02 — CHOIX BLE</div>
+  <h2>Pourquoi BLE — Critères 1 & 2 : Voisinage & Overhead</h2>
+  <h3>Les deux critères les plus impactants pour le CDS de BB</h3>
+
+  <div class="stat-row">
+    <div class="stat-box red">
+      <span class="stat-label">Voisins max BT Classic</span>
+      <span class="stat-value">7</span>
+      <span class="stat-context">Limite piconet — Scatternet instable au-delà</span>
+    </div>
+    <div class="stat-box green">
+      <span class="stat-label">Voisins max BLE</span>
+      <span class="stat-value">∞</span>
+      <span class="stat-context">Pas de limite architecturale</span>
+    </div>
+    <div class="stat-box red">
+      <span class="stat-label">Temps redécouverte BT Classic</span>
+      <span class="stat-value">~2 s</span>
+      <span class="stat-context">Reconnexion piconet après mobilité</span>
+    </div>
+    <div class="stat-box green">
+      <span class="stat-label">Temps redécouverte BLE</span>
+      <span class="stat-value">100 ms</span>
+      <span class="stat-context">Via advertising scan</span>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Overhead par paquet — Hello BB de 72 bytes (10 voisins)</div>
+      <table>
+        <thead>
+          <tr><th>Transport</th><th>MTU utile</th><th>Overhead header</th><th>Fragments (72B)</th><th>Verdict</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>BT Classic L2CAP</td><td>1021 B</td><td>4 B</td><td class="cell-good">1</td><td class="cell-bad">❌ Écarté</td></tr>
+          <tr><td>BLE GATT (défaut)</td><td>20 B</td><td>9 B</td><td class="cell-bad">4</td><td class="cell-bad">❌ 4× pire</td></tr>
+          <tr><td><strong>BLE L2CAP CoC</strong></td><td><strong>512 B</strong></td><td><strong>4 B</strong></td><td class="cell-good"><strong>1</strong></td><td class="cell-good"><strong>✅ Identique</strong></td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Overhead unicasts pour diffuser à 5 voisins CDS</div>
+      <div class="overhead-item">
+        <div class="overhead-header"><span>GATT (sérialisé)</span><span class="cell-bad">500 ms · 20 fragments</span></div>
+        <div class="overhead-bar-wrap"><div class="overhead-bar bar-red" style="width:100%"></div></div>
+      </div>
+      <div class="overhead-item">
+        <div class="overhead-header"><span>BLE L2CAP CoC (parallèle)</span><span class="cell-good">10 ms · 5 paquets</span></div>
+        <div class="overhead-bar-wrap"><div class="overhead-bar bar-green" style="width:2%"></div></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Comparaison architecturale complète</div>
+      <table>
+        <thead>
+          <tr><th>Critère</th><th>BT Classic</th><th>BLE</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Voisins max</td><td class="cell-bad">7 (piconet)</td><td class="cell-good">Illimité</td></tr>
+          <tr><td>Redécouverte</td><td class="cell-bad">~2 000 ms</td><td class="cell-good">~100 ms</td></tr>
+          <tr><td>MTU L2CAP</td><td class="cell-good">1 021 B</td><td class="cell-warn">512 B (CoC)</td></tr>
+          <tr><td>Overhead header</td><td class="cell-good">4 B</td><td class="cell-good">4 B (CoC)</td></tr>
+          <tr><td>Scatternet</td><td class="cell-bad">Instable</td><td class="cell-good">Non requis</td></tr>
+          <tr><td>Mobilité rapide</td><td class="cell-bad">❌</td><td class="cell-good">✅</td></tr>
+          <tr><td><strong>Décision</strong></td><td class="cell-bad">❌ Écarté</td><td class="cell-good">✅ Retenu</td></tr>
+        </tbody>
+      </table>
+      <div class="verdict">
+        <div class="verdict-label">Conclusion critères 1 & 2</div>
+        BLE L2CAP CoC égale BT Classic en overhead (MTU 512B, 4B header)
+        et le surpasse sur tous les autres critères.
+        BT Classic écarté — incompatible avec la vision Android et multi-transport.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 10: BLE vs BT CLASSIC — CRITÈRES 3 & 4 -->
+<div class="slide" id="s12">
+  <div class="slide-num">02 — CHOIX BLE (suite)</div>
+  <h2>Critères 3 & 4 — Sécurité & Consommation énergétique</h2>
+  <h3>Arguments décisifs pour un déploiement réel — militaire ou civil</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Sécurité — Comparaison au niveau lien</div>
+      <table>
+        <thead>
+          <tr><th>Mécanisme</th><th>BT Classic (5.x)</th><th>BLE (5.x)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Chiffrement lien</td><td class="cell-good">AES-128-CCM</td><td class="cell-good">AES-128-CCM</td></tr>
+          <tr><td>Pairing</td><td class="cell-good">ECDH P-256</td><td class="cell-good">ECDH P-256</td></tr>
+          <tr><td>Anti-replay lien</td><td class="cell-bad">❌ À charge de BB</td><td class="cell-good">✅ Natif (compteurs LL)</td></tr>
+          <tr><td>MIC par paquet</td><td class="cell-warn">Optionnel</td><td class="cell-good">✅ Intégré</td></tr>
+          <tr><td>Sécurité groupe</td><td class="cell-bad">❌ Non</td><td class="cell-bad">❌ Non</td></tr>
+        </tbody>
+      </table>
+      <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem;">
+        ⚠️ Dans les deux cas : BB doit construire sa propre couche crypto de groupe (AES-GCM applicatif)
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Consommation — Batterie Li-Ion 3 000 mAh / mission 24 h</div>
+      <div class="battery-compare">
+        <div class="battery-bar">
+          <div style="font-family: var(--sans); font-size: 0.72rem; color: var(--red); font-weight: 700; margin-bottom: 0.25rem;">BT Classic</div>
+          <div style="font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted);">25–100 mA continu · Radio always-on</div>
+          <div class="battery-fill-wrap" style="margin-top: 0.5rem;">
+            <div class="battery-fill" style="width: 40%; background: var(--red);"></div>
+          </div>
+          <div style="font-family: var(--sans); font-size: 0.68rem; margin-top: 0.3rem; color: var(--red);">1 200 mAh consommés = <strong>40%</strong></div>
+        </div>
+        <div class="battery-bar">
+          <div style="font-family: var(--sans); font-size: 0.72rem; color: var(--green); font-weight: 700; margin-bottom: 0.25rem;">BLE</div>
+          <div style="font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted);">&lt;5 mA moyen · Duty cycle Hello 5 s</div>
+          <div class="battery-fill-wrap" style="margin-top: 0.5rem;">
+            <div class="battery-fill" style="width: 4%; background: var(--green);"></div>
+          </div>
+          <div style="font-family: var(--sans); font-size: 0.68rem; margin-top: 0.3rem; color: var(--green);">120 mAh consommés = <strong>4%</strong></div>
+        </div>
+      </div>
+
+      <div style="margin-top: 0.75rem;">
+        <div class="section-label">Furtivité RF — Avantage tactique</div>
+        <table>
+          <thead><tr><th>Propriété</th><th>BT Classic</th><th>BLE</th></tr></thead>
+          <tbody>
+            <tr><td>Émission RF</td><td class="cell-bad">Continue · forte</td><td class="cell-good">Courtes rafales</td></tr>
+            <tr><td>Détectabilité</td><td class="cell-bad">Signature permanente</td><td class="cell-good">Difficile à localiser</td></tr>
+            <tr><td>Autonomie device</td><td class="cell-bad">~60 h (50 mA moy.)</td><td class="cell-good">~600 h (5 mA moy.)</td></tr>
+            <tr><td><strong>Décision</strong></td><td class="cell-bad">❌ Écarté définitivement</td><td class="cell-good">✅ Retenu Phase 1</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="verdict">
+    <div class="verdict-label">Conclusion critères 3 & 4</div>
+    BLE gagne sur la sécurité (anti-replay natif, MIC intégré)
+    et très largement sur la consommation (×10 moins).
+    Pour Android et un déploiement réel, BLE est une nécessité
+    opérationnelle — pas une option parmi d'autres.
+  </div>
+</div>
+
+<!-- SLIDE 11: VISION MULTI-TRANSPORT -->
+<div class="slide" id="s13">
+  <div class="slide-num">02 — ROADMAP MULTI-TRANSPORT</div>
+  <h2>Critère 5 — Vision multi-transport Wi-Fi & 5G</h2>
+  <h3>L'argument architectural décisif — BT Classic est un cul-de-sac</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Pourquoi BLE s'étend naturellement vers Wi-Fi et 5G</div>
+      <table>
+        <thead><tr><th>Transport</th><th>API Socket</th><th>Portée</th><th>Phase BB</th></tr></thead>
+        <tbody>
+          <tr><td class="cell-good"><strong>BLE GATT (Phase 1)</strong></td><td>bleak Python</td><td class="cell-warn">30-100m</td><td class="cell-good">✅ En cours</td></tr>
+          <tr><td class="cell-good"><strong>BLE L2CAP CoC (Phase 2)</strong></td><td>AF_BLUETOOTH BTPROTO_L2CAP</td><td class="cell-warn">400m</td><td class="cell-warn">Phase 2</td></tr>
+          <tr><td class="cell-warn">Wi-Fi Direct (Phase 3)</td><td>AF_INET SOCK_DGRAM</td><td class="cell-good">200m</td><td class="cell-warn">Phase 3</td></tr>
+          <tr><td class="cell-warn">5G Gateway (Phase 4)</td><td>AF_INET SOCK_DGRAM</td><td class="cell-good">km</td><td class="cell-neutral">Phase 4</td></tr>
+        </tbody>
+      </table>
+      <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem; padding: 0.6rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--red); border-radius: 6px;">
+        BT Classic définitivement écarté — incompatible
+        avec la vision multi-transport et Android.
+      </div>
+      <div class="verdict" style="margin-top: 0.75rem;">
+        <div class="verdict-label">Décision réunion</div>
+        BT Classic définitivement écarté.
+        GATT en Phase 1 pour valider BB rapidement.
+        L2CAP CoC en Phase 2 pour démontrer le gain de performance —
+        c'est notre contribution originale mesurable.
+        Aucun projet existant n'a implémenté BLE L2CAP CoC + CDS/MPR.
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Roadmap multi-transport</div>
+      <div class="roadmap" style="grid-template-columns: 1fr; gap: 0.6rem;">
+        <div class="roadmap-item p1">
+          <div class="phase-label">Phase 1 — En cours</div>
+          <div class="phase-title">BLE GATT — MVP rapide</div>
+          <ul class="phase-items">
+            <li>bleak + asyncio sur Rubik Pi 3 × 2 + UNO Q</li>
+            <li>GATT avec write without response</li>
+            <li>Hello + CDS Greedy + AES-GCM + Python</li>
+            <li>Validation du protocole BB complet</li>
+            <li>Même approche que BitChat — prouvée à 100K users</li>
+          </ul>
+        </div>
+        <div class="roadmap-item p2">
+          <div class="phase-label">Phase 2 — Court terme</div>
+          <div class="phase-title">BLE L2CAP CoC — Contribution originale</div>
+          <ul class="phase-items">
+            <li>Port de GATT vers L2CAP CoC</li>
+            <li>Parallélisme natif : 5 voisins = 10ms vs 50ms</li>
+            <li>BlueZ D-Bus API ou PR CPython (jan 2025)</li>
+            <li>Benchmark GATT vs L2CAP CoC mesuré</li>
+            <li>Aucun projet existant ne fait ça</li>
+          </ul>
+        </div>
+        <div class="roadmap-item p3">
+          <div class="phase-label">Phase 3 — Moyen terme</div>
+          <div class="phase-title">Android — Kotlin</div>
+          <ul class="phase-items">
+            <li>createL2capChannel() natif Android 10+</li>
+            <li>Même protocole BB, même PSM L2CAP CoC</li>
+            <li>80% du parc Android couvert</li>
+            <li>Effort estimé : 30% du travail total</li>
+          </ul>
+        </div>
+        <div class="roadmap-item p4">
+          <div class="phase-label">Phase 4 — Long terme</div>
+          <div class="phase-title">Wi-Fi Direct + 5G Gateway</div>
+          <ul class="phase-items">
+            <li>Wi-Fi Direct dans le TAL</li>
+            <li>MPR (-73% unicasts)</li>
+            <li>5G uniquement en mode passerelle</li>
+            <li>Démo Qualcomm Symposium juillet</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 12: L2CAP vs RFCOMM vs GATT -->
+<div class="slide" id="s14">
+  <div class="slide-num">03 — TRANSPORT : GATT → L2CAP CoC</div>
+  <h2>Transport BLE — GATT Phase 1, L2CAP CoC Phase 2</h2>
+  <h3>Pourquoi GATT d'abord, et pourquoi L2CAP CoC est notre contribution</h3>
+
+  <div class="compare-grid compare-3" style="margin-bottom: 1rem;">
+    <div class="compare-box winner">
+      <div class="box-title" style="color: var(--green);">GATT — Phase 1 MVP</div>
+      <ul class="box-list">
+        <li class="good">Write without response — pas d'attente ACK</li>
+        <li class="good">bleak + asyncio — lib mature et documentée</li>
+        <li class="good">Des milliers d'exemples disponibles</li>
+        <li class="good">Testé par BitChat (100K users) et ble-reticulum</li>
+        <li class="good">Latence 5 voisins : ~50ms (acceptable Phase 1)</li>
+        <li class="good">Compatible Rubik Pi + UNO Q + Android natif</li>
+        <li class="warn">Modèle sérialisé — moins optimal que L2CAP</li>
+        <li class="warn">MTU 512 bytes maximum</li>
+      </ul>
+    </div>
+    <div class="compare-box phase2">
+      <div class="box-title">L2CAP CoC — Phase 2</div>
+      <ul class="box-list">
+        <li class="good">Parallélisme natif : 5 voisins = 10ms vs 50ms GATT</li>
+        <li class="good">Overhead 4B vs 9B pour GATT</li>
+        <li class="good">Aucun projet mesh existant ne l'utilise → unique</li>
+        <li class="good">Android : createL2capChannel() natif Android 10+</li>
+        <li class="good">Credit-based flow control natif</li>
+        <li class="warn">Python natif non supporté (PR CPython jan 2025)</li>
+        <li class="warn">BlueZ D-Bus API — peu documenté</li>
+        <li class="warn">Risque technique plus élevé</li>
+        <li class="warn">Très peu d'exemples disponibles</li>
+      </ul>
+    </div>
+    <div class="compare-box loser">
+      <div class="box-title">RFCOMM — Éliminé</div>
+      <ul class="box-list">
+        <li class="bad">BT Classic uniquement</li>
+        <li class="bad">Flux série non délimité</li>
+        <li class="bad">Overhead 8 bytes</li>
+        <li class="bad">Pas d'équivalent BLE, Android, Wi-Fi</li>
+        <li class="bad">Migration multi-transport impossible</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Tableau comparatif chiffré</div>
+      <table>
+        <thead><tr><th>Critère</th><th>RFCOMM</th><th>GATT Phase 1</th><th>L2CAP CoC Phase 2</th></tr></thead>
+        <tbody>
+          <tr><td>Overhead header</td><td class="cell-bad">8 B</td><td class="cell-bad">9 B</td><td class="cell-good">4 B</td></tr>
+          <tr><td>MTU utile</td><td class="cell-warn">20 B</td><td class="cell-warn">244 B (négocié)</td><td class="cell-good">512 B</td></tr>
+          <tr><td>Fragments Hello 72B</td><td class="cell-bad">4</td><td class="cell-warn">1</td><td class="cell-good">1</td></tr>
+          <tr><td>Envoi parallèle</td><td class="cell-bad">❌</td><td class="cell-bad">❌</td><td class="cell-good">✅</td></tr>
+          <tr><td>Compatible BLE</td><td class="cell-bad">❌</td><td class="cell-warn">⚠️</td><td class="cell-good">✅</td></tr>
+          <tr><td>Débit effectif</td><td class="cell-warn">~1 Mbps</td><td class="cell-bad">~700 kbps</td><td class="cell-good">~2 Mbps</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Latence diffusion CDS — 5 voisins</div>
+      <div class="calc-row">
+        <span class="calc-label">GATT (with response / sérialisé)</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-red" style="width:100%"></div></div>
+        <span class="calc-value cell-bad">500 ms</span>
+      </div>
+      <div class="calc-row">
+        <span class="calc-label">GATT (write without response)</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-yellow" style="width:10%"></div></div>
+        <span class="calc-value cell-warn">50 ms</span>
+      </div>
+      <div class="calc-row">
+        <span class="calc-label">L2CAP CoC (parallèle Phase 2)</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-green" style="width:2%"></div></div>
+        <span class="calc-value cell-good">10 ms</span>
+      </div>
+      <div class="verdict" style="margin-top: 0.75rem;">
+        <div class="verdict-label">Conclusion</div>
+        GATT en Phase 1 : pragmatique, prouvé, rapide à implémenter.
+        L2CAP CoC en Phase 2 : notre contribution originale —
+        personne n'a encore fait du mesh BLE avec L2CAP CoC + CDS/MPR.
+        Le gain mesuré (10ms vs 50ms) sera notre résultat expérimental clé.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 13: CDS vs MPR -->
+<div class="slide" id="s15">
+  <div class="slide-num">04 — FORWARDING</div>
+  <h2>CDS Greedy vs MPR — Réduction des transmissions BLE</h2>
+  <h3>GATT Phase 1 (write without response) · L2CAP CoC Phase 2 (parallèle natif)</h3>
+
+  <div class="stat-row">
+    <div class="stat-box red">
+      <span class="stat-label">Flooding naïf (10 nœuds)</span>
+      <span class="stat-value">45</span>
+      <span class="stat-context">transmissions BLE — référence 100%</span>
+    </div>
+    <div class="stat-box yellow">
+      <span class="stat-label">CDS Greedy (Phase 1)</span>
+      <span class="stat-value">18</span>
+      <span class="stat-context">transmissions BLE — réduction de 60%</span>
+    </div>
+    <div class="stat-box green">
+      <span class="stat-label">MPR optimisé (Phase 2)</span>
+      <span class="stat-value">12</span>
+      <span class="stat-context">transmissions BLE — réduction de 73%</span>
+    </div>
+    <div class="stat-box blue">
+      <span class="stat-label">Relation CDS / MPR</span>
+      <span class="stat-value">—</span>
+      <span class="stat-context">MPR = algorithme · CDS = résultat</span>
+    </div>
+  </div>
+
+  <div class="compare-grid compare-2" style="margin-bottom: 1rem;">
+    <div class="compare-box winner">
+      <div class="box-title">CDS — Connected Dominating Set</div>
+      <ul class="box-list">
+        <li>Sous-ensemble de nœuds formant un backbone connexe</li>
+        <li>Règle : nœud X rejoint le CDS si 2 de ses voisins ne sont pas voisins entre eux</li>
+        <li>Seuls les nœuds CDS retransmettent → couverture garantie</li>
+        <li>Info requise : voisinage à 2 sauts uniquement (via messages Hello)</li>
+        <li>Résultat : N transmissions → backbone minimal</li>
+        <li>CDS Greedy : construction greedy retenue en Phase 1</li>
+      </ul>
+    </div>
+    <div class="compare-box phase2">
+      <div class="box-title">MPR — Multipoint Relays</div>
+      <ul class="box-list">
+        <li>Méthode d'élection du CDS inspirée d'OLSR</li>
+        <li>Chaque nœud choisit le sous-ensemble minimal de voisins qui couvre tous ses voisins à 2 sauts</li>
+        <li>MPR = algorithme | CDS = résultat</li>
+      </ul>
+    </div>
+  </div>
+
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Comparaison CDS Greedy vs MPR</div>
+      <table>
+        <thead><tr><th>Critère</th><th>CDS Greedy</th><th>MPR</th></tr></thead>
+        <tbody>
+          <tr><td>Info requise</td><td class="cell-good">Voisinage 2 sauts</td><td class="cell-good">Voisinage 2 sauts</td></tr>
+          <tr><td>Transmissions BLE (10 nœuds)</td><td class="cell-warn">18 (-60%)</td><td class="cell-good">12 (-73%)</td></tr>
+          <tr><td>Complexité algo</td><td class="cell-good">Faible</td><td class="cell-warn">Moyenne</td></tr>
+          <tr><td>Overhead Hello</td><td class="cell-good">Faible</td><td class="cell-warn">+liste MPR</td></tr>
+          <tr><td>Stabilité mobilité</td><td class="cell-good">Bonne</td><td class="cell-warn">Réduite</td></tr>
+          <tr><td>Msgs contrôle</td><td class="cell-warn">Standard</td><td class="cell-good">-60%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Réduction des transmissions BLE — 10 nœuds</div>
+      <div class="calc-row">
+        <span class="calc-label">Flooding naïf</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-red" style="width:100%"></div></div>
+        <span class="calc-value cell-bad">45</span>
+      </div>
+      <div class="calc-row">
+        <span class="calc-label">CDS Greedy — Phase 1</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-yellow" style="width:40%"></div></div>
+        <span class="calc-value cell-warn">18</span>
+      </div>
+      <div class="calc-row">
+        <span class="calc-label">MPR — Phase 2</span>
+        <div class="calc-bar-wrap"><div class="calc-bar bar-green" style="width:27%"></div></div>
+        <span class="calc-value cell-good">12</span>
+      </div>
+      <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem; padding: 0.6rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px;">
+        Phase 1 GATT : write without response → ~50ms pour 5 voisins<br>
+        Phase 2 L2CAP CoC : parallèle natif → ~10ms pour 5 voisins<br>
+        CDS/MPR réduit le nombre de transmissions dans les deux cas
+      </div>
+      <div class="verdict" style="margin-top: 1rem;">
+        <div class="verdict-label">Relation fondamentale</div>
+        <strong>CDS = résultat</strong> (le backbone de relais) — <strong>MPR = algorithme</strong> d'élection du CDS. MPR n'est pas une alternative, c'est une amélioration de la construction du CDS. Phase 1 : CDS Greedy. Phase 2 : MPR comme méthode de construction.
+      </div>
+    </div>
+  </div>
+
+  <div class="compare-grid compare-2" style="margin-top: 1rem;">
+    <div class="compare-box winner">
+      <div class="box-title" style="color: var(--green);">CDS Greedy — Phase 1</div>
+      <ul class="box-list">
+        <li class="good">Simple à implémenter</li>
+        <li class="good">Voisinage 2 sauts suffisant</li>
+        <li class="good">Résultats comparables au preprint</li>
+        <li class="good">Base solide pour benchmark</li>
+        <li>Réduction 60% des transmissions BLE</li>
+      </ul>
+    </div>
+    <div class="compare-box phase2">
+      <div class="box-title" style="color: var(--yellow);">MPR — Phase 2</div>
+      <ul class="box-list">
+        <li class="good">Réduction 73% des transmissions BLE</li>
+        <li class="good">Standard OLSR documenté</li>
+        <li class="good">Contribution originale mesurable</li>
+        <li class="warn">Liste MPR dans Hello (+overhead)</li>
+        <li class="warn">Stabilité réduite sous mobilité</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 14: ÉNERGIE -->
+<div class="slide" id="s16">
+  <div class="slide-num">04 — ÉNERGIE</div>
+  <h2>Consommation énergétique — L'argument central de BB</h2>
+  <h3>Données issues de la littérature scientifique 2019–2024</h3>
+
+  <div class="stat-row">
+    <div class="stat-box red">
+      <span class="stat-label">Flooding standard BLE Mesh</span>
+      <span class="stat-value">Secteur</span>
+      <span class="stat-context">Nœuds relais backbone — batterie impossible</span>
+    </div>
+    <div class="stat-box yellow">
+      <span class="stat-label">Nœud capteur BLE Mesh 235 mAh</span>
+      <span class="stat-value">15.6 mois</span>
+      <span class="stat-context">Message toutes les 10s — Darroudi et al. 2019</span>
+    </div>
+    <div class="stat-box green">
+      <span class="stat-label">Nœud non-CDS BB (sleep)</span>
+      <span class="stat-value">~0.5 mA</span>
+      <span class="stat-context">vs 5 mA en flooding — ×10 moins</span>
+    </div>
+    <div class="stat-box blue">
+      <span class="stat-label">Réduction consommation CDS/MPR</span>
+      <span class="stat-value">-60/73%</span>
+      <span class="stat-context">vs flooding naïf — nœuds sur batterie possibles</span>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Flooding vs CDS — Impact mesuré (IEEE 2018)</div>
+      <div style="margin-bottom: 0.75rem;">
+        <div class="calc-row" style="margin-bottom: 0.25rem;">
+          <span class="calc-label">Flooding standard</span>
+          <div class="calc-bar-wrap"><div class="calc-bar bar-red" style="width:100%"></div></div>
+          <span class="calc-value cell-bad">100%</span>
+        </div>
+        <div style="font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); padding-left: 1rem;">Tous les nœuds relaient — backbone = secteur</div>
+      </div>
+      <div style="margin-bottom: 0.75rem;">
+        <div class="calc-row" style="margin-bottom: 0.25rem;">
+          <span class="calc-label">CDS/MPR BB</span>
+          <div class="calc-bar-wrap"><div class="calc-bar bar-green" style="width:33%"></div></div>
+          <span class="calc-value cell-good">27–40%</span>
+        </div>
+        <div style="font-family: var(--sans); font-size: 0.65rem; color: var(--text-muted); padding-left: 1rem;">Seul le backbone relaie — non-CDS peuvent dormir</div>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Profil de consommation par type de nœud</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Type de nœud</th><th>Flooding</th><th>CDS/MPR BB</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Nœud source</td><td>~5 mA</td><td>~5 mA (identique)</td></tr>
+          <tr><td>Nœud CDS (actif)</td><td>~5 mA</td><td>~8 mA (légèrement plus)</td></tr>
+          <tr><td>Nœud non-CDS</td><td>~5 mA (relaie tout)</td><td class="cell-good">~0.5 mA (sleep) ✅</td></tr>
+          <tr><td>Backbone réseau</td><td class="cell-bad">Secteur obligatoire ❌</td><td class="cell-good">Batterie possible ✅</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="section-label">Ce que BB va mesurer — Contribution originale</div>
+      <div class="compare-box winner plain">
+        <div class="box-title" style="color: var(--green);">Mesures inédites — Aucune étude publiée sur :</div>
+        <ul class="box-list">
+          <li class="good">BLE GATT vs L2CAP CoC sur consommation</li>
+          <li class="good">Impact CDS/MPR sur autonomie nœud relais</li>
+          <li class="good">Consommation sur Rubik Pi class SBC (vs nRF52)</li>
+          <li class="good">Impact du jitter window sur énergie</li>
+          <li class="good">Comparaison nœud CDS vs non-CDS en batterie</li>
+        </ul>
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Lien consommation ↔ furtivité</div>
+      <div class="compare-box plain">
+        <div class="box-title">Nœud non-CDS BB = quasi silencieux radio</div>
+        <ul class="box-list">
+          <li>Émissions radio minimales (sleep entre Hello = 5s)</li>
+          <li>Signature RF difficile à détecter</li>
+          <li>Avantage tactique direct (usage militaire)</li>
+          <li>×10 autonomie vs BT Classic radio always-on</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Argument central BB</div>
+    Le flooding standard BLE Mesh oblige les nœuds backbone
+    à être sur secteur. CDS/MPR de BB résout ce problème :
+    les nœuds non-CDS peuvent dormir entre les transmissions.
+    BB va mesurer ce gain pour la première fois sur
+    architecture Linux embarqué — contribution originale garantie.
+  </div>
+</div>
+
+<!-- SLIDE 15: AES MODES -->
+<div class="slide" id="s17">
+  <div class="slide-num">05 — SÉCURITÉ</div>
+  <h2>AES-CCM vs AES-GCM + Gestion des clés</h2>
+  <h3>Deux couches de sécurité distinctes — lien radio et groupe applicatif</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Mode AES — Chiffrement applicatif BB</div>
+      <table>
+        <thead><tr><th>Critère</th><th>AES-CCM</th><th>AES-GCM</th></tr></thead>
+        <tbody>
+          <tr><td>Modèle</td><td class="cell-warn">MAC-then-Encrypt</td><td class="cell-good">Encrypt-then-MAC</td></tr>
+          <tr><td>Passes sur données</td><td class="cell-bad">2 (séquentiel)</td><td class="cell-good">1 (parallèle)</td></tr>
+          <tr><td>Parallélisable</td><td class="cell-bad">❌</td><td class="cell-good">✅</td></tr>
+          <tr><td>HW accélération</td><td class="cell-warn">Partielle</td><td class="cell-good">✅ ARMv8 Crypto</td></tr>
+          <tr><td>OpenSSL défaut</td><td class="cell-bad">❌ Désactivé</td><td class="cell-good">✅ Activé</td></tr>
+          <tr><td>Python cryptography</td><td class="cell-warn">⚠️ Limitée</td><td class="cell-good">✅ Natif</td></tr>
+          <tr><td>Latence (Hello 72B)</td><td class="cell-bad">~1 ms</td><td class="cell-good">~0.05 ms</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Structure paquet BB sécurisé</div>
+      <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; font-family: var(--sans); font-size: 0.7rem;">
+        <div style="display: flex; gap: 0; margin-bottom: 0.4rem;">
+          <div style="flex: 2; background: var(--surface2); border: 1px solid var(--border); padding: 0.4rem; border-radius: 4px 0 0 4px; text-align: center;">
+            Routing Header<br><span style="color: var(--text-muted);">Src·Dst·TTL·Seq — 12 B — EN CLAIR</span>
+          </div>
+          <div style="flex: 2; background: var(--surface); border: 1px solid var(--border); border-left: none; padding: 0.4rem; text-align: center;">
+            Key Header<br><span style="color: var(--text-muted);">N × 32 B — chiffré clé groupe</span>
+          </div>
+          <div style="flex: 3; background: var(--surface2); border: 1px solid var(--border); border-left: none; padding: 0.4rem; text-align: center;">
+            Payload AES-GCM<br><span style="color: var(--text-muted);">Variable — session key</span>
+          </div>
+          <div style="flex: 1; background: var(--surface); border: 1px solid var(--accent); border-left: none; padding: 0.4rem; border-radius: 0 4px 4px 0; text-align: center;">
+            Tag<br><span style="color: var(--text-muted);">16 B</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section-label">Gestion des clés de groupe — 3 options</div>
+      <div class="compare-box loser" style="margin-bottom: 0.6rem; padding: 0.9rem;">
+        <div class="box-title">Option A — Clé statique partagée</div>
+        <ul class="box-list">
+          <li>Simple, overhead zéro</li>
+          <li class="bad">1 membre compromis = groupe entier compromis</li>
+          <li class="bad">Pas de forward secrecy · Révocation impossible</li>
+        </ul>
+      </div>
+      <div class="compare-box winner" style="margin-bottom: 0.6rem; padding: 0.9rem;">
+        <div class="box-title" style="color: var(--green);">Option B — Session key par paquet (Phase 1)</div>
+        <ul class="box-list">
+          <li class="good">Forward secrecy parfaite</li>
+          <li class="good">Révocation : exclure du key header</li>
+          <li>Overhead : N × 32 bytes (≤ 15 membres OK)</li>
+          <li>5 membres = 160 B · 10 membres = 320 B · 20 membres = 640 B</li>
+          <li class="good">Key rotation périodique → anti-replay multihop</li>
+        </ul>
+      </div>
+      <div class="compare-box phase2" style="padding: 0.9rem;">
+        <div class="box-title" style="color: var(--yellow);">Option C — ECDH éphémère (Phase 2)</div>
+        <ul class="box-list">
+          <li class="good">Overhead constant — indépendant de N</li>
+          <li class="good">Forward + backward secrecy</li>
+          <li class="warn">Latence ECDH au join/leave ~50 ms</li>
+          <li class="good">Contribution originale mesurable</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 15: PYTHON vs C -->
+<div class="slide" id="s18">
+  <div class="slide-num">06 — LANGAGE & PLATEFORME</div>
+  <h2>Python vs C — Approche hybride par phases</h2>
+  <h3>La performance de Python est suffisante pour la Phase 1 — voici pourquoi</h3>
+
+  <div class="two-col">
+    <div>
+      <div class="section-label">Comparaison performance — Opérations BB critiques</div>
+      <table>
+        <thead><tr><th>Opération</th><th>Python</th><th>C</th><th>Ratio</th><th>Impact BB</th></tr></thead>
+        <tbody>
+          <tr><td>Envoi L2CAP</td><td class="cell-warn">~2 ms</td><td class="cell-good">~0.1 ms</td><td>×20</td><td class="cell-good">Négligeable</td></tr>
+          <tr><td>AES-GCM (72B)</td><td class="cell-warn">~1 ms</td><td class="cell-good">~0.05 ms</td><td>×20</td><td class="cell-good">Négligeable</td></tr>
+          <tr><td>Calcul CDS (10 nœuds)</td><td class="cell-warn">~10 ms</td><td class="cell-good">~0.5 ms</td><td>×20</td><td class="cell-good">Négligeable</td></tr>
+          <tr><td>Parse Hello</td><td class="cell-warn">~0.5 ms</td><td class="cell-good">~0.02 ms</td><td>×25</td><td class="cell-good">Négligeable</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Librairies BLE retenues par phase</div>
+      <table class="table-compact">
+        <thead>
+          <tr><th>Phase</th><th>Lib BLE</th><th>Transport</th><th>Avantage</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Phase 1 MVP</td><td>bleak (asyncio)</td><td>GATT</td><td>Mature, documentée, cross-platform</td></tr>
+          <tr><td>Phase 2</td><td>BlueZ D-Bus ou PR CPython</td><td>L2CAP CoC</td><td>Accès bas niveau nécessaire</td></tr>
+          <tr><td>Phase 3 Android</td><td>Android BT API</td><td>createL2capChannel()</td><td>Natif Android 10+</td></tr>
+        </tbody>
+      </table>
+      <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted); margin-top: 0.5rem; padding: 0.6rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--yellow); border-radius: 6px;">
+        ⚠️ Python natif ne supporte pas encore BLE L2CAP CoC officiellement.
+        PR soumise à CPython en janvier 2025 — en cours de review.
+        Phase 2 nécessitera BlueZ D-Bus API ou sockets C bas niveau.
+      </div>
+
+      <div style="font-family: var(--sans); font-size: 0.7rem; padding: 0.8rem; background: var(--surface2); border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: 6px; margin-top: 0.75rem;">
+        💡 Intervalle Hello = 5 000 ms<br>
+        Temps traitement Python = 10 ms<br>
+        <strong style="color: var(--green);">CPU utilisé pour BB = 10/5000 = 0.2%</strong><br>
+        → Python est largement suffisant pour la validation Phase 1
+      </div>
+
+      <div class="section-label" style="margin-top: 0.75rem;">Même code sur les deux boards</div>
+      <table>
+        <thead><tr><th>Board</th><th>OS</th><th>Python</th><th>BlueZ</th></tr></thead>
+        <tbody>
+          <tr><td>Rubik Pi 3</td><td class="cell-good">Ubuntu 24.04</td><td class="cell-good">3.12</td><td class="cell-good">✅</td></tr>
+          <tr><td>Arduino UNO Q</td><td class="cell-good">Debian Linux</td><td class="cell-good">3.11</td><td class="cell-good">✅</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <div class="compare-grid compare-2" style="margin-bottom: 0.75rem;">
+        <div class="compare-box winner">
+          <div class="box-title" style="color: var(--green);">Python — Phase 1</div>
+          <ul class="box-list">
+            <li class="good">Prototypage rapide stack complet</li>
+            <li class="good">BlueZ sockets natifs (AF_BLUETOOTH)</li>
+            <li class="good">asyncio → parallélisme BB réel</li>
+            <li class="good">lib cryptography → AES-GCM natif</li>
+            <li class="good">Même code Rubik Pi + UNO Q</li>
+            <li class="good">TAL trivial : même API BLE/WiFi/5G</li>
+          </ul>
+        </div>
+        <div class="compare-box phase2">
+          <div class="box-title" style="color: var(--yellow);">C — Phase 2</div>
+          <ul class="box-list">
+            <li class="good">Transport L2CAP bas niveau</li>
+            <li class="good">Vrais threads POSIX</li>
+            <li class="good">AES optimisé OpenSSL/mbedTLS</li>
+            <li class="good">Performance maximale production</li>
+            <li class="warn">Debugging plus complexe</li>
+            <li class="warn">Segfaults, gestion mémoire</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-label">Architecture hybride recommandée</div>
+      <div class="arch-stack">
+        <div class="arch-layer" style="border-color: var(--green);">
+          <span class="arch-layer-name">Orchestration + Config + Logs</span>
+          <span class="arch-layer-tech">Python toujours</span>
+        </div>
+        <div class="arch-layer" style="border-color: var(--yellow);">
+          <span class="arch-layer-name">Hello / CDS / Forwarding</span>
+          <span class="arch-layer-desc">Python Phase 1 → C Phase 2</span>
+        </div>
+        <div class="arch-layer" style="border-color: var(--yellow);">
+          <span class="arch-layer-name">AES-GCM Crypto</span>
+          <span class="arch-layer-desc">lib cryptography Phase 1 → OpenSSL Phase 2</span>
+        </div>
+        <div class="arch-layer" style="border-color: var(--yellow);">
+          <span class="arch-layer-name">Transport L2CAP</span>
+          <span class="arch-layer-desc">Python sockets Phase 1 → BlueZ C direct Phase 2</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="verdict">
+    <div class="verdict-label">Stack par phase</div>
+    Phase 1 : Python + bleak + asyncio → GATT.
+    Phase 2 : Python + BlueZ D-Bus → L2CAP CoC.
+    Phase 3 Android : Kotlin + Android BT API → createL2capChannel().
+  </div>
+</div>
+
+<!-- SLIDE 16: QUESTIONS OUVERTES -->
+<div class="slide" id="s19">
+  <div class="slide-num">QUESTIONS OUVERTES</div>
+  <h2>Questions non tranchées — Points de décision</h2>
+  <h3>Issues from project meeting — to be investigated</h3>
+
+  <div class="compare-grid compare-questions">
+    <div class="compare-box">
+      <div class="box-title">BT Classic → BLE : Quand ?</div>
+      <ul class="box-list">
+        <li>À quel niveau de maturité du MVP ?</li>
+        <li>Critères objectifs : énergie ? latence ? taille groupe ?</li>
+        <li>Le surcoût de complexité BLE est-il acceptable ?</li>
+        <li>Mesures à faire : benchmark BT vs BLE sur boards</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">MTU &amp; Matrices de clés</div>
+      <ul class="box-list">
+        <li>512 bytes BLE suffisants pour les messages applicatifs ?</li>
+        <li>Taille matrice de clés avec 10 membres = 320 bytes</li>
+        <li>Que faire si MTU dépassé : segmentation ou redondance ?</li>
+        <li>Taille max de groupe avant pénalité : ≈ 15 membres ?</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Routage &amp; Topologie</div>
+      <ul class="box-list">
+        <li>CDS v1 suffisant pour démo crédible ?</li>
+        <li>Gestion des topologies très dynamiques ?</li>
+        <li>Nombre de sauts max raisonnable ?</li>
+        <li>Overhead acceptable sous forte mobilité ?</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Révocation &amp; Sécurité</div>
+      <ul class="box-list">
+        <li>Révocation simple (exclusion key header) suffisante ?</li>
+        <li>Ou rotation de clés nécessaire ?</li>
+        <li>En cas de perte paquet : comment retrouver sa clé ?</li>
+        <li>Audit externe : quand le planifier ?</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Python → C : Quand ?</div>
+      <ul class="box-list">
+        <li>Python suffisant en termes de performance finale ?</li>
+        <li>À quel moment envisager C/C++ ?</li>
+        <li>Accélérateurs Rubik Pi exploitables : NPU 12 TOPS ?</li>
+        <li>ARMv8 Crypto Extensions : déjà actives sur les boards ?</li>
+      </ul>
+    </div>
+    <div class="compare-box">
+      <div class="box-title">Validation &amp; Démo</div>
+      <ul class="box-list">
+        <li>Indicateurs clés du MVP : énergie ? latence ? taux de perte ?</li>
+        <li>Nombre minimal de nœuds pour démo crédible ?</li>
+        <li>Deadline : Qualcomm University Platforms Symposium</li>
+        <li>Format : technique ou scénarisée ?</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="compare-box plain" style="border-color: var(--red); border-left: 3px solid var(--red); margin-top: 1rem;">
+    <div class="box-title" style="color: var(--red);">Question technique critique — Action immédiate</div>
+    <ul class="box-list">
+      <li class="warn">Le "parallel send" BLE est-il réel ou simulé ?</li>
+      <li class="warn">write without response = vraiment parallèle ?</li>
+      <li class="warn">Ou envois séquentiels masqués par le stack ?</li>
+      <li class="warn">→ Vérifier dans ble-reticulum + mesurer sur boards</li>
+    </ul>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Priorités</div>
+    Ces questions structurent le travail des prochaines semaines. Priorité 1 : valider le MVP BT Classic. Priorité 2 : mesurer pour trancher BT → BLE. Priorité 3 : audit sécurité avant toute diffusion publique.
+  </div>
+</div>
+
+<!-- SLIDE 20: ARCHITECTURE FINALE -->
+<div class="slide" id="s20">
+  <div class="slide-num">BB — ARCHITECTURE FINALE</div>
+  <h2>BUBBLE-BLUE — Décisions techniques finales</h2>
+  <h3>Ce qu'on construit, comment, et sur quelles épaules on se tient</h3>
+
+  <div class="section-label">Stack BB — Architecture complète</div>
+  <div class="arch-stack seq" style="margin-bottom: 1rem;">
+    <div class="arch-layer" style="border-left: 3px solid var(--green);">
+      <span class="arch-layer-name">Application BB</span>
+      <span class="arch-layer-desc">Chat sécurisé de groupe · Geo-sharing</span>
+      <span class="arch-layer-tech">Python asyncio — Phase 1</span>
+    </div>
+    <div class="arch-layer" style="border-left: 3px solid var(--yellow);">
+      <span class="arch-layer-name">Sécurité</span>
+      <span class="arch-layer-desc">AES-GCM · Session key par paquet · Anti-replay · Révocation</span>
+      <span class="arch-layer-tech">Inspiré : Briar (rotation clés) · Phase 2 : ECDH éphémère</span>
+    </div>
+    <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+      <span class="arch-layer-name">Control — Hello &amp; Voisinage</span>
+      <span class="arch-layer-desc">Hello périodiques 5s · Tables voisinage 2 sauts · Déduplication Bloom filter</span>
+      <span class="arch-layer-tech">Inspiré : BitChat (pipeline dédup + jitter window)</span>
+    </div>
+    <div class="arch-layer highlight">
+      <span class="arch-layer-name">Forwarding — CDS/MPR</span>
+      <span class="arch-layer-desc">CDS Greedy Phase 1 (-60%) · MPR Phase 2 (-73%)</span>
+      <span class="arch-layer-tech">Unique à BB — aucun projet existant</span>
+    </div>
+    <div class="arch-layer" style="border-left: 3px solid var(--accent);">
+      <span class="arch-layer-name">TAL — Transport Abstraction Layer</span>
+      <span class="arch-layer-desc">send(addr, data) · receive(callback) — même API sur tous les transports</span>
+      <span class="arch-layer-tech">Inspiré : Architecture Reticulum</span>
+    </div>
+    <div class="compare-grid compare-2" style="gap: 0.35rem;">
+      <div class="compare-box plain" style="padding: 0.55rem 0.9rem; border-color: var(--accent); border-left: 3px solid var(--accent);">
+        <div class="box-title" style="font-size: 0.8rem; margin-bottom: 0.35rem; color: var(--accent); border: none; padding: 0;">BLE GATT — Phase 1</div>
+        <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted);">bleak + asyncio · write without response · 50ms / 5 voisins</div>
+      </div>
+      <div class="compare-box plain" style="padding: 0.55rem 0.9rem; border-color: var(--yellow); border-left: 3px solid var(--yellow);">
+        <div class="box-title" style="font-size: 0.8rem; margin-bottom: 0.35rem; color: var(--yellow); border: none; padding: 0;">BLE L2CAP CoC — Phase 2</div>
+        <div style="font-family: var(--sans); font-size: 0.68rem; color: var(--text-muted);">BlueZ D-Bus · parallélisme natif · 10ms / 5 voisins · Unique</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Décisions finales — Résumé</div>
+  <table class="table-compact" style="margin-bottom: 1rem;">
+    <thead>
+      <tr><th>Composant</th><th>Choix Phase 1</th><th>Choix Phase 2</th><th>Inspiré de</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Transport radio</td><td class="cell-good">BLE ✅</td><td>BLE + Wi-Fi Direct</td><td>—</td></tr>
+      <tr><td>Couche BLE</td><td class="cell-good">GATT (bleak) ✅</td><td>L2CAP CoC (D-Bus)</td><td>BitChat → BB unique</td></tr>
+      <tr><td>Lib Python</td><td class="cell-good">bleak + asyncio ✅</td><td>BlueZ D-Bus</td><td>ble-reticulum</td></tr>
+      <tr><td>Forwarding</td><td class="cell-good">CDS Greedy ✅</td><td>MPR (-73%)</td><td>arXiv BB — unique</td></tr>
+      <tr><td>Déduplication</td><td class="cell-good">Bloom filter ✅</td><td>Bloom filter</td><td>BitChat</td></tr>
+      <tr><td>Anti-collision</td><td class="cell-good">Jitter 20-200ms ✅</td><td>Jitter 20-200ms</td><td>BitChat/Meshtastic</td></tr>
+      <tr><td>Chiffrement</td><td class="cell-good">AES-GCM ✅</td><td>AES-GCM</td><td>—</td></tr>
+      <tr><td>Clés groupe</td><td class="cell-good">Session key/paquet ✅</td><td>ECDH éphémère</td><td>Briar (concept)</td></tr>
+      <tr><td>Révocation</td><td class="cell-good">Key header exclusion ✅</td><td>Schéma distribué</td><td>—</td></tr>
+      <tr><td>Cible mobile</td><td class="cell-good">Rubik Pi + UNO Q ✅</td><td>Android Kotlin</td><td>—</td></tr>
+      <tr><td>Android API</td><td class="cell-neutral">—</td><td>createL2capChannel()</td><td>Android 10+ natif</td></tr>
+    </tbody>
+  </table>
+
+  <div class="section-label">Ce qu'on prend à chaque projet</div>
+  <div class="compare-grid compare-2" style="margin-bottom: 0.75rem;">
+    <div class="compare-box plain" style="border-color: var(--accent);">
+      <div class="box-title" style="font-size: 0.85rem;">BitChat ★★★★★</div>
+      <ul class="box-list">
+        <li class="good">Pipeline déduplication 6 étapes</li>
+        <li class="good">Bloom filter 10K entrées / 5 min</li>
+        <li class="good">Format binaire compact 13B header</li>
+        <li class="good">Jitter window 20-200ms anti-collision</li>
+        <li class="good">Ingress suppression (pas d'écho)</li>
+        <li class="good">Architecture TAL multi-transport (concept)</li>
+        <li class="bad">Code non réutilisable (Swift/GATT)</li>
+        <li class="bad">Pas de CDS/MPR — flooding seulement</li>
+      </ul>
+    </div>
+    <div class="compare-box plain" style="border-color: var(--yellow);">
+      <div class="box-title" style="font-size: 0.85rem;">Briar ★★★★</div>
+      <ul class="box-list">
+        <li class="good">Rotation périodique des clés → forward secrecy</li>
+        <li class="good">Séparation core/platform → notre TAL</li>
+        <li class="good">Rigueur : spécification formelle avant code</li>
+        <li class="good">Audit sécurité planifié dès le début</li>
+        <li class="bad">Architecture contacts de confiance uniquement</li>
+        <li class="bad">BT Classic RFCOMM → incompatible BLE</li>
+        <li class="bad">Code non réutilisable (Java/Bramble)</li>
+      </ul>
+    </div>
+    <div class="compare-box plain" style="border-color: var(--green);">
+      <div class="box-title" style="font-size: 0.85rem;">De ble-reticulum ★★★</div>
+      <ul class="box-list">
+        <li class="good">Architecture TAL multi-transport → notre modèle</li>
+        <li class="good">Python 3 Linux embarqué → même stack</li>
+        <li class="good">Dual-role BLE + bleak + asyncio → Phase 1 GATT</li>
+        <li class="warn">Licence : MIT ✅ mais dépend Reticulum License ❌</li>
+        <li class="warn">Stratégie : s'inspirer du code sans forker</li>
+        <li class="warn">Réécrire la couche BLE dans BB proprement</li>
+        <li class="warn">BB 100% MIT — compatible Qualcomm/INRIA ✅</li>
+        <li class="bad">Routage par hash cryptographique ≠ CDS/MPR</li>
+      </ul>
+    </div>
+    <div class="compare-box winner plain">
+      <div class="box-title" style="color: var(--green); font-size: 0.85rem;">BB — Unique ★★★★★</div>
+      <ul class="box-list">
+        <li class="good">Licence MIT 100% — aucune dépendance restrictive</li>
+        <li class="good">Inspiré de 3 projets sans copier leur code</li>
+        <li class="good">BLE L2CAP CoC + CDS/MPR → aucun projet existant</li>
+        <li class="good">Portage Android natif createL2capChannel()</li>
+        <li class="good">Mesures énergie CDS vs flooding → inédites</li>
+        <li class="good">Spécification formelle ouverte arXiv:2509.00967</li>
+        <li class="good">Hardware Qualcomm : ARMv8 Crypto + NPU 12 TOPS</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Contribution BB</div>
+    BB ne réinvente pas la roue — il combine les meilleures
+    briques de chaque projet sur une fondation unique :
+    BLE L2CAP CoC + CDS/MPR.
+    Personne n'a encore fait ça.
+    C'est notre contribution originale.
+  </div>
+</div>
+
+<!-- SLIDE 17: SYNTHESE -->
+<div class="slide" id="s21">
+  <div class="slide-num">SYNTHÈSE</div>
+  <h2>Tableau de décision final — 7 choix · 4 phases</h2>
+
+  <table style="margin-bottom: 1.5rem;">
+    <thead>
+      <tr>
+        <th>Point</th>
+        <th>Options analysées</th>
+        <th>Phase 1 — Stage</th>
+        <th>Phase 2</th>
+        <th>Critère décisif</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Transport radio</strong></td>
+        <td>BT Classic vs BLE GATT vs BLE L2CAP CoC</td>
+        <td class="cell-good">✅ BT Classic L2CAP — MVP</td>
+        <td class="cell-warn">BLE GATT + bleak</td>
+        <td>Déjà fonctionnel sur boards · Validation rapide</td>
+      </tr>
+      <tr>
+        <td><strong>Protocole</strong></td>
+        <td>L2CAP vs RFCOMM vs GATT</td>
+        <td class="cell-good">✅ L2CAP natif Python</td>
+        <td class="cell-warn">GATT bleak asyncio</td>
+        <td>socket(AF_BLUETOOTH) · Parallèle natif · 0 risque</td>
+      </tr>
+      <tr>
+        <td><strong>Forwarding</strong></td>
+        <td>Flooding vs CDS vs MPR</td>
+        <td class="cell-good">✅ CDS Greedy (-60%)</td>
+        <td class="cell-warn">MPR (-73%)</td>
+        <td>-60% transmissions · Simple à implémenter</td>
+      </tr>
+      <tr>
+        <td><strong>Sécurité mode</strong></td>
+        <td>AES-CCM vs AES-GCM</td>
+        <td class="cell-good">✅ AES-GCM</td>
+        <td class="cell-good">AES-GCM</td>
+        <td>ARMv8 HW · OpenSSL natif · Parallèle</td>
+      </tr>
+      <tr>
+        <td><strong>Clés de groupe</strong></td>
+        <td>Statique vs Session vs ECDH</td>
+        <td class="cell-good">✅ Session key/paquet</td>
+        <td class="cell-warn">ECDH éphémère</td>
+        <td>Forward secrecy · Révocation simple</td>
+      </tr>
+      <tr>
+        <td><strong>Langage</strong></td>
+        <td>Python vs C</td>
+        <td class="cell-good">✅ Python + asyncio</td>
+        <td class="cell-warn">Python + bleak</td>
+        <td>0.2% CPU · Même code 2 boards</td>
+      </tr>
+      <tr>
+        <td><strong>Base de code</strong></td>
+        <td>Fork vs from scratch vs inspiration</td>
+        <td class="cell-good">✅ Inspiration ble-reticulum (MIT)</td>
+        <td class="cell-warn">Sans fork — licence propre</td>
+        <td>Reticulum License incompatible · BB reste MIT</td>
+      </tr>
+      <tr>
+        <td><strong>Cible mobile</strong></td>
+        <td>Android vs iOS vs aucune</td>
+        <td class="cell-good">✅ Rubik Pi 3 × 2 + UNO Q</td>
+        <td class="cell-warn">Android 10+ Kotlin</td>
+        <td>createL2capChannel() · 80% parc Android</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="roadmap" style="grid-template-columns: repeat(5, 1fr);">
+    <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.1);">
+      <div class="phase-label" style="color: #166534;">Phase 1A</div>
+      <div class="phase-title">Sécurité — BT Classic L2CAP</div>
+      <ul class="phase-items">
+        <li>Échange de clés AES-GCM</li>
+        <li>Chiffrement/déchiffrement entre boards</li>
+        <li>Vérification accès groupe</li>
+        <li>Indépendant du transport ✅</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p1" style="background: rgba(30, 126, 52, 0.04);">
+      <div class="phase-label" style="color: var(--green);">Phase 1B</div>
+      <div class="phase-title">Routage CDS — BT Classic L2CAP</div>
+      <ul class="phase-items">
+        <li>Hello messages + voisinage 2 sauts</li>
+        <li>CDS Greedy sur 3 boards minimum</li>
+        <li>Multi-hop validé</li>
+        <li>Métriques : latence + delivery ratio</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p2">
+      <div class="phase-label">Phase 2 — Court terme</div>
+      <div class="phase-title">Port BLE GATT</div>
+      <ul class="phase-items">
+        <li>bleak + asyncio</li>
+        <li>Même protocole BB</li>
+        <li>Benchmark BT vs BLE mesuré</li>
+        <li>Dual-role Central + Peripheral</li>
+        <li>MPR activé (-73%)</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p3">
+      <div class="phase-label">Phase 3 — Moyen terme</div>
+      <div class="phase-title">BLE L2CAP CoC</div>
+      <ul class="phase-items">
+        <li>Contribution originale unique</li>
+        <li>10ms vs 50ms GATT mesuré</li>
+        <li>BlueZ D-Bus ou PR CPython</li>
+        <li>Aucun projet mesh existant</li>
+      </ul>
+    </div>
+    <div class="roadmap-item p4">
+      <div class="phase-label">Phase 4 — Long terme</div>
+      <div class="phase-title">Android + Production</div>
+      <ul class="phase-items">
+        <li>createL2capChannel() Kotlin</li>
+        <li>Wi-Fi Direct dans TAL</li>
+        <li>Audit sécurité externe</li>
+        <li>Démo Qualcomm Symposium</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="verdict-label">Synthèse finale</div>
+    BT Classic L2CAP pour le MVP — déjà fonctionnel sur les boards,
+    zéro risque technique, validation du protocole BB en 3-4 semaines.
+    BLE GATT Phase 2 — benchmark mesuré vs BT Classic.
+    BLE L2CAP CoC Phase 3 — contribution originale :
+    premier protocole mesh BLE L2CAP CoC + CDS/MPR au monde.
+    Android Phase 4 via createL2capChannel() natif.
+  </div>
+</div>
+
+<!-- NAVIGATION -->
+<div id="nav">
+  <button onclick="goTo(1)" class="active" id="btn1">Introduction</button>
+  <button onclick="goTo(2)" id="btn2">Contexte</button>
+  <button onclick="goTo(3)" id="btn3">État de l'art</button>
+  <button onclick="goTo(4)" id="btn4">BitChat 1/2</button>
+  <button onclick="goTo(5)" id="btn5">BitChat 2/2</button>
+  <button onclick="goTo(6)" id="btn6">Briar</button>
+  <button onclick="goTo(7)" id="btn7">Stratégie</button>
+  <button onclick="goTo(8)" id="btn8">Portage Android</button>
+  <button onclick="goTo(9)" id="btn9">Signalisation BLE</button>
+  <button onclick="goTo(10)" id="btn10">Architecture</button>
+  <button onclick="goTo(11)" id="btn11">BLE vs BT 1&2</button>
+  <button onclick="goTo(12)" id="btn12">BLE vs BT 3&4</button>
+  <button onclick="goTo(13)" id="btn13">BLE vs BT with WIFI</button>
+  <button onclick="goTo(14)" id="btn14">Couche Transport</button>
+  <button onclick="goTo(15)" id="btn15">Multi-Hop Protocol</button>
+  <button onclick="goTo(16)" id="btn16">Énergie</button>
+  <button onclick="goTo(17)" id="btn17">Security</button>
+  <button onclick="goTo(18)" id="btn18">Python vs C</button>
+  <button onclick="goTo(19)" id="btn19">Questions ouvertes</button>
+  <button onclick="goTo(20)" id="btn20">Architecture finale</button>
+  <button onclick="goTo(21)" id="btn21">Synthèse</button>
+  <span id="slide-counter">1 / 21</span>
+</div>
+
+<script>
+  let current = 1;
+  const total = 21;
+  let wheelLock = false;
+
+  function goTo(n) {
+    document.getElementById('s' + current).classList.remove('active');
+    document.getElementById('btn' + current).classList.remove('active');
+    current = n;
+    const slide = document.getElementById('s' + current);
+    slide.classList.add('active');
+    slide.scrollTop = 0;
+    document.getElementById('btn' + current).classList.add('active');
+    document.getElementById('slide-counter').textContent = current + ' / ' + total;
+  }
+
+  function canChangeSlideOnWheel(direction) {
+    const slide = document.querySelector('.slide.active');
+    if (!slide) return true;
+    const atTop = slide.scrollTop <= 0;
+    const atBottom = slide.scrollTop + slide.clientHeight >= slide.scrollHeight - 1;
+    if (direction > 0) return atBottom;
+    return atTop;
+  }
+
+  document.addEventListener('wheel', (e) => {
+    if (wheelLock) return;
+    const direction = Math.sign(e.deltaY);
+    if (direction === 0) return;
+    if (!canChangeSlideOnWheel(direction)) return;
+
+    if (direction > 0 && current < total) {
+      e.preventDefault();
+      wheelLock = true;
+      goTo(current + 1);
+      setTimeout(() => { wheelLock = false; }, 450);
+    } else if (direction < 0 && current > 1) {
+      e.preventDefault();
+      wheelLock = true;
+      goTo(current - 1);
+      setTimeout(() => { wheelLock = false; }, 450);
+    }
+  }, { passive: false });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' && current < total) goTo(current + 1);
+    if (e.key === 'ArrowLeft' && current > 1) goTo(current - 1);
+    if (e.key === 'f' || e.key === 'F') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+</script>
+</body>
+</html>

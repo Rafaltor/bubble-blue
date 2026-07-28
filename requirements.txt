@@ -12,10 +12,6 @@
 cryptography>=42.0.0
 cffi>=2.0.0
 
-# Connectionless presence: broadcast the public Hello via bluetoothd Extended
-# Advertising (org.bluez.LEAdvertisement1). Pure-Python D-Bus client.
-dbus-fast>=2.0.0
-
 # Timed simulation (sim/timed/, SimPy event clock)
 simpy>=4.1.0
 
