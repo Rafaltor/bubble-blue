@@ -46,8 +46,14 @@ Outils système aussi requis par le code runtime :
 |-------|-------------|
 | `hciconfig` | `config.get_local_bd_addr` |
 | `btmgmt` | `LEAdvertiser` (advertising legacy) |
-| `bluetoothctl` | `PairingAgentSupervisor` (`--chat`) |
 | BlueZ / droits root | sockets L2CAP + scan MGMT |
+
+> Le CoC BLE utilise `BT_SECURITY_LOW` (pas de chiffrement de lien). La sécurité
+> est entièrement applicative (clé de groupe + AES-256-GCM). **Aucun
+> appairage/bond Bluetooth n’est nécessaire** : les boards ouvrent le canal
+> L2CAP directement, sans pairing préalable. C’est ce qui permet à des nœuds
+> qui ne se sont jamais rencontrés de communiquer, du moment qu’ils partagent
+> la clé de groupe.
 
 ```bash
 sudo apt update
@@ -58,19 +64,23 @@ sudo apt install -y git bluez bluez-tools
 
 #### Ubuntu arm64 (Rubik Pi) — PPA deadsnakes
 
+Sur Ubuntu, **ne pas** compiler depuis les sources si le PPA suffit :
+
 ```bash
 sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt update
 sudo apt install -y python3.14 python3.14-venv python3.14-dev
 python3.14 --version
+python3.14 -c "import socket; print('AF_BLUETOOTH', hasattr(socket, 'AF_BLUETOOTH'))"
 ```
 
 #### Debian aarch64 (Arduino UNO Q) — compilation depuis les sources
 
-**Critique :** installer les headers **avant** `./configure`. Sans `libbluetooth-dev`,
-`AF_BLUETOOTH` / `BDADDR_LE_*` sont omis silencieusement ; sans `libssl-dev`, le module
-`ssl` (et souvent `cryptography` / pip) casse.
+Sur Debian (UNO Q), deadsnakes n’est en général **pas** disponible : il faut
+compiler CPython 3.14. **Critique :** installer les headers **avant**
+`./configure`. Sans `libbluetooth-dev`, `AF_BLUETOOTH` / `BDADDR_LE_*` sont
+omis **silencieusement** ; sans `libssl-dev`, `ssl` casse.
 
 ```bash
 sudo apt install -y \
@@ -86,8 +96,15 @@ cd Python-3.14.6
 ./configure --prefix=/usr/local --enable-optimizations
 make -j"$(nproc)"
 sudo make altinstall
-python3.14 --version   # doit résoudre vers /usr/local/bin/python3.14
+
+# Vérifs post-install (obligatoires sur board vierge)
+/usr/local/bin/python3.14 --version
+/usr/local/bin/python3.14 -c "import socket, ssl; print('AF_BLUETOOTH', hasattr(socket, 'AF_BLUETOOTH')); print('ssl OK')"
 ```
+
+Si `AF_BLUETOOTH` est `False` : headers manquants au configure → réinstaller
+les `-dev`, puis **re**configure / rebuild / `altinstall` (un simple
+`apt install` après coup ne répare pas un binaire déjà compilé).
 
 ### 2. Vérification go / no-go CoC
 
@@ -223,34 +240,26 @@ Options utiles (voir `bb_node.py`) :
 Ordre approximatif dans `run_chat` → `BBNode.start(..., l2cap_accept_all=True)`
 quand `BUBBLE_BLUE_TRANSPORT=ble_l2cap` :
 
-1. **Agent Just Works** — `setup_ble_pairing_agent()` démarre un
-   `PairingAgentSupervisor` (`bluetoothctl`, agent `NoInputNoOutput`).
-2. **Transport CoC** — `BLEL2CAPTransport.start()` :
+1. **Transport CoC** — `BLEL2CAPTransport.start()` :
    - `LEAdvertiser.start()` via `btmgmt add-adv` (AD legacy connectable) ;
    - écoute L2CAP `SOCK_SEQPACKET` sur `PSM_BLE` (`0x0081`) avec
-     `BT_MODE_LE_FLOWCTL` + **`BT_SECURITY_LOW`** (`ble_coc.apply_le_flowctl`) :
-     **aucun chiffrement / bonding SMP n’est requis pour ouvrir le CoC**
-     (la crypto est applicative).
-3. **HelloManager** — Hellos périodiques sur les liens + (BLE) plan presence.
-4. **Découverte** — `MgmtLEScanner` + `PresenceScanner` : candidats BB repérés
+     `BT_MODE_LE_FLOWCTL` + **`BT_SECURITY_LOW`** (`ble_coc.apply_le_flowctl`).
+2. **HelloManager** — Hellos périodiques sur les liens + (BLE) plan presence.
+3. **Découverte** — `MgmtLEScanner` + `PresenceScanner` : candidats BB repérés
    via Manufacturer Data `BB…` ; la presence plane pousse un Hello compact dans
    l’advert (`update_presence` / `LEGACY_PRESENCE_MAX_VALUE_LEN`).
-5. **Auto-dial** — thread de connexion vers les cibles
+4. **Auto-dial** — thread de connexion vers les cibles
    (`_backbone_dial_targets` / candidats) ; accept de tout peer entrant
    (`l2cap_accept_all=True`) sauf allowlist `--topology`.
-6. **Chat** — messages chiffrés sous `GROUP_KEY` ; rôle CDS affiché
+5. **Chat** — messages chiffrés sous `GROUP_KEY` ; rôle CDS affiché
    (`RELAY` / `LEAF`).
 
-**Appairage manuel : non requis en nominal.** Le CoC s’ouvre en
-`BT_SECURITY_LOW`. L’agent Just Works est démarré (chemin héritage /
-compatibilité) mais le bring-up nominal **ne dépend pas** d’un bond SMP réussi
-ni d’une confirmation passkey.
-
-Note code : le chemin `BBNode._try_auto_bond` (bond auto sur `EPERM`) n’est
-actif que si `BBNode(..., setup_pairing_agent=True)`. Sous `--chat`,
-`setup_pairing_agent=False` sur `BBNode` (l’agent tourne à part dans
-`bb_node.py`) — ce filet auto-bond **n’est donc pas** celui qui ouvre les liens
-en mode chat.
+Le CoC BLE utilise `BT_SECURITY_LOW` (pas de chiffrement de lien). La sécurité
+est entièrement applicative (clé de groupe + AES-256-GCM). **Aucun
+appairage/bond Bluetooth n’est nécessaire** : les boards ouvrent le canal
+L2CAP directement, sans pairing préalable. C’est ce qui permet à des nœuds
+qui ne se sont jamais rencontrés de communiquer, du moment qu’ils partagent
+la clé de groupe.
 
 Attendu après quelques secondes (boards en portée, même clé / transport) :
 
@@ -270,74 +279,116 @@ Ne **jamais** committer `.env` ni `.bb-identity-*.bin`.
 
 ## Pièges & dépannage (Bluetooth)
 
-Gotchas durement appris sur le labo. Chaque entrée : symptôme → cause → solution.
-Quand l’état **actuel** du code contredit un récit historique, c’est signalé explicitement.
+Gotchas durement appris sur le labo. Chaque entrée : **Symptôme** / **Cause** / **Solution**.
 
-### 1. Ne jamais `btmgmt power off` (Qualcomm wcn399x / Arduino UNO Q)
+> **Cohérence code :** `LEAdvertiser` (`src/transport/advertising.py`) pilote
+> l’advert via `btmgmt add-adv` / `rm-adv` / `advinfo` — **jamais**
+> `btmgmt power off`. Aucune garde anti-power-off dans le repo : règle
+> **opératoire**.
 
-| | |
-|--|--|
-| **Symptôme** | Après un cycle `power off` / `power on` via `btmgmt` : dmesg avec `mem_dump_status`, `Reading QCA version information failed -110`, `Retry BT power ON` ; `btmgmt` affiche `Index list with 0 items` ; sockets L2CAP → `ENOSYS` (errno 38, *Function not implemented*). |
-| **Cause** | Sur ce firmware, un power-cycle `btmgmt` est toxique : l’adaptateur disparaît jusqu’à recharge propre du firmware. |
-| **Solution** | **Reboot de la board** (seul moyen fiable de recharger le firmware). Ne pas piloter l’advertising via un cycle power `btmgmt`. Le code utilise `btmgmt add-adv` / `LEAdvertiser` sans power off/on. |
+---
 
-> Pas de garde-fou logiciel dans le repo : c’est une règle **opératoire** labo.
+### 1. ⚠️ NE JAMAIS faire `btmgmt power off` (Qualcomm / Arduino UNO Q)
 
-### 2. Aucun `bluetoothctl` manuel pendant `bb_node`
-
-| | |
-|--|--|
-| **Symptôme** | Bond / SMP en passkey : `journalctl -u bluetooth` montre `device_confirm_passkey`, `Failed requesting authentication` ; déconnexions ~20 s (HCI Reason **0x13**). |
-| **Cause** | Un `bluetoothctl` résiduel réenregistre un agent **KeyboardDisplay**, qui écrase le **NoInputNoOutput** du `PairingAgentSupervisor` → numeric comparison au lieu de Just Works (`pairing_agent.py`). |
-| **Solution** | Fermer **tous** les `bluetoothctl` avant `bb_node`. Le supervisor logge `Just Works capability: CONFIRMED` / `FRAGILE` / `FAILED` et avertit (`AVERTISSEMENT: agent concurrent détecté…`). |
-
-> Toujours pertinent : `--chat` démarre bien un `PairingAgentSupervisor`. Moins critique pour ouvrir le CoC en tip (`BT_SECURITY_LOW`, voir §4), mais indispensable dès qu’un bond SMP est tenté.
-
-### 3. Même version de code sur toutes les boards
+> **PIÈGE LE PLUS COÛTEUX.** Contrôleurs Qualcomm **wcn399x** (Arduino UNO Q
+> notamment). Un seul `btmgmt power off` peut tuer l’adaptateur jusqu’au reboot.
 
 | | |
 |--|--|
-| **Symptôme** | Log `unsupported private hello version: 0x03` (ou autre) ; boards visibles en présence mais voisinage / identité privée cassés. |
-| **Cause** | Format Hello privé désynchronisé (`src/control/hello.py` : parseur n’accepte que les versions connues ; tip actuel émet **v0x03** si clé Ed25519 présente). Une board trop vieille refuse le Hello privé. |
-| **Solution** | `git pull` partout ; vérifier le même commit : `git log --oneline -1`. |
+| **Symptôme** | Après un cycle power via `btmgmt` : dmesg montre `mem_dump_status`, `Reading QCA version information failed (-110)`, `Retry BT power ON`. L’adaptateur disparaît (`btmgmt info` → `Index list with 0 items` ; `hciconfig` → DOWN). **Toute** opération socket L2CAP renvoie `ENOSYS` : `[Errno 38] Function not implemented`. |
+| **Cause** | Le cycle `power off` / `power on` via `btmgmt` est **toxique** pour ce firmware QCA — il ne se réinitialise pas correctement. |
+| **Solution** | **`sudo reboot`** de la board (recharge le firmware au démarrage). Pour l’advertising : **ne pas** utiliser de cycle power `btmgmt` — le nœud BB l’active à chaud via `btmgmt add-adv` (`LEAdvertiser`) / BlueZ. |
 
-### 4. `EPERM` (errno 13) sur connect — **attention : tip ≠ récit MEDIUM**
+```bash
+# INTERDIT sur UNO Q / wcn399x :
+#   btmgmt power off
+#   btmgmt --index 0 power off
+```
 
-| | |
-|--|--|
-| **Symptôme (historique, `BT_SECURITY_MEDIUM`)** | `connect … failed: [Errno 13] Permission denied` en boucle ; peer connecté/déconnecté. |
-| **Cause (historique)** | CoC LE en **MEDIUM** exige un lien chiffré ; sans bond SMP, le kernel refuse (`EPERM`). |
-| **État tip (code actuel)** | `ble_coc.apply_le_flowctl` force **`BT_SECURITY_LOW`** précisément pour **éviter** ce `EPERM` et le flapping SMP / Reason 0x13. En nominal, un pair **non bondé doit pouvoir ouvrir le CoC**. |
-| **Filet restant** | Si un `EPERM` survient encore, `BBNode._connect_peers` tente `_try_auto_bond` → `ensure_bonded` + backoff (`_backoff_after_connect_fail`). **Mais** sous `bb_node.py --chat`, `BBNode(..., setup_pairing_agent=False)` : le supervisor vit hors de `BBNode`, donc **`_try_auto_bond` n’a pas de supervisor** et échoue immédiatement. |
-| **Solution tip** | Garder `BT_SECURITY_LOW` (défaut). Ne pas « diagnostiquer EPERM = il faut binder » comme le path nominal. Si tu repasses en `MEDIUM`, il faudra agent Just Works **sur les deux boards** *et* `setup_pairing_agent=True` sur `BBNode` pour que l’auto-bond fonctionne. |
+---
 
-### 5. Compilation CPython sans headers = modules omis silencieusement
+### 2. Même version de code sur toutes les boards
 
 | | |
 |--|--|
-| **Symptôme** | `AF_BLUETOOTH` ou `ssl` absents alors que `python3.14 --version` affiche 3.14.x. |
-| **Cause** | `libbluetooth-dev` / `libssl-dev` absents au moment du `./configure` → modules non compilés, sans erreur fatale. |
-| **Solution** | Installer les `-dev` **avant** `./configure`, puis recompiler (`make altinstall`). Refaire le test go/no-go CoC du § Board Setup. |
+| **Symptôme** | Log `unsupported private hello version: 0x0X` ; boards se découvrent (presence) mais ne forment pas de voisinage / chat ne passe pas. |
+| **Cause** | Format du Hello privé désynchronisé entre commits déployés (`src/control/hello.py` — tip émet **v0x03** avec Ed25519 ; une board trop vieille refuse). |
+| **Solution** | Sur **chaque** board : `git pull` puis vérifier le même commit : `git log --oneline -1`. |
+
+---
+
+### 3. Compilation CPython 3.14 sur Debian — headers requis
+
+| | |
+|--|--|
+| **Symptôme** | `python3.14 -c "import socket; print(hasattr(socket,'AF_BLUETOOTH'))"` → `False`, ou `import ssl` échoue, malgré un binaire 3.14.x. |
+| **Cause** | `libbluetooth-dev` et/ou `libssl-dev` absents au `./configure` → modules omis **silencieusement**. |
+| **Solution** | Installer les `-dev` **avant** configure, puis recompiler (procédure complète : § Board Setup → Debian). Contrôle : |
+
+```bash
+sudo apt install -y libbluetooth-dev libssl-dev \
+  build-essential libffi-dev zlib1g-dev libbz2-dev \
+  libreadline-dev libsqlite3-dev liblzma-dev
+# puis depuis les sources Python-3.14.x :
+./configure --prefix=/usr/local --enable-optimizations
+make -j"$(nproc)"
+sudo make altinstall
+python3.14 -c "import socket, ssl; assert hasattr(socket, 'AF_BLUETOOTH'); print('OK')"
+```
+
+Sur **Ubuntu / Rubik** : préférer deadsnakes (même section Board Setup) — pas de compile sources.
+
+---
+
+### 4. Récupérer un adaptateur Bluetooth planté
+
+Après crash firmware, état incohérent, ou suite à une manip power :
+
+| | |
+|--|--|
+| **Symptôme** | `hciconfig` DOWN ; `btmgmt info` sans index ; L2CAP `ENOSYS` ; `bb_node` ne peut ni advert ni connect. |
+| **Cause** | Daemon BlueZ / contrôleur dans un état incohérent ; ou firmware QCA déjà tué (voir §1). |
+| **Solution** | Escalade courte → reboot si l’index ne revient pas : |
+
+```bash
+sudo systemctl restart bluetooth
+sudo hciconfig hci0 up
+
+# Vérifier :
+hciconfig -a          # attendu : UP RUNNING
+btmgmt info           # attendu : Index list with 1 item
+
+# Si l'index reste à 0 items → firmware probablement mort :
+sudo reboot
+# puis re-vérifier hciconfig -a / btmgmt info
+```
+
+> Si le plantage suit un `btmgmt power off` sur wcn399x : **reboot immédiat**
+> (le `systemctl restart` ne suffit en général pas).
+
+---
+
+### 5. Pas d’appairage Bluetooth requis (sécurité applicative)
+
+| | |
+|--|--|
+| **Symptôme** | Confusion « il faut binder / pairer les boards avant le chat ». |
+| **Cause** | Ancien chemin `BT_SECURITY_MEDIUM` (SMP) — **obsolète** pour le tip. |
+| **Solution** | Le CoC BLE utilise `BT_SECURITY_LOW` (`ble_coc.apply_le_flowctl`). La sécurité est entièrement applicative (clé de groupe + AES-256-GCM). **Aucun appairage/bond Bluetooth n’est nécessaire.** |
+
+---
 
 ### 6. `SOCK_SEQPACKET` obligatoire pour le CoC LE
 
 | | |
 |--|--|
 | **Symptôme** | Transfert / CoC LE cassé si on réutilise le pattern Classic. |
-| **Cause** | BLE CoC (`ble_coc.new_socket` / `ble_l2cap`) utilise `AF_BLUETOOTH` + **`SOCK_SEQPACKET`** + `BTPROTO_L2CAP`. Le transport Classic (`l2cap.py`) utilise **`SOCK_STREAM`** — ce n’est **pas** interchangeable. |
-| **Solution** | Ne pas « unifier » les sockets à la main ; passer par `make_transport("ble_l2cap")` / `ble_coc`. |
-
-### 7. Persistance des bonds BlueZ
-
-| | |
-|--|--|
-| **Symptôme** | Bonds disparus après reboot ; (surtout pertinent si lien en `MEDIUM`). |
-| **Cause** | BlueZ stocke les bonds sous `/var/lib/bluetooth/<adapter>/`. Si `/var` est en **tmpfs**, tout est perdu au reboot. |
-| **Solution** | `mount \| grep tmpfs` — vérifier que `/var` (ou `/var/lib`) n’est pas volatil. |
-| **Note tip** | Avec **`BT_SECURITY_LOW`**, le mesh **n’a pas besoin** de bonds pour le CoC. Un bond perdu ne bloque plus le path nominal ; le récit « se refait tout seul via auto-bond » ne s’applique pleinement que si auto-bond est réellement branché (voir §4). |
+| **Cause** | BLE CoC (`ble_coc` / `ble_l2cap`) = `SOCK_SEQPACKET` ; Classic (`l2cap.py`) = `SOCK_STREAM` — non interchangeables. |
+| **Solution** | Passer par `make_transport("ble_l2cap")` / `ble_coc`, ne pas unifier les sockets à la main. |
 
 ---
 
+## Architecture (runtime tip)
 
 | Plan | Rôle |
 |------|------|

@@ -12,8 +12,7 @@ Accessible to **any BB node**, independent of `BUBBLE_BLUE_GROUP_KEY`:
 |-----------|--------|-----------|
 | Presence AD | `src/transport/advertising.py` (`LEAdvertiser` / `update_presence`) | Legacy **connectable** Manufacturer Data: magic `BB`, protocol `0x01`, presence format **`0x02`**, compact Hello (anon_id, seq, CDS flag, BD_ADDR). Neighbor/MPR lists empty under `LEGACY_PRESENCE_MAX_VALUE_LEN` (~27 B value). |
 | Periodic scan | `PresenceScanner` + `le_scan.mgmt_scan_records` | LE scan window **3 s**; BLE mesh defaults **period 2 s** / **steady 4 s** (set in `BBNode`); MGMT *Device Found* carries full EIR each hit |
-| Link security | `ble_coc.apply_le_flowctl` | `BT_SECURITY_LOW` — no link encryption / pairing; app-layer crypto only |
-| Pairing agent | `pairing_agent.PairingAgentSupervisor` | Dormant under `LOW`; needed only if returning to `MEDIUM` |
+| Link security | `ble_coc.apply_le_flowctl` | **`BT_SECURITY_LOW`** — no link encryption; app-layer crypto only (see note below) |
 | Auto-dial | `BBNode._backbone_dial_targets` | CDS backbone when relays known; else **dial every heard peer**; one dial/pass; 8 s timeout; `force=True` |
 | Public Hellos | `hello` / `HelloManager` | OTA + L2CAP; anon_ids learned on the wire (cross-group) |
 | CDS / relay | `hello_manager`, `cds`, `forwarder._should_relay` | Wu-Li election; forward if CDS RELAY **or** ≥2 L2CAP links |
@@ -38,6 +37,18 @@ Governed only by the **group key**:
 
 Open mesh `.env`: **group key + transport** only.
 
+### Link security note (`BT_SECURITY_LOW`)
+
+Le CoC BLE utilise `BT_SECURITY_LOW` (pas de chiffrement de lien). La sécurité
+est entièrement applicative (clé de groupe + AES-256-GCM). **Aucun
+appairage/bond Bluetooth n’est nécessaire** : les boards ouvrent le canal
+L2CAP directement, sans pairing préalable. C’est ce qui permet à des nœuds
+qui ne se sont jamais rencontrés de communiquer, du moment qu’ils partagent
+la clé de groupe.
+
+Trade-off : un sniffer passif à portée peut lire le **header de routing** en
+clair (type, src/dst, seq, ts). Payloads et Hello privés restent AES-GCM.
+
 ---
 
 ## Validation — open mesh (3+ boards)
@@ -60,7 +71,7 @@ sudo python3.14 bb_node.py --chat
 
 **Expect:**
 
-1. Presence heard → candidates → L2CAP links without typing BD_ADDRs.
+1. Presence heard → candidates → L2CAP links without typing BD_ADDRs (no Bluetooth pairing step).
 2. `PKT_ANNOUNCE` burst then periodic identity bindings.
 3. Multihop chat when the L2CAP graph is connected (relay via CDS or ≥2-link bridges).
 4. Kill/restart a node → rediscovery via presence + reconnect without editing `.env`.
@@ -145,7 +156,7 @@ Mitigations in software:
 
 ### Why MGMT (not `bluetoothctl scan`)
 
-`bluetoothctl` only prints `ManufacturerData` when it **changes**. A stable BB presence never re-emits `[CHG] ManufacturerData` → invisible. MGMT *Device Found* delivers full EIR every detection (`src/transport/le_scan.py`).
+`bluetoothctl` only prints `ManufacturerData` when it **changes**. A stable BB presence never re-emits `[CHG] ManufacturerData` → invisible. MGMT *Device Found* delivers full EIR every detection (`src/transport/le_scan.py`). Discovery does **not** require any Bluetooth pairing UI.
 
 ### Optional debugfs tweak
 
@@ -154,12 +165,6 @@ echo 300 | sudo tee /sys/kernel/debug/bluetooth/hci0/supervision_timeout
 ```
 
 (units of 10 ms; 300 ≈ 3 s). Optional when adaptive duty cycle is enough.
-
-### Link security: `BT_SECURITY_LOW`
-
-CoC opens without SMP bonding. Confidentiality/integrity are application-layer (AES-GCM, X25519 pairwise, Ed25519 attestations). Headers remain cleartext to a passive sniffer — intentional for an open mesh.
-
-To restore link encryption, switch `sec_low` → `sec_medium` in `apply_le_flowctl` and run pairing agents on **both** sides first.
 
 ## Présentations HTML
 
@@ -183,3 +188,4 @@ To restore link encryption, switch `sec_low` → `sec_medium` in `apply_le_flowc
 - Expecting M to decrypt foreign traffic in the cross-group test → wrong; M must only forward.
 - Mixing `ble_l2cap` and `bt_classic` in one mesh → incompatible transports.
 - Documenting PSM as only `0x1001` → wrong for BLE (`0x0081`).
+- Expecting a Bluetooth pairing/bond step before chat → wrong; tip is `BT_SECURITY_LOW` + group key only.
