@@ -9,11 +9,14 @@ from collections.abc import Callable
 
 from config import (
     PKT_ANNOUNCE,
+    PKT_ARQ,
     PKT_DATA,
     PKT_HELLO,
     PKT_REKEY,
     PKT_REKEY_FLOOD,
     PKT_SUBGROUP,
+    MAX_L2CAP_DEGREE,
+    SPARSE_RING_SUCCESSORS,
     BubbleBlueConfig,
     load_config,
 )
@@ -36,13 +39,6 @@ LogFn = Callable[[str, bool], None]
 PROTOCOL_HELLO_GRACE_MULT = 3
 PROTOCOL_QUARANTINE_BASE_S = 30.0
 PROTOCOL_QUARANTINE_CAP_S = 600.0
-
-# BLE controllers cannot sustain a full mesh: each extra L2CAP link contends with
-# advertising + MGMT scan. Cap degree so N can grow without O(N) radios per node.
-MAX_L2CAP_DEGREE = 3
-# Empty-CDS bootstrap: try this many ring successors (by anon_id) so an
-# unreachable next-hop does not permanently isolate a node.
-SPARSE_RING_SUCCESSORS = 2
 
 
 def topology_from_env() -> frozenset[str] | None:
@@ -129,6 +125,8 @@ class BBNode:
         self._admitted_peers: set[str] = set()
         self._protocol_quarantine_until: dict[str, float] = {}
         self._protocol_quarantine_streak: dict[str, int] = {}
+        # Prefer re-forming the same sparse L2CAP edges after radio flaps.
+        self._sticky_peers: set[str] = set()
 
     def start(
         self,
@@ -180,6 +178,7 @@ class BBNode:
                     PKT_REKEY,
                     PKT_ANNOUNCE,
                     PKT_REKEY_FLOOD,
+                    PKT_ARQ,
                 ):
                     fwd = holder["fwd"]
                     if fwd is not None:
@@ -276,19 +275,21 @@ class BBNode:
             self._admitted_peers.clear()
             self._protocol_quarantine_until.clear()
             self._protocol_quarantine_streak.clear()
+            self._sticky_peers.clear()
 
     def _start_presence_plane(self, hello: HelloManager) -> None:
         """
         Bring up the connectionless presence plane for BLE L2CAP.
 
-        Elects the CDS backbone from over-the-air public Hellos (no link needed),
-        broadcasts a compact presence Hello via the transport's legacy connectable
+        OTA compact Hellos are for *discovery* of connectable peers (dial plane).
+        CDS election runs on L2CAP Hello S/A tables (Blue_Bubble_specs.pdf §2.4).
+        Broadcasts a compact presence Hello via the transport's legacy connectable
         advertisement, and ingests peers' Hellos from the MGMT scan snapshot.
         """
         # The connectionless "heard" horizon should be as long as the scanner
         # remembers a device. Otherwise, while a node is busy attempting an
         # L2CAP dial (which starves its passive scan windows), a neighbour can
-        # expire from `heard` — flapping the CDS role — even though the scanner
+        # expire from `heard` — flapping dial targets — even though the scanner
         # snapshot still holds it. Aligning both keeps presence stable.
         heard_ttl = None
         scanner = self._le_scanner
@@ -539,9 +540,10 @@ class BBNode:
         """
         Peers to dial.
 
-        Connectionless mode: only the CDS-backbone links this node is responsible
-        for (see :meth:`_backbone_dial_targets`) — a sparse backbone instead of a
-        full mesh. Legacy mode: allowlist ∪ discovered BB candidates.
+        Connectionless mode: sparse sticky ring over OTA-heard peers (discovery
+        only). CDS is elected on L2CAP Hellos and must not drive dials
+        (Blue_Bubble_specs.pdf: CDS = flood backbone, neighbor = BT link).
+        Legacy mode: allowlist ∪ discovered BB candidates.
         """
         if self._cfg is None:
             cfg = load_config(
@@ -572,50 +574,33 @@ class BBNode:
 
     def _backbone_dial_targets(self) -> set[str] | None:
         """
-        BD addresses this node should dial to build a *sparse* L2CAP graph.
+        Sparse sticky L2CAP dial plan from OTA presence (connectionless).
 
-        Direction is encoded here so ``_connect_peers`` can ``force`` past the
-        transport BD tie-break when the plan already picked an initiator:
-
-          - RELAY  → dials backbone edges to relay neighbors with a higher anon_id
-                     (the lower-anon relay owns the edge; the other side accepts).
-          - LEAF   → dials its single dominator (smallest-anon relay neighbor).
-          - No CDS relays (compact presence has empty neighbor lists, so Wu-Li
-            often elects nothing in a dense room) → **ring bootstrap**, not
-            full-mesh: each node dials the next few higher anon_ids in the heard
-            set (circular). That yields O(1) degree as N grows, keeps the graph
-            connected when radio range is roughly complete, and avoids the
-            O(N²) dial storm that destabilised 4–5 board labs.
-
-        Returns ``None`` when not in connectionless mode.
+        Always an anon_id ring over heard peers — never CDS RELAY/LEAF edges.
+        Sticky peers (already linked or previously chosen) stay preferred so
+        radio flaps re-form the same sparse graph.
         """
         hello = self._hello_mgr
         if hello is None or not hello.is_connectionless:
             return None
-        plan = hello.connectionless_link_plan()
-        sym: set[bytes] = plan["sym"]
         local_aid = hello.anon_id
-        relays: set[bytes] = plan["relays"]
         heard: set[bytes] = set(hello.heard_anon_ids())
-
-        def _i(aid: bytes) -> int:
-            return int.from_bytes(aid, "big")
 
         with self._lock:
             aid_to_bd = {
                 bytes.fromhex(h): bd for h, (bd, _at) in self._presence_addr.items()
             }
+            sticky = set(self._sticky_peers)
 
-        def _to_bd(aids: set[bytes] | list[bytes]) -> set[str]:
-            return {aid_to_bd[a] for a in aids if a in aid_to_bd}
-
-        if sym and plan["am_relay"]:
-            return _to_bd({a for a in relays if _i(a) > _i(local_aid)})
-        if sym and relays:
-            dominator = min(relays, key=_i)
-            return _to_bd({dominator})
-        # Empty-CDS / no-symmetric: sparse ring over heard anon_ids.
-        return _to_bd(self._sparse_ring_successors(local_aid, heard))
+        ring_aids = self._sparse_ring_successors(local_aid, heard)
+        targets = {aid_to_bd[a] for a in ring_aids if a in aid_to_bd}
+        # Sticky redial only for current ring successors we previously dialed.
+        for bd in sticky:
+            for aid, mapped in aid_to_bd.items():
+                if mapped == bd and aid in heard and aid in ring_aids:
+                    targets.add(bd)
+                    break
+        return targets
 
     @staticmethod
     def _sparse_ring_successors(
@@ -626,7 +611,7 @@ class BBNode:
     ) -> list[bytes]:
         """
         Next ``count`` anon_ids after ``local_aid`` in the circular order of
-        ``heard ∪ {local}`` (ascending big-endian). Used as empty-CDS dial plan.
+        ``heard ∪ {local}`` (ascending big-endian). Sparse BLE dial plan.
         """
         nodes = sorted(heard | {local_aid})
         if len(nodes) < 2 or count <= 0:
@@ -747,6 +732,10 @@ class BBNode:
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
+                # Sticky only peers *we* dial (ring successors). Accept-side peers
+                # must not become dial targets or both ends force-dial → ECONNREFUSED.
+                with self._lock:
+                    self._sticky_peers.add(bd)
             except OSError as e:
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
@@ -772,7 +761,13 @@ class BBNode:
         streak = self._connect_streak.get(bd, 0) + 1 if self._connect_last_err.get(bd) == key else 1
         self._connect_streak[bd] = streak
         # Unexpected EPERM: longer base than transient refused/timeout.
-        base_s = 10.0 if e.errno == errno.EPERM else 4.0
+        # Sticky peers: short backoff so the same sparse edge re-forms quickly.
+        if e.errno == errno.EPERM:
+            base_s = 10.0
+        elif bd in self._sticky_peers:
+            base_s = 1.5
+        else:
+            base_s = 4.0
         self._connect_backoff_until[bd] = time.monotonic() + min(60.0, base_s * streak)
 
     def _log_connect_failure(self, bd: str, e: OSError) -> None:

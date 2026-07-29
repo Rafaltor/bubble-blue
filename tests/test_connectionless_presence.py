@@ -1,3 +1,5 @@
+"""Connectionless presence is discovery-only; CDS stays L2CAP-driven."""
+
 from __future__ import annotations
 
 import os
@@ -23,16 +25,17 @@ _Z = "00:11:22:33:44:55"
 
 
 class _FakeTransport:
-    """A transport with no L2CAP peers — the connectionless plane must not need it."""
+    def __init__(self, peers: list[str] | None = None) -> None:
+        self._peers = [p.upper() for p in (peers or [])]
 
     def connections(self) -> list[str]:
-        return []
+        return list(self._peers)
 
-    def send(self, bd_addr: str, data: bytes) -> None:  # pragma: no cover - unused
+    def send(self, bd_addr: str, data: bytes) -> None:  # pragma: no cover
         pass
 
 
-def _make_manager(local_bd: str) -> HelloManager:
+def _make_manager(local_bd: str, *, peers: list[str] | None = None) -> HelloManager:
     cfg = replace(
         load_config(),
         group_key=_GK,
@@ -45,39 +48,36 @@ def _make_manager(local_bd: str) -> HelloManager:
     fd, path = tempfile.mkstemp(prefix="bb-connless-epoch-")
     os.close(fd)
     epoch_store = EpochStore(_GK, persist_path=path, local_bd_addr=local_bd.upper())
-    mgr = HelloManager(cfg, _FakeTransport(), key_store, epoch_store, quiet=True)
+    mgr = HelloManager(cfg, _FakeTransport(peers), key_store, epoch_store, quiet=True)
     mgr.enable_connectionless_topology()
     return mgr
 
 
-def test_relay_elected_without_any_l2cap_link() -> None:
+def test_ota_presence_does_not_elect_cds_without_l2cap() -> None:
     mgr = _make_manager(_X)
     x, y, z = mgr.anon_id, compute_anon_id(_GK, _Y), compute_anon_id(_GK, _Z)
-    # Hear Y and Z over the air; each lists X back (symmetric), Y and Z do NOT
-    # list each other → X bridges them → X must be a relay, with zero connections.
     mgr.ingest_public_hello(y, 1, [x], [])
     mgr.ingest_public_hello(z, 1, [x], [])
     assert mgr.heard_anon_ids() == frozenset({y, z})
-    assert mgr.is_relay is True
+    # Compact OTA must not make us a relay (no L2CAP neighbors).
+    assert mgr.is_relay is False
 
 
-def test_single_neighbor_is_leaf() -> None:
+def test_heard_tracks_discovery() -> None:
     mgr = _make_manager(_X)
-    x, y = mgr.anon_id, compute_anon_id(_GK, _Y)
-    mgr.ingest_public_hello(y, 1, [x], [])
+    y = compute_anon_id(_GK, _Y)
+    mgr.ingest_public_hello(y, 1, [], [])
     assert mgr.heard_anon_ids() == frozenset({y})
     assert mgr.is_relay is False
 
 
-def test_local_presence_value_roundtrips_heard_neighbors() -> None:
+def test_local_presence_value_roundtrips_anon() -> None:
     mgr = _make_manager(_X)
-    x, y, z = mgr.anon_id, compute_anon_id(_GK, _Y), compute_anon_id(_GK, _Z)
-    mgr.ingest_public_hello(y, 1, [x], [])
-    mgr.ingest_public_hello(z, 1, [x], [])
+    x, y = mgr.anon_id, compute_anon_id(_GK, _Y)
+    mgr.ingest_public_hello(y, 1, [], [])
     parsed = parse_presence_manufacturer_value(mgr.build_local_presence_value())
     assert parsed is not None
     assert parsed["anon_id"] == x
-    assert set(parsed["neighbors"]) == {y, z}
 
 
 def test_ignores_our_own_broadcast() -> None:
@@ -86,41 +86,12 @@ def test_ignores_our_own_broadcast() -> None:
     assert mgr.heard_anon_ids() == frozenset()
 
 
-def test_link_plan_relay_dials_no_leaves() -> None:
-    # B (middle of a line A-B-C) hears A and C, each a non-relay listing only B.
-    b = _make_manager(_X)
-    x, y, z = b.anon_id, compute_anon_id(_GK, _Y), compute_anon_id(_GK, _Z)
-    b.ingest_public_hello(y, 1, [x], [], is_relay=False)
-    b.ingest_public_hello(z, 1, [x], [], is_relay=False)
-    plan = b.connectionless_link_plan()
-    assert plan["am_relay"] is True
-    assert plan["sym"] == {y, z}
-    # A relay never dials leaves; leaves dial it.
-    assert plan["relays"] == set()
-
-
-def test_link_plan_leaf_targets_relay_dominator() -> None:
-    # A (leaf) hears B which advertises itself as a relay and lists A and C.
-    a = _make_manager(_X)
-    x, y, z = a.anon_id, compute_anon_id(_GK, _Y), compute_anon_id(_GK, _Z)
-    a.ingest_public_hello(y, 1, [x, z], [], is_relay=True)
-    plan = a.connectionless_link_plan()
+def test_link_plan_is_discovery_snapshot() -> None:
+    mgr = _make_manager(_X)
+    y = compute_anon_id(_GK, _Y)
+    mgr.ingest_public_hello(y, 1, [], [], is_relay=True)
+    plan = mgr.connectionless_link_plan()
     assert plan["am_relay"] is False
-    assert plan["sym"] == {y}
-    assert plan["relays"] == {y}
-
-
-if __name__ == "__main__":
-    test_relay_elected_without_any_l2cap_link()
-    print("✅ relay elected with zero L2CAP links")
-    test_single_neighbor_is_leaf()
-    print("✅ single neighbor → leaf")
-    test_local_presence_value_roundtrips_heard_neighbors()
-    print("✅ local presence value round-trips heard neighbors")
-    test_ignores_our_own_broadcast()
-    print("✅ ignores our own broadcast")
-    test_link_plan_relay_dials_no_leaves()
-    print("✅ relay link plan dials no leaves")
-    test_link_plan_leaf_targets_relay_dominator()
-    print("✅ leaf link plan targets relay dominator")
-    print("\n✅ All connectionless presence tests passed")
+    assert plan["heard"] == {y}
+    assert plan["sym"] == set()
+    assert plan["relays"] == set()

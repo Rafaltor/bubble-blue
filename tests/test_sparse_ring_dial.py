@@ -11,9 +11,8 @@ if _ROOT not in sys.path:
 
 from src.api.bb_api import (  # noqa: E402
     BBNode,
-    MAX_L2CAP_DEGREE,
-    SPARSE_RING_SUCCESSORS,
 )
+from config import MAX_L2CAP_DEGREE, SPARSE_RING_SUCCESSORS  # noqa: E402
 
 
 def test_sparse_ring_successors_are_circular_and_bounded() -> None:

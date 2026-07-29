@@ -130,6 +130,54 @@ def test_dedup_same_packet_twice() -> None:
     assert fails == []
 
 
+def test_leaf_with_two_peers_relays_as_bridge() -> None:
+    """Sparse BLE: leaf with ≥2 L2CAP links still bridges until CDS is elected."""
+    cfg = _cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+    hello = _FakeHelloMgr(relay=False, group_key=cfg.group_key)
+    got: list[str] = []
+    fwd = PacketForwarder(
+        cfg,
+        transport,
+        hello,
+        on_message=lambda _s, t: got.append(t),
+    )  # type: ignore[arg-type]
+    pkt = fwd.build_data_packet(b"bridge", BROADCAST_BD_ADDR)
+    transport.sent.clear()
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+    assert got == ["bridge"]
+    assert len(transport.sent) >= 1
+
+
+def test_arq_cds_replays_cached_data() -> None:
+    from config import PKT_ARQ
+    from src.forwarding.arq import build_arq_body
+    from src.security.packet import build_routing_header
+
+    cfg = _cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+    hello = _FakeHelloMgr(relay=True, group_key=cfg.group_key)
+    fwd = PacketForwarder(cfg, transport, hello, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
+    data_pkt = fwd.build_data_packet(b"miss", BROADCAST_BD_ADDR)
+    hdr = __import__("src.security.packet", fromlist=["parse_routing_header"]).parse_routing_header(
+        data_pkt
+    )
+    fwd._arq.store_packet(hdr["src"], int(hdr["seq"]), data_pkt)
+    transport.sent.clear()
+
+    arq_rh = build_routing_header(
+        PKT_ARQ,
+        "AA:BB:CC:DD:EE:02",
+        BROADCAST_BD_ADDR,
+        5,
+        99,
+        hdr["ts_ms"],
+    )
+    arq_pkt = arq_rh + build_arq_body(hdr["src"], int(hdr["seq"]))
+    fwd.handle("AA:BB:CC:DD:EE:02", arq_pkt)
+    assert any(wire == data_pkt for _peer, wire in transport.sent)
+
+
 def test_private_message_unknown_peer() -> None:
     cfg = _cfg()
     transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
