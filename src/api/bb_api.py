@@ -37,6 +37,13 @@ PROTOCOL_HELLO_GRACE_MULT = 3
 PROTOCOL_QUARANTINE_BASE_S = 30.0
 PROTOCOL_QUARANTINE_CAP_S = 600.0
 
+# BLE controllers cannot sustain a full mesh: each extra L2CAP link contends with
+# advertising + MGMT scan. Cap degree so N can grow without O(N) radios per node.
+MAX_L2CAP_DEGREE = 3
+# Empty-CDS bootstrap: try this many ring successors (by anon_id) so an
+# unreachable next-hop does not permanently isolate a node.
+SPARSE_RING_SUCCESSORS = 2
+
 
 def topology_from_env() -> frozenset[str] | None:
     """Optional allowlist/dial list from BUBBLE_BLUE_TOPOLOGY."""
@@ -565,23 +572,21 @@ class BBNode:
 
     def _backbone_dial_targets(self) -> set[str] | None:
         """
-        BD addresses this node should dial to build the CDS backbone (connectionless).
+        BD addresses this node should dial to build a *sparse* L2CAP graph.
 
-        Direction is encoded here so ``_connect_peers`` does not apply the legacy
-        lower-BD tie-break:
+        Direction is encoded here so ``_connect_peers`` can ``force`` past the
+        transport BD tie-break when the plan already picked an initiator:
+
           - RELAY  → dials backbone edges to relay neighbors with a higher anon_id
                      (the lower-anon relay owns the edge; the other side accepts).
-          - LEAF   → dials its single dominator (smallest-anon relay neighbor); the
-                     relay never dials leaves, so the leaf always initiates.
-          - No CDS relays at all (e.g. a complete radio mesh, where Wu-Li elects an
-            empty backbone) → full BIDIRECTIONAL mesh: dial every heard symmetric
-            peer. A fixed-hub star is NOT used because "heard" (passive advertising
-            reception) reaches farther than a sustainable L2CAP link: two nodes can
-            hear each other yet be unable to connect (edge-of-range). A fixed hub
-            that some leaf cannot reach would isolate that leaf, whereas the full
-            mesh lets every node link whatever it can actually reach and relays the
-            rest. Unreachable edges self-suppress via connect backoff (ETIMEDOUT),
-            so they stop crowding the one-dial-per-pass budget after a couple tries.
+          - LEAF   → dials its single dominator (smallest-anon relay neighbor).
+          - No CDS relays (compact presence has empty neighbor lists, so Wu-Li
+            often elects nothing in a dense room) → **ring bootstrap**, not
+            full-mesh: each node dials the next few higher anon_ids in the heard
+            set (circular). That yields O(1) degree as N grows, keeps the graph
+            connected when radio range is roughly complete, and avoids the
+            O(N²) dial storm that destabilised 4–5 board labs.
+
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
@@ -601,7 +606,7 @@ class BBNode:
                 bytes.fromhex(h): bd for h, (bd, _at) in self._presence_addr.items()
             }
 
-        def _to_bd(aids: set[bytes]) -> set[str]:
+        def _to_bd(aids: set[bytes] | list[bytes]) -> set[str]:
             return {aid_to_bd[a] for a in aids if a in aid_to_bd}
 
         if sym and plan["am_relay"]:
@@ -609,14 +614,33 @@ class BBNode:
         if sym and relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS / no-symmetric fallback: dial every HEARD peer with a known
-        # reachable address, not just symmetric ones. An L2CAP link is a separate
-        # bidirectional channel: a node can dial a peer it hears even if that peer
-        # does not (yet) hear its beacon back — the connection still establishes.
-        # Requiring symmetry stranded edge nodes whose advertised neighbour list
-        # was truncated or intermittently received (dial_targets stayed empty).
-        # Unreachable dials self-suppress via ETIMEDOUT backoff.
-        return _to_bd(heard - {local_aid})
+        # Empty-CDS / no-symmetric: sparse ring over heard anon_ids.
+        return _to_bd(self._sparse_ring_successors(local_aid, heard))
+
+    @staticmethod
+    def _sparse_ring_successors(
+        local_aid: bytes,
+        heard: set[bytes],
+        *,
+        count: int = SPARSE_RING_SUCCESSORS,
+    ) -> list[bytes]:
+        """
+        Next ``count`` anon_ids after ``local_aid`` in the circular order of
+        ``heard ∪ {local}`` (ascending big-endian). Used as empty-CDS dial plan.
+        """
+        nodes = sorted(heard | {local_aid})
+        if len(nodes) < 2 or count <= 0:
+            return []
+        idx = nodes.index(local_aid)
+        out: list[bytes] = []
+        for step in range(1, len(nodes)):
+            cand = nodes[(idx + step) % len(nodes)]
+            if cand == local_aid:
+                continue
+            out.append(cand)
+            if len(out) >= count:
+                break
+        return out
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
@@ -693,6 +717,9 @@ class BBNode:
             self._connect_last_err.pop(bd, None)
             self._connect_backoff_until.pop(bd, None)
             self._connect_streak.pop(bd, None)
+        # Hard degree cap: BLE cannot host a full mesh as N grows.
+        if len(connections) >= MAX_L2CAP_DEGREE:
+            return
         # Attempt at most ONE new connection per pass. Firing every pending link
         # at once creates a connection storm (each L2CAP connect is radio-heavy
         # while also advertising + scanning): peers see refused/timeouts and
@@ -706,15 +733,14 @@ class BBNode:
             if now < self._protocol_quarantine_until.get(bd, 0.0):
                 continue
             # Legacy mode uses a lower-BD tie-break to avoid both sides dialing.
-            # Connectionless mode already encodes the dialer in the backbone plan
-            # (leaves dial relays regardless of BD order), so skip the filter.
+            # Connectionless mode already encodes the dialer in the backbone /
+            # ring plan, so skip the filter and force the transport past its
+            # own BD tie-break.
             if not connectionless and local >= bd:
                 continue
             addr_type = self._peer_addr_types.get(bd)
             try:
                 if self._cfg and self._cfg.transport_kind == "ble_l2cap":
-                    # Connectionless mode already fixed the dial direction in the
-                    # backbone plan; force past the transport's BD tie-break.
                     self._transport.connect(bd, addr_type=addr_type, force=connectionless)
                 else:
                     self._transport.connect(bd)

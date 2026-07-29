@@ -948,15 +948,12 @@ class PacketForwarder:
         """
         Whether this node forwards packets it receives.
 
-        A CDS relay forwards by design. But the CDS role is elected from the
-        advertising-*heard* topology, which can be a complete graph (everyone
-        hears everyone) even when the actual L2CAP links form a star because two
-        nodes are within advertising range yet cannot hold a connection
-        (edge-of-range). In that case the heard-topology CDS is empty (no relay)
-        while the star's centre must still bridge its leaves. So also relay
-        whenever this node holds 2+ L2CAP links: it is a bridge in the real link
-        graph and must forward for the mesh to be connected. The seen-cache and
-        TTL keep this flood loop-free and bounded.
+        A CDS relay forwards by design. When the OTA CDS is empty (compact
+        presence cannot carry neighbor lists), the L2CAP graph is kept sparse
+        (ring / degree cap). In that sparse graph every node with ≥2 links is a
+        real bridge and must forward — otherwise the ring/tree is disconnected
+        for multihop. The seen-cache and TTL keep the flood loop-free: cost is
+        O(N) per message on a ring, not O(N²) as on a full mesh.
         """
         if self._hello_mgr.is_relay:
             return True
