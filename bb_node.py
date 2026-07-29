@@ -44,14 +44,6 @@ from src.api.chat_input import read_chat_line
 from src.api.chat_log import ChatLog
 from src.security.keys import BBKeyStore
 from src.transport.discovery import discover_devices
-from src.transport.pairing_agent import PairingAgentSupervisor
-
-
-def setup_ble_pairing_agent(*, quiet: bool = False) -> PairingAgentSupervisor:
-    """Start supervised NoInputNoOutput agent; caller must :meth:`PairingAgentSupervisor.stop`."""
-    supervisor = PairingAgentSupervisor(quiet=quiet)
-    supervisor.start()
-    return supervisor
 
 
 def _identity_key_store(cfg: BubbleBlueConfig) -> BBKeyStore:
@@ -110,7 +102,6 @@ def run_chat(
         interface=interface,
         remote_bd_addr=peer,
         quiet=True,
-        setup_pairing_agent=False,
     )
     node.on_message = lambda s, t: ChatLog.interrupt(f"[{s}] {t}")
     node.on_peer_connected = lambda bd: ChatLog.interrupt(f"peer connecté: {bd}")
@@ -120,7 +111,6 @@ def run_chat(
     )
     node.on_log = lambda m, err: ChatLog.emit(m, err=err)
 
-    pairing = setup_ble_pairing_agent(quiet=True)
     try:
         node.start(topology, l2cap_accept_all=True)
         time.sleep(1.0)
@@ -284,13 +274,11 @@ def run_chat(
         pass
     finally:
         node.stop()
-        pairing.stop()
     return 0
 
 
 def _run_with_transport(args: argparse.Namespace, topology: frozenset[str] | None) -> int:
     verbose = not (topology or args.peer or args.send)
-    pairing = setup_ble_pairing_agent(quiet=not verbose)
 
     cfg = load_config(interface=args.interface, remote_bd_addr=args.peer)
     _log_x25519_identity(cfg)
@@ -299,7 +287,6 @@ def _run_with_transport(args: argparse.Namespace, topology: frozenset[str] | Non
         interface=args.interface,
         remote_bd_addr=args.peer,
         quiet=not verbose,
-        setup_pairing_agent=False,
     )
     node.on_message = lambda s, t: print(f"[{s}] {t}", flush=True)
     if verbose:
@@ -330,7 +317,6 @@ def _run_with_transport(args: argparse.Namespace, topology: frozenset[str] | Non
         pass
     finally:
         node.stop()
-        pairing.stop()
     return 0
 
 

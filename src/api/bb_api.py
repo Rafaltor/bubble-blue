@@ -30,7 +30,6 @@ from src.transport.advertising import (
 from src.transport.base import ManagedTransport
 from src.transport.factory import make_transport
 from src.transport.le_scan import MgmtLEScanner, hci_index_from_interface
-from src.transport.pairing_agent import PairingAgentSupervisor
 
 LogFn = Callable[[str, bool], None]
 
@@ -90,14 +89,12 @@ class BBNode:
         remote_bd_addr: str | None = None,
         key_store: BBKeyStore | None = None,
         quiet: bool = False,
-        setup_pairing_agent: bool = True,
     ) -> None:
         self._interface = interface
         self._remote_bd_addr = remote_bd_addr
         self._key_store = key_store
         self._quiet = quiet
         self._topology: frozenset[str] | None = None
-        self._pairing_supervisor: PairingAgentSupervisor | None = None
 
         self._cfg: BubbleBlueConfig | None = None
         self._transport: ManagedTransport | None = None
@@ -111,8 +108,6 @@ class BBNode:
         self._connect_last_log: dict[str, float] = {}
         self._connect_backoff_until: dict[str, float] = {}
         self._connect_streak: dict[str, int] = {}
-        # One outbound bond attempt per backoff cycle (BLE EPERM / unbonded peer).
-        self._bond_attempted: set[str] = set()
         self._active_peers: set[str] = set()
         self._presence_scanner: PresenceScanner | None = None
         self._le_scanner: MgmtLEScanner | None = None
@@ -127,10 +122,6 @@ class BBNode:
         self._admitted_peers: set[str] = set()
         self._protocol_quarantine_until: dict[str, float] = {}
         self._protocol_quarantine_streak: dict[str, int] = {}
-
-        if setup_pairing_agent:
-            self._pairing_supervisor = PairingAgentSupervisor(quiet=quiet)
-            self._pairing_supervisor.start()
 
     def start(
         self,
@@ -278,10 +269,6 @@ class BBNode:
             self._admitted_peers.clear()
             self._protocol_quarantine_until.clear()
             self._protocol_quarantine_streak.clear()
-
-        if self._pairing_supervisor is not None:
-            self._pairing_supervisor.stop()
-            self._pairing_supervisor = None
 
     def _start_presence_plane(self, hello: HelloManager) -> None:
         """
@@ -706,10 +693,9 @@ class BBNode:
             self._connect_last_err.pop(bd, None)
             self._connect_backoff_until.pop(bd, None)
             self._connect_streak.pop(bd, None)
-            self._bond_attempted.discard(bd)
         # Attempt at most ONE new connection per pass. Firing every pending link
         # at once creates a connection storm (each L2CAP connect is radio-heavy
-        # while also advertising + scanning): peers see EPERM/refused/timeouts and
+        # while also advertising + scanning): peers see refused/timeouts and
         # already-established links drop. Staggering one dial per pass spreads
         # establishment out so live links stay up while the mesh fills in.
         for bd in sorted(self._connect_targets()):
@@ -724,8 +710,6 @@ class BBNode:
             # (leaves dial relays regardless of BD order), so skip the filter.
             if not connectionless and local >= bd:
                 continue
-            # New attempt window after backoff (or first try): allow one bond.
-            self._bond_attempted.discard(bd)
             addr_type = self._peer_addr_types.get(bd)
             try:
                 if self._cfg and self._cfg.transport_kind == "ble_l2cap":
@@ -737,51 +721,10 @@ class BBNode:
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
-                self._bond_attempted.discard(bd)
             except OSError as e:
-                if (
-                    e.errno == errno.EPERM
-                    and self._cfg is not None
-                    and self._cfg.transport_kind == "ble_l2cap"
-                    and bd not in self._bond_attempted
-                ):
-                    self._bond_attempted.add(bd)
-                    if self._try_auto_bond(bd, addr_type):
-                        try:
-                            self._transport.connect(bd, addr_type=addr_type, force=connectionless)
-                            self._connect_last_err.pop(bd, None)
-                            self._connect_backoff_until.pop(bd, None)
-                            self._connect_streak.pop(bd, None)
-                            self._bond_attempted.discard(bd)
-                            return
-                        except OSError as e2:
-                            e = e2
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
             return
-
-    def _try_auto_bond(self, bd: str, addr_type: str | None) -> bool:
-        """
-        Initiate Just Works bond once (BLE EPERM / no encrypted link).
-
-        Requires PairingAgentSupervisor on *both* boards (NoInputNoOutput).
-        """
-        sup = self._pairing_supervisor
-        self._dispatch_log(f"bond auto tenté avec {bd}")
-        if sup is None or not sup.setup_ok:
-            self._dispatch_log(f"bond auto échoué {bd}")
-            return False
-        try:
-            ok = bool(sup.ensure_bonded(bd, addr_type))
-        except Exception as exc:  # noqa: BLE001 — never break connect loop
-            self._dispatch_log(f"bond auto échoué {bd}")
-            self._dispatch_log(f"bond auto error {bd}: {exc}")
-            return False
-        if ok:
-            self._dispatch_log(f"bond auto réussi {bd}")
-            return True
-        self._dispatch_log(f"bond auto échoué {bd}")
-        return False
 
     def _backoff_after_connect_fail(self, bd: str, e: OSError) -> None:
         if e.errno not in (
@@ -793,13 +736,16 @@ class BBNode:
             errno.ECONNRESET,
             errno.EINPROGRESS,
             errno.EALREADY,
-            errno.EPERM,  # BLE L2CAP CoC to an unbonded peer (no encrypted link)
+            # Defensive: should not occur with BT_SECURITY_LOW (no SMP bond
+            # required). Kept so an unexpected EPERM still backs off instead of
+            # hammering the radio every connect pass.
+            errno.EPERM,
         ):
             return
         key = f"{e.errno}"
         streak = self._connect_streak.get(bd, 0) + 1 if self._connect_last_err.get(bd) == key else 1
         self._connect_streak[bd] = streak
-        # Unbonded peer (EPERM) will not become connectable until bonded — back off harder.
+        # Unexpected EPERM: longer base than transient refused/timeout.
         base_s = 10.0 if e.errno == errno.EPERM else 4.0
         self._connect_backoff_until[bd] = time.monotonic() + min(60.0, base_s * streak)
 

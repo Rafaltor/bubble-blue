@@ -42,7 +42,7 @@ def test_bbnode_send_broadcast() -> None:
         mock_fwd = MagicMock()
         mock_fwd_cls.return_value = mock_fwd
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         node.on_message = lambda s, t: None
         node.start("AA:BB:CC:DD:EE:02")
         node.send("hi")

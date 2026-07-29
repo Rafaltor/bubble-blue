@@ -56,7 +56,7 @@ def test_decrypt_fail_does_not_quarantine() -> None:
         mock_fwd_cls.return_value = mock_fwd
         mock_scanner_cls.return_value = MagicMock()
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         logs: list[str] = []
         node.on_message = lambda _s, _t: None
         node.on_log = lambda m, _e: logs.append(m)
@@ -91,7 +91,7 @@ def test_protocol_silence_expels_and_quarantines() -> None:
         mock_fwd_cls.return_value = MagicMock()
         mock_scanner_cls.return_value = MagicMock()
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         logs: list[str] = []
         node.on_message = lambda _s, _t: None
         node.on_log = lambda m, _e: logs.append(m)
@@ -133,7 +133,7 @@ def test_presence_candidate_feeds_connect_targets() -> None:
         mock_fwd_cls.return_value = MagicMock()
         mock_scanner_cls.return_value = MagicMock()
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         node.on_message = lambda _s, _t: None
         node.start()
         node._on_presence_candidate(_ADDR_PEER, "random", time.monotonic())
@@ -163,7 +163,7 @@ def test_incoming_connection_refused_during_quarantine() -> None:
         mock_fwd_cls.return_value = MagicMock()
         mock_scanner_cls.return_value = MagicMock()
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         logs: list[str] = []
         node.on_message = lambda _s, _t: None
         node.on_log = lambda m, _e: logs.append(m)
@@ -199,7 +199,7 @@ def test_incoming_connection_refused_during_quarantine() -> None:
 
 
 def test_eperm_connect_fail_sets_backoff() -> None:
-    """BLE connect to an unbonded peer (EPERM) must schedule connect backoff."""
+    """Unexpected EPERM still schedules connect backoff (defensive under BT_SECURITY_LOW)."""
     cfg = _ble_cfg()
     fake_transport = MagicMock()
     fake_transport.connections.return_value = []
@@ -221,7 +221,7 @@ def test_eperm_connect_fail_sets_backoff() -> None:
         mock_fwd_cls.return_value = MagicMock()
         mock_scanner_cls.return_value = MagicMock()
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         node.on_message = lambda _s, _t: None
         node.start()
         node._connect_stop.set()
@@ -240,104 +240,6 @@ def test_eperm_connect_fail_sets_backoff() -> None:
         node.stop()
 
 
-def test_eperm_triggers_auto_bond_then_reconnect() -> None:
-    """On EPERM, attempt Just Works bond once then retry connect immediately."""
-    cfg = _ble_cfg()
-    fake_transport = MagicMock()
-    fake_transport.connections.return_value = []
-    calls: list[str] = []
-
-    def _connect(bd: str, addr_type: str | None = None, force: bool = False) -> None:
-        _ = (addr_type, force)
-        calls.append(bd)
-        if len(calls) == 1:
-            raise OSError(errno.EPERM, "Permission denied")
-
-    fake_transport.connect = MagicMock(side_effect=_connect)
-    fake_hello = MagicMock()
-    fake_hello.is_relay = False
-    fake_hello.is_connectionless = False
-    fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
-    fake_sup = MagicMock()
-    fake_sup.setup_ok = True
-    fake_sup.ensure_bonded.return_value = True
-
-    with (
-        patch("src.api.bb_api.load_config", return_value=cfg),
-        patch("src.api.bb_api.make_transport", return_value=fake_transport),
-        patch("src.api.bb_api.HelloManager", return_value=fake_hello),
-        patch("src.api.bb_api.PacketForwarder") as mock_fwd_cls,
-        patch("src.api.bb_api.PresenceScanner") as mock_scanner_cls,
-    ):
-        mock_fwd_cls.return_value = MagicMock()
-        mock_scanner_cls.return_value = MagicMock()
-
-        node = BBNode(setup_pairing_agent=False)
-        logs: list[str] = []
-        node.on_message = lambda _s, _t: None
-        node.on_log = lambda m, _e: logs.append(m)
-        node.start()
-        node._connect_stop.set()
-        if node._connect_thread is not None:
-            node._connect_thread.join(timeout=1.0)
-
-        node._pairing_supervisor = fake_sup
-        node._on_presence_candidate(_ADDR_PEER, "random", time.monotonic())
-        node._connect_peers()
-
-        fake_sup.ensure_bonded.assert_called_once_with(_ADDR_PEER, "random")
-        assert fake_transport.connect.call_count == 2
-        assert _ADDR_PEER not in node._connect_backoff_until
-        assert any("bond auto tenté avec" in m for m in logs)
-        assert any("bond auto réussi" in m for m in logs)
-        node.stop()
-
-
-def test_eperm_auto_bond_failure_applies_backoff() -> None:
-    cfg = _ble_cfg()
-    fake_transport = MagicMock()
-    fake_transport.connections.return_value = []
-    fake_transport.connect = MagicMock(
-        side_effect=OSError(errno.EPERM, "Permission denied")
-    )
-    fake_hello = MagicMock()
-    fake_hello.is_relay = False
-    fake_hello.is_connectionless = False
-    fake_hello.l2cap_peer_anon_ids.return_value = frozenset()
-    fake_sup = MagicMock()
-    fake_sup.setup_ok = True
-    fake_sup.ensure_bonded.return_value = False
-
-    with (
-        patch("src.api.bb_api.load_config", return_value=cfg),
-        patch("src.api.bb_api.make_transport", return_value=fake_transport),
-        patch("src.api.bb_api.HelloManager", return_value=fake_hello),
-        patch("src.api.bb_api.PacketForwarder") as mock_fwd_cls,
-        patch("src.api.bb_api.PresenceScanner") as mock_scanner_cls,
-    ):
-        mock_fwd_cls.return_value = MagicMock()
-        mock_scanner_cls.return_value = MagicMock()
-
-        node = BBNode(setup_pairing_agent=False)
-        logs: list[str] = []
-        node.on_message = lambda _s, _t: None
-        node.on_log = lambda m, _e: logs.append(m)
-        node.start()
-        node._connect_stop.set()
-        if node._connect_thread is not None:
-            node._connect_thread.join(timeout=1.0)
-
-        node._pairing_supervisor = fake_sup
-        node._on_presence_candidate(_ADDR_PEER, "random", time.monotonic())
-        before = time.monotonic()
-        node._connect_peers()
-
-        fake_sup.ensure_bonded.assert_called_once()
-        assert fake_transport.connect.call_count == 1
-        until = node._connect_backoff_until[_ADDR_PEER.upper()]
-        assert until >= before + 9.0
-        assert any("bond auto échoué" in m for m in logs)
-        node.stop()
 
 
 def test_mute_stops_scanner_and_transport() -> None:
@@ -361,7 +263,7 @@ def test_mute_stops_scanner_and_transport() -> None:
     ):
         mock_fwd_cls.return_value = MagicMock()
 
-        node = BBNode(setup_pairing_agent=False)
+        node = BBNode()
         node.on_message = lambda _s, _t: None
         node.start()
         node.mute()
@@ -381,9 +283,5 @@ if __name__ == "__main__":
     print("✅ presence candidate feeds connect targets")
     test_eperm_connect_fail_sets_backoff()
     print("✅ EPERM connect fail sets backoff")
-    test_eperm_triggers_auto_bond_then_reconnect()
-    print("✅ EPERM auto bond then reconnect")
-    test_eperm_auto_bond_failure_applies_backoff()
-    print("✅ EPERM auto bond failure applies backoff")
     test_mute_stops_scanner_and_transport()
     print("✅ mute stops scanner and transport advertising")
