@@ -15,21 +15,6 @@ PKT_SUBGROUP = 0x04
 PKT_REKEY   = 0x05
 PKT_ANNOUNCE = 0x06
 PKT_REKEY_FLOOD = 0x07
-# Preprint §2.3.2 / §2.4.3: request retransmission of (originator, seq).
-PKT_ARQ = 0x08
-
-# ARQ / CDS replay cache (Blue_Bubble_specs.pdf)
-ARQ_CACHE_MAX = 256
-ARQ_CACHE_TTL_S = 300.0
-ARQ_MAX_RETRIES = 3
-ARQ_RETRY_INTERVAL_S = 1.5
-
-# BLE cannot sustain a full mesh: soft cap on live L2CAP links.
-MAX_L2CAP_DEGREE = 3
-# Each node dials the next N *higher* anon_ids (no wrap). That yields a
-# connected DAG toward the max id — one dialer per edge, no dual-dial flaps.
-# count=1 partitions when presence catalogs differ slightly across boards.
-SPARSE_RING_SUCCESSORS = 2
 
 # Network-wide pubkey announce (complement to Hello private, 2-hop limited)
 ANNOUNCE_INTERVAL_S = 30

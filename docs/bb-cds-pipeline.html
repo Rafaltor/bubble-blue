@@ -93,7 +93,7 @@
     dominent le graphe et restent connectés entre eux. Les autres sont <strong>LEAF</strong>.</p>
   <div class="grid g2">
     <div class="card">
-      <h3>Sans CDS (anneau sparse)</h3>
+      <h3>Sans CDS (full mesh)</h3>
       <ul>
         <li>Chaque nœud dial tous les autres</li>
         <li>Explosion de liens BLE (churn, timeouts)</li>
@@ -131,7 +131,7 @@
     <tr><td>2</td><td>Découverte LE</td><td><code>le_scan</code> + <code>PresenceScanner</code></td><td>candidats BB + EIR</td></tr>
     <tr><td>3</td><td>Hello public OTA</td><td><code>HelloManager.ingest_public_hello</code></td><td>table voisins « heard »</td></tr>
     <tr><td>4</td><td>Élection locale</td><td><code>am_i_cds</code> / <code>refresh_cds_role</code></td><td>RELAY ou LEAF</td></tr>
-    <tr><td>5</td><td>Qui dial qui</td><td><code>_backbone_dial_targets</code></td><td>liens L2CAP sparses (anneau / CDS)</td></tr>
+    <tr><td>5</td><td>Qui dial qui</td><td><code>_backbone_dial_targets</code></td><td>liens L2CAP sparses (ou full heard)</td></tr>
     <tr><td>6</td><td>Relais paquets</td><td><code>forwarder._should_relay</code></td><td>CDS <em>ou</em> ≥2 liens L2CAP</td></tr>
   </table>
 </div>
@@ -157,7 +157,7 @@
       <ul>
         <li>Tout scanner legacy entend la présence</li>
         <li>Élection CDS « air » faible (pas de listes)</li>
-        <li>Compensé par politique <span class="pill y">anneau sparse (anon_id)</span></li>
+        <li>Compensé par politique <span class="pill y">dial every heard</span></li>
         <li>Flag RELAY toujours utile dès qu’un nœud s’élit</li>
       </ul>
     </div>

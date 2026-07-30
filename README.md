@@ -394,11 +394,10 @@ sudo reboot
 |------|------|
 | **Presence (OTA)** | Hello compact en AD **legacy connectable** (`presence` v0x02) : anon_id, seq, flag CDS, BD_ADDR |
 | **Scan** | MGMT *Device Found* → `PresenceScanner` (fenêtre 3 s, période 2 s / steady 4 s) |
-| **Dial** | DAG sparse (next higher anon_id, presence = discovery) + cap de degré ; CDS **ne** pilote **pas** les liens |
-| **Contrôle** | Hellos L2CAP S/A ; CDS Wu-Li sur graphe L2CAP |
+| **Dial** | Backbone CDS si relays connus ; sinon **dial every heard** ; 1 dial/passe ; timeout 8 s |
+| **Contrôle** | Hellos OTA + L2CAP ; CDS Wu-Li |
 | **Identité** | `PKT_ANNOUNCE` (burst + périodique) |
-| **Forward** | **Seuls les CDS** retransmettent (spec §2.4.3) |
-| **Fiabilité** | **ARQ** sur trous de `seq` + rejeu CDS/origine |
+| **Forward** | RELAY CDS **ou** ≥ 2 liens L2CAP |
 | **Crypto** | AES-256-GCM ; lien `BT_SECURITY_LOW` |
 
 ### Mesh ouvert / bulles privées

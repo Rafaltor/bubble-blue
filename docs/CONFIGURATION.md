@@ -13,10 +13,9 @@ Accessible to **any BB node**, independent of `BUBBLE_BLUE_GROUP_KEY`:
 | Presence AD | `src/transport/advertising.py` (`LEAdvertiser` / `update_presence`) | Legacy **connectable** Manufacturer Data: magic `BB`, protocol `0x01`, presence format **`0x02`**, compact Hello (anon_id, seq, CDS flag, BD_ADDR). Neighbor/MPR lists empty under `LEGACY_PRESENCE_MAX_VALUE_LEN` (~27 B value). |
 | Periodic scan | `PresenceScanner` + `le_scan.mgmt_scan_records` | LE scan window **3 s**; BLE mesh defaults **period 2 s** / **steady 4 s** (set in `BBNode`); MGMT *Device Found* carries full EIR each hit |
 | Link security | `ble_coc.apply_le_flowctl` | **`BT_SECURITY_LOW`** — no link encryption; app-layer crypto only (see note below) |
-| Auto-dial | `BBNode._backbone_dial_targets` | Sparse **anon_id DAG** (next higher ids, no wrap); dial degree soft-cap; **no accept refuse** |
-| Public Hellos | `hello` / `HelloManager` | OTA discovery + L2CAP Hellos with S/A for CDS |
-| CDS / relay | `hello_manager`, `cds`, `forwarder._should_relay` | Wu-Li on L2CAP; forward if CDS **or** ≥2 L2CAP links |
-| Reliability | `forwarding/arq.py` | Gap-based **ARQ**; CDS/origin replay cached DATA |
+| Auto-dial | `BBNode._backbone_dial_targets` | CDS backbone when relays known; else **dial every heard peer**; one dial/pass; 8 s timeout; `force=True` |
+| Public Hellos | `hello` / `HelloManager` | OTA + L2CAP; anon_ids learned on the wire (cross-group) |
+| CDS / relay | `hello_manager`, `cds`, `forwarder._should_relay` | Wu-Li election; forward if CDS RELAY **or** ≥2 L2CAP links |
 
 A foreign-group relay stays connected and **forwards opaque** `PKT_DATA` even when it cannot decrypt.
 

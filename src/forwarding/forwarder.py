@@ -9,7 +9,6 @@ from cryptography.exceptions import InvalidTag
 
 from config import (
     PKT_ANNOUNCE,
-    PKT_ARQ,
     PKT_DATA,
     PKT_REKEY,
     PKT_REKEY_FLOOD,
@@ -19,7 +18,6 @@ from config import (
     mtu_for_transport,
 )
 from src.control.announce import parse_announce
-from src.forwarding.arq import ArqEngine, build_arq_body, parse_arq_body
 from src.security.crypto import decrypt_with_key, encrypt_with_key, unwrap_msg_key, wrap_msg_key
 from src.security.keys import derive_packet_key, derive_wrap_key
 from src.security.rekey import (
@@ -46,7 +44,7 @@ from src.security.packet import (
 )
 
 _FWD_PKT_TYPES = frozenset(
-    {PKT_DATA, PKT_SUBGROUP, PKT_REKEY, PKT_ANNOUNCE, PKT_REKEY_FLOOD, PKT_ARQ}
+    {PKT_DATA, PKT_SUBGROUP, PKT_REKEY, PKT_ANNOUNCE, PKT_REKEY_FLOOD}
 )
 
 if TYPE_CHECKING:
@@ -138,7 +136,6 @@ class PacketForwarder:
         self._on_log = on_log
         self._on_decrypt_fail = on_decrypt_fail
         self._fwd_cache = _ForwardCache()
-        self._arq = ArqEngine()
         self._replay: dict[str, ReplayFilter] = {}
         self._relay_replay: dict[str, ReplayFilter] = {}
         self._replay_lock = threading.RLock()
@@ -535,8 +532,6 @@ class PacketForwarder:
     ) -> None:
         """Send PKT_DATA to ``dst_bd_addr`` (flood if broadcast, else one L2CAP link)."""
         packet = self.build_data_packet(plaintext, dst_bd_addr, private=private)
-        hdr = parse_routing_header(packet)
-        self._arq.store_packet(hdr["src"], int(hdr["seq"]), packet)
         dst = dst_bd_addr.upper()
 
         if dst == BROADCAST_BD_ADDR:
@@ -588,10 +583,6 @@ class PacketForwarder:
             src = hdr["src"].upper()
             seq = int(hdr["seq"])
 
-            if pkt_type == PKT_ARQ:
-                self._handle_arq(ingress, data, hdr, src, seq, dst, local)
-                return
-
             if pkt_type == PKT_REKEY:
                 deliver_fn = self._try_deliver_rekey
             elif pkt_type == PKT_REKEY_FLOOD:
@@ -624,9 +615,6 @@ class PacketForwarder:
     ) -> None:
         ttl = int(hdr["ttl"])
         ts_ms = int(hdr["ts_ms"])
-        # CDS nodes cache DATA for ARQ replay (§2.4.3).
-        if int(hdr["type"]) == PKT_DATA:
-            self._arq.store_packet(src, seq, data)
         if dst != local and ttl > 0:
             new_ttl = ttl - 1
             if new_ttl > 0 and self._check_relay_ingress(src, seq, ts_ms):
@@ -717,8 +705,8 @@ class PacketForwarder:
             return
 
         self._on_deliver(ingress_peer, plaintext, hdr)
-        self._maybe_request_arq(src, seq)
 
+    def _try_deliver_rekey(self, ingress_peer: str, data: bytes, hdr: dict[str, Any]) -> None:
         src = hdr["src"].upper()
         seq = int(hdr["seq"])
         ts_ms = int(hdr["ts_ms"])
@@ -958,98 +946,21 @@ class PacketForwarder:
 
     def _should_relay(self) -> bool:
         """
-        Whether this node retransmits packets.
+        Whether this node forwards packets it receives.
 
-        Preprint §2.4.3: CDS members retransmit. On a BLE sparse L2CAP graph
-        (ring / degree cap), Wu-Li often stays false until Hellos fully populate
-        S/A tables — meanwhile a node with ≥2 live links is still a bridge and
-        must forward or the mesh partitions. Seen-cache + TTL bound the flood.
+        A CDS relay forwards by design. But the CDS role is elected from the
+        advertising-*heard* topology, which can be a complete graph (everyone
+        hears everyone) even when the actual L2CAP links form a star because two
+        nodes are within advertising range yet cannot hold a connection
+        (edge-of-range). In that case the heard-topology CDS is empty (no relay)
+        while the star's centre must still bridge its leaves. So also relay
+        whenever this node holds 2+ L2CAP links: it is a bridge in the real link
+        graph and must forward for the mesh to be connected. The seen-cache and
+        TTL keep this flood loop-free and bounded.
         """
         if self._hello_mgr.is_relay:
             return True
         return len(self._other_peers(exclude=None)) >= 2
-
-    def _maybe_request_arq(self, originator: str, seq: int) -> None:
-        """
-        Gap tracking only for now.
-
-        Auto-flooding ARQ on BLE saturates the radio (scan/adv/L2CAP) and was
-        observed to kill meshes within minutes. Cache + replay path stays for
-        explicit recovery; emission is disabled until rate-limited properly.
-        """
-        self._arq.note_received(originator, seq)
-
-    def _flood_arq(self, requested_src: str, requested_seq: int) -> None:
-        local = self._cfg.local_bd_addr.upper()
-        seq = self._next_seq()
-        ts_ms = time.time_ns() // 1_000_000
-        rh = build_routing_header(
-            PKT_ARQ, local, BROADCAST_BD_ADDR, self._cfg.ttl_max, seq, ts_ms
-        )
-        packet = rh + build_arq_body(requested_src, requested_seq)
-        peers = self._other_peers(exclude=None)
-        if not peers:
-            return
-        self._log(f"[ARQ] request src={requested_src} seq={requested_seq}")
-        for peer in peers:
-            try:
-                self._transport.send(peer, packet)
-            except OSError as e:
-                self._log(f"[ARQ] send {peer}: {e}")
-
-    def _handle_arq(
-        self,
-        ingress: str,
-        data: bytes,
-        hdr: dict[str, Any],
-        arq_src: str,
-        arq_seq: int,
-        dst: str,
-        local: str,
-    ) -> None:
-        """
-        ARQ handling per §2.4.3:
-
-        - If we have the DATA cached: retransmit it to neighbors (do not flood ARQ).
-        - Else if we are CDS: flood the ARQ further.
-        - Originator with cache is covered by the first branch.
-        """
-        _ = arq_src, arq_seq, dst
-        body = data[ROUTING_HEADER_SIZE:]
-        try:
-            req_src, req_seq = parse_arq_body(body)
-        except ValueError:
-            return
-
-        cached = self._arq.get_packet(req_src, req_seq)
-        if cached is not None:
-            self._log(f"[ARQ] replay src={req_src} seq={req_seq}")
-            for peer in self._other_peers(exclude=ingress):
-                try:
-                    self._transport.send(peer, cached)
-                except OSError as e:
-                    self._log(f"[ARQ] replay {peer}: {e}")
-            return
-
-        self._hello_mgr.refresh_cds_role()
-        if not self._should_relay():
-            return
-
-        ttl = int(hdr["ttl"])
-        if ttl <= 1:
-            return
-        new_ttl = ttl - 1
-        key_src = f"ARQ:{req_src}"
-        with self._fwd_lock:
-            if self._fwd_cache.seen(key_src, req_seq):
-                return
-            self._fwd_cache.mark(key_src, req_seq)
-            wire = _decrement_ttl(data, new_ttl)
-            for peer in self._other_peers(exclude=ingress):
-                try:
-                    self._transport.send(peer, wire)
-                except OSError as e:
-                    self._log(f"[ARQ] relay {peer}: {e}")
 
     def route_l2cap_peer(self, dst_bd_addr: str) -> str:
         """Pick an L2CAP link to reach ``dst_bd_addr`` (direct neighbor or multihop relay)."""

@@ -58,13 +58,13 @@ class HelloManager:
         self._learned_anon_ids: dict[str, bytes] = {}
         self._rekey_catchup: Callable[[str], None] | None = None
 
-        # Connectionless presence plane: anon_ids heard over the air for
-        # *discovery / dial* only. CDS election always uses L2CAP peers +
-        # Hello S/A tables (Blue_Bubble_specs.pdf §2.4.1–2.4.2).
+        # Connectionless presence plane: anon_ids whose public Hello we heard
+        # over the air (broadcast), independent of any L2CAP link. When enabled,
+        # the CDS election runs on this heard set instead of transport peers.
         self._connectionless = False
         self._heard_ttl_s = max(1.0, float(cfg.neighbor_timeout_s))
         self._heard: dict[bytes, float] = {}
-        # anon_id -> CDS relay flag advertised in that peer's public Hello (UI).
+        # anon_id -> CDS relay flag advertised in that peer's public Hello.
         self._peer_is_relay: dict[bytes, bool] = {}
         self._heard_lock = threading.Lock()
 
@@ -233,14 +233,14 @@ class HelloManager:
 
     def refresh_cds_role(self, *, verbose: bool = False) -> None:
         """
-        Recompute RELAY/LEAF from L2CAP neighbors + Hello S/A tables.
+        Recompute RELAY/LEAF from the current neighbor set and Hello tables.
 
-        Per Blue_Bubble_specs.pdf §2.4.1–2.4.2, a neighbor is a Bluetooth
-        piconet peer (here: an active L2CAP link). Presence AD is not used for
-        CDS election — compact beacons carry empty neighbor lists and would
-        elect a flappy/empty backbone.
+        In connectionless mode the symmetric-neighbor set comes from public Hellos
+        heard over the air (:meth:`heard_anon_ids`) — the CDS backbone is elected
+        WITHOUT needing an L2CAP link to every neighbor. Otherwise it falls back to
+        ``transport.connections()`` (legacy link-driven election).
         """
-        peers = self._l2cap_peer_anon_ids()
+        peers = self.heard_anon_ids() if self._connectionless else self._l2cap_peer_anon_ids()
         self._is_cds = am_i_cds(
             self.anon_id,
             self.table,
@@ -263,10 +263,11 @@ class HelloManager:
     # ------------------------------------------------------------------
     def enable_connectionless_topology(self, *, ttl_s: float | None = None) -> None:
         """
-        Enable OTA presence for peer *discovery* (compact AD → dial targets).
+        Elect the CDS backbone from over-the-air public Hellos, not L2CAP links.
 
-        CDS election remains L2CAP-driven (§2.4); this only tracks who is heard
-        so the sparse dial policy can open Bluetooth links.
+        Once enabled, :meth:`ingest_public_hello` feeds the neighbor table from
+        broadcast Hellos and :meth:`refresh_cds_role` uses the heard set — so a
+        node knows who is around and whether it is a relay before opening any link.
         """
         self._connectionless = True
         if ttl_s is not None:
@@ -282,37 +283,53 @@ class HelloManager:
         is_relay: bool = False,
     ) -> None:
         """
-        Ingest a public Hello heard over the air (discovery plane).
+        Ingest a public Hello heard over the air (no L2CAP link, no private part).
 
-        Marks the sender as heard for dial/discovery and records its advertised
-        CDS flag for UI. Does **not** feed the NeighborTable or refresh CDS —
-        empty compact AD lists must not corrupt the L2CAP topology used by
-        Wu-Li (§2.4.2).
+        Updates the neighbor/topology tables (advertised 1-hop lists + MPR set),
+        records the sender's advertised CDS role, marks it as currently heard, then
+        refreshes our own relay role. Ignores our own broadcast.
         """
-        _ = seq, neighbor_anon_ids, mpr_anon_ids
         aid = bytes(anon_id)
         if aid == self.anon_id:
             return
+        ts_ms = time.time_ns() // 1_000_000
+        parsed_public = {
+            "anon_id": aid,
+            "ts_ms": ts_ms,
+            "seq": int(seq),
+            "neighbor_anon_ids": [bytes(a) for a in neighbor_anon_ids],
+            "mpr_anon_ids": [bytes(a) for a in (mpr_anon_ids or [])],
+        }
+        self.table.update_from_hello(parsed_public, None)
         with self._heard_lock:
             self._heard[aid] = time.monotonic()
             self._peer_is_relay[aid] = bool(is_relay)
+        self.refresh_cds_role(verbose=not self._quiet)
 
     @property
     def is_connectionless(self) -> bool:
-        """True when OTA presence discovery is enabled (dial plane)."""
+        """True when the CDS backbone is elected from over-the-air Hellos."""
         return self._connectionless
 
     def connectionless_link_plan(self) -> dict[str, Any]:
         """
-        Discovery snapshot for diagnostics (not used to elect CDS or dial CDS edges).
+        CDS-backbone link plan (anon_ids) for the connectionless connection policy.
 
-        ``am_relay`` reflects the *L2CAP* CDS role; ``heard`` is the OTA set.
+        Returns ``am_relay`` (this node is a CDS relay), ``sym`` (symmetric heard
+        neighbors), ``relays`` (symmetric neighbors that are CDS relays) and
+        ``cds`` (the elected relay set over the heard topology). The bb_api layer
+        maps these anon_ids to BD addresses to decide which links to open.
         """
+        from src.forwarding.cds import local_symmetric_peers
+
+        heard = self.heard_anon_ids()
+        sym = {bytes(a) for a in local_symmetric_peers(self.table, self.anon_id, heard)}
+        with self._heard_lock:
+            relays = {a for a in sym if self._peer_is_relay.get(a, False)}
         return {
             "am_relay": bool(self._is_cds),
-            "sym": set(),
-            "relays": set(),
-            "heard": set(self.heard_anon_ids()),
+            "sym": sym,
+            "relays": relays,
         }
 
     def heard_anon_ids(self) -> frozenset[bytes]:

@@ -87,7 +87,7 @@ def manufacturer_adv_data_hex(value: bytes) -> str:
 # Production therefore uses the *compact* form (anon_id + flags + reachable
 # bd_addr, empty lists) that fits ``LEGACY_PRESENCE_MAX_VALUE_LEN``: every
 # scanner — legacy or extended — can hear presence and dial. Neighbor/MPR lists
-# are empty in compact AD; empty-CDS dial uses a sparse anon_id ring (not full mesh).
+# are not required for the dense-mesh dial fallback (dial every heard peer).
 #
 # Layout of the manufacturer VALUE (the bytes AFTER the 2-byte company id, i.e.
 # what ``parse_eir_manufacturer`` returns for company 0xFFFF):
