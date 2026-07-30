@@ -394,7 +394,7 @@ sudo reboot
 |------|------|
 | **Presence (OTA)** | Hello compact en AD **legacy connectable** (`presence` v0x02) : anon_id, seq, flag CDS, BD_ADDR |
 | **Scan** | MGMT *Device Found* → `PresenceScanner` (fenêtre 3 s, période 2 s / steady 4 s) |
-| **Dial** | Anneau sparse sticky (presence = discovery) + cap de degré ; CDS **ne** pilote **pas** les liens |
+| **Dial** | DAG sparse (next higher anon_id, presence = discovery) + cap de degré ; CDS **ne** pilote **pas** les liens |
 | **Contrôle** | Hellos L2CAP S/A ; CDS Wu-Li sur graphe L2CAP |
 | **Identité** | `PKT_ANNOUNCE` (burst + périodique) |
 | **Forward** | **Seuls les CDS** retransmettent (spec §2.4.3) |

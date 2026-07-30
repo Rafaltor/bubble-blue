@@ -125,10 +125,6 @@ class BBNode:
         self._admitted_peers: set[str] = set()
         self._protocol_quarantine_until: dict[str, float] = {}
         self._protocol_quarantine_streak: dict[str, int] = {}
-        # Prefer re-forming the same sparse L2CAP edges after radio flaps.
-        self._sticky_peers: set[str] = set()
-        # bd -> monotonic time of last successful connect (flap detection)
-        self._peer_connected_at: dict[str, float] = {}
 
     def start(
         self,
@@ -277,8 +273,6 @@ class BBNode:
             self._admitted_peers.clear()
             self._protocol_quarantine_until.clear()
             self._protocol_quarantine_streak.clear()
-            self._sticky_peers.clear()
-            self._peer_connected_at.clear()
 
     def _start_presence_plane(self, hello: HelloManager) -> None:
         """
@@ -543,10 +537,10 @@ class BBNode:
         """
         Peers to dial.
 
-        Connectionless mode: sparse sticky ring over OTA-heard peers (discovery
-        only). CDS is elected on L2CAP Hellos and must not drive dials
+        Connectionless: sparse DAG over the presence catalog (OTA discovery).
+        CDS is elected on L2CAP Hellos and must not drive dials
         (Blue_Bubble_specs.pdf: CDS = flood backbone, neighbor = BT link).
-        Legacy mode: allowlist ∪ discovered BB candidates.
+        Legacy: allowlist ∪ discovered BB candidates.
         """
         if self._cfg is None:
             cfg = load_config(
@@ -577,14 +571,14 @@ class BBNode:
 
     def _backbone_dial_targets(self) -> set[str] | None:
         """
-        Sparse sticky L2CAP dial plan from OTA presence (connectionless).
+        Sparse L2CAP dial plan from OTA presence (connectionless).
 
-        Ring over the *presence catalog* (``_presence_addr``), not only the
-        short TTL ``heard`` set: while L2CAP is up, MGMT scan often starves and
-        ``heard`` expires within minutes — if dial targets then go empty, a
-        later link drop can never re-form and the mesh dies silently.
+        Catalog = presence map ∪ short-TTL heard ∪ live L2CAP peers. Using only
+        ``heard`` dies when scan starves under L2CAP load; the presence map is
+        cumulative for the process lifetime.
 
-        Sticky peers we previously dialed are *always* redial targets.
+        Each node dials the next higher anon_ids only (see
+        ``_sparse_ring_successors``) — one initiator per edge.
         """
         hello = self._hello_mgr
         if hello is None or not hello.is_connectionless:
@@ -596,10 +590,8 @@ class BBNode:
             aid_to_bd = {
                 bytes.fromhex(h): bd for h, (bd, _at) in self._presence_addr.items()
             }
-            sticky = set(self._sticky_peers)
 
         catalog = set(aid_to_bd.keys()) | heard
-        # Keep L2CAP peers in the ring catalog even if OTA heard expired.
         transport = self._transport
         if transport is not None:
             for bd in transport.connections():
@@ -609,9 +601,7 @@ class BBNode:
                     continue
 
         ring_aids = self._sparse_ring_successors(local_aid, catalog)
-        targets = {aid_to_bd[a] for a in ring_aids if a in aid_to_bd}
-        targets |= sticky
-        return targets
+        return {aid_to_bd[a] for a in ring_aids if a in aid_to_bd}
 
     @staticmethod
     def _sparse_ring_successors(
@@ -621,22 +611,16 @@ class BBNode:
         count: int = SPARSE_RING_SUCCESSORS,
     ) -> list[bytes]:
         """
-        Next ``count`` anon_ids after ``local_aid`` in the circular order of
-        ``heard ∪ {local}`` (ascending big-endian). Sparse BLE dial plan.
+        Next ``count`` *higher* anon_ids in ``heard ∪ {local}`` (no wrap).
+
+        Connected DAG toward the max id; each edge has a single dialer
+        (``local < peer``), so ``force`` connect never dual-dials.
         """
         nodes = sorted(heard | {local_aid})
         if len(nodes) < 2 or count <= 0:
             return []
         idx = nodes.index(local_aid)
-        out: list[bytes] = []
-        for step in range(1, len(nodes)):
-            cand = nodes[(idx + step) % len(nodes)]
-            if cand == local_aid:
-                continue
-            out.append(cand)
-            if len(out) >= count:
-                break
-        return out
+        return nodes[idx + 1 : idx + 1 + count]
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
@@ -728,8 +712,8 @@ class BBNode:
                 continue
             if now < self._protocol_quarantine_until.get(bd, 0.0):
                 continue
-            # Directed ring already names the sole dialer for each edge — always
-            # force that dial. BD tie-break is only for legacy full-mesh mode.
+            # Directed dial: next higher anon_ids only (no wrap) so both ends
+            # never force the same edge. BD tie-break remains for legacy mesh.
             if not connectionless and local >= bd:
                 continue
             addr_type = self._peer_addr_types.get(bd)
@@ -743,9 +727,6 @@ class BBNode:
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
-                with self._lock:
-                    self._sticky_peers.add(bd)
-                    self._peer_connected_at[bd] = time.monotonic()
             except OSError as e:
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
@@ -770,15 +751,10 @@ class BBNode:
         key = f"{e.errno}"
         streak = self._connect_streak.get(bd, 0) + 1 if self._connect_last_err.get(bd) == key else 1
         self._connect_streak[bd] = streak
-        # Unexpected EPERM: longer base than transient refused/timeout.
-        # Sticky peers: short backoff so the same sparse edge re-forms quickly.
         if e.errno == errno.EPERM:
             base_s = 10.0
         elif e.errno == errno.ETIMEDOUT:
-            # Don't hammer unreachable ring successors (seen as flap fuel).
             base_s = 8.0
-        elif bd in self._sticky_peers:
-            base_s = 4.0
         else:
             base_s = 4.0
         self._connect_backoff_until[bd] = time.monotonic() + min(90.0, base_s * streak)
@@ -830,8 +806,6 @@ class BBNode:
                     time.monotonic() + PROTOCOL_HELLO_GRACE_MULT * self._cfg.hello_interval_s
                 )
         self._active_peers.add(bd)
-        with self._lock:
-            self._peer_connected_at[bd] = time.monotonic()
         scanner = self._presence_scanner
         if scanner is not None:
             scanner.defer_next_pass()
@@ -843,23 +817,11 @@ class BBNode:
         if bd not in self._active_peers:
             return
         self._active_peers.discard(bd)
-        now = time.monotonic()
         with self._lock:
             self._peer_admission_deadline.pop(bd, None)
             self._admitted_peers.discard(bd)
-            connected_at = self._peer_connected_at.pop(bd, None)
-            if bd in self._sticky_peers:
-                # Instant flap (connect then drop <2s): long cooldown, do not
-                # clear backoff — that was re-creating the storm.
-                if connected_at is not None and (now - connected_at) < 2.0:
-                    streak = self._connect_streak.get(bd, 0) + 1
-                    self._connect_streak[bd] = streak
-                    cool = min(90.0, 15.0 * streak)
-                    self._connect_backoff_until[bd] = now + cool
-                    self._dispatch_log(f"flap cooldown {bd}: {cool:.0f}s")
-                elif now >= self._connect_backoff_until.get(bd, 0.0):
-                    # Stable link dropped: allow redial soon but not instantly.
-                    self._connect_backoff_until[bd] = now + 3.0
+            # Brief pause before redial so a flapping peer is not hammered.
+            self._connect_backoff_until[bd] = time.monotonic() + 3.0
         if self._hello_mgr is not None:
             self._hello_mgr.on_peer_disconnected(bd)
         if self.on_peer_disconnected:

@@ -266,7 +266,7 @@ class HelloManager:
         Enable OTA presence for peer *discovery* (compact AD → dial targets).
 
         CDS election remains L2CAP-driven (§2.4); this only tracks who is heard
-        so the sparse dial policy can open sticky Bluetooth links.
+        so the sparse dial policy can open Bluetooth links.
         """
         self._connectionless = True
         if ttl_s is not None:

@@ -24,11 +24,12 @@ ARQ_CACHE_TTL_S = 300.0
 ARQ_MAX_RETRIES = 3
 ARQ_RETRY_INTERVAL_S = 1.5
 
-# BLE cannot sustain a full mesh: soft cap on outbound dials.
+# BLE cannot sustain a full mesh: soft cap on live L2CAP links.
 MAX_L2CAP_DEGREE = 3
-# Directed ring: each node dials exactly one successor (anon_id order).
-# count>1 creates chords where BOTH ends dial → CONNECT/DISCONNECT flaps.
-SPARSE_RING_SUCCESSORS = 1
+# Each node dials the next N *higher* anon_ids (no wrap). That yields a
+# connected DAG toward the max id — one dialer per edge, no dual-dial flaps.
+# count=1 partitions when presence catalogs differ slightly across boards.
+SPARSE_RING_SUCCESSORS = 2
 
 # Network-wide pubkey announce (complement to Hello private, 2-hop limited)
 ANNOUNCE_INTERVAL_S = 30
