@@ -970,10 +970,14 @@ class PacketForwarder:
         return len(self._other_peers(exclude=None)) >= 2
 
     def _maybe_request_arq(self, originator: str, seq: int) -> None:
-        """Emit ARQ floods for any gap below ``seq`` (preprint §2.3.2)."""
-        for missing in self._arq.note_received(originator, seq):
-            if self._arq.should_emit_arq(originator, missing):
-                self._flood_arq(originator, missing)
+        """
+        Gap tracking only for now.
+
+        Auto-flooding ARQ on BLE saturates the radio (scan/adv/L2CAP) and was
+        observed to kill meshes within minutes. Cache + replay path stays for
+        explicit recovery; emission is disabled until rate-limited properly.
+        """
+        self._arq.note_received(originator, seq)
 
     def _flood_arq(self, requested_src: str, requested_seq: int) -> None:
         local = self._cfg.local_bd_addr.upper()

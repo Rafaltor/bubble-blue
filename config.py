@@ -24,10 +24,11 @@ ARQ_CACHE_TTL_S = 300.0
 ARQ_MAX_RETRIES = 3
 ARQ_RETRY_INTERVAL_S = 1.5
 
-# BLE cannot sustain a full mesh: cap L2CAP degree (dial + accept).
+# BLE cannot sustain a full mesh: soft cap on outbound dials.
 MAX_L2CAP_DEGREE = 3
-# Empty-CDS / discovery dial: try this many ring successors by anon_id.
-SPARSE_RING_SUCCESSORS = 2
+# Directed ring: each node dials exactly one successor (anon_id order).
+# count>1 creates chords where BOTH ends dial → CONNECT/DISCONNECT flaps.
+SPARSE_RING_SUCCESSORS = 1
 
 # Network-wide pubkey announce (complement to Hello private, 2-hop limited)
 ANNOUNCE_INTERVAL_S = 30

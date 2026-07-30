@@ -36,9 +36,9 @@ from src.transport.le_scan import MgmtLEScanner, hci_index_from_interface
 
 LogFn = Callable[[str, bool], None]
 
-PROTOCOL_HELLO_GRACE_MULT = 3
-PROTOCOL_QUARANTINE_BASE_S = 30.0
-PROTOCOL_QUARANTINE_CAP_S = 600.0
+PROTOCOL_HELLO_GRACE_MULT = 24  # BLE radio is busy: allow long Hello latency before expel
+PROTOCOL_QUARANTINE_BASE_S = 15.0
+PROTOCOL_QUARANTINE_CAP_S = 60.0
 
 
 def topology_from_env() -> frozenset[str] | None:
@@ -127,6 +127,8 @@ class BBNode:
         self._protocol_quarantine_streak: dict[str, int] = {}
         # Prefer re-forming the same sparse L2CAP edges after radio flaps.
         self._sticky_peers: set[str] = set()
+        # bd -> monotonic time of last successful connect (flap detection)
+        self._peer_connected_at: dict[str, float] = {}
 
     def start(
         self,
@@ -276,6 +278,7 @@ class BBNode:
             self._protocol_quarantine_until.clear()
             self._protocol_quarantine_streak.clear()
             self._sticky_peers.clear()
+            self._peer_connected_at.clear()
 
     def _start_presence_plane(self, hello: HelloManager) -> None:
         """
@@ -576,9 +579,12 @@ class BBNode:
         """
         Sparse sticky L2CAP dial plan from OTA presence (connectionless).
 
-        Always an anon_id ring over heard peers — never CDS RELAY/LEAF edges.
-        Sticky peers (already linked or previously chosen) stay preferred so
-        radio flaps re-form the same sparse graph.
+        Ring over the *presence catalog* (``_presence_addr``), not only the
+        short TTL ``heard`` set: while L2CAP is up, MGMT scan often starves and
+        ``heard`` expires within minutes — if dial targets then go empty, a
+        later link drop can never re-form and the mesh dies silently.
+
+        Sticky peers we previously dialed are *always* redial targets.
         """
         hello = self._hello_mgr
         if hello is None or not hello.is_connectionless:
@@ -592,14 +598,19 @@ class BBNode:
             }
             sticky = set(self._sticky_peers)
 
-        ring_aids = self._sparse_ring_successors(local_aid, heard)
+        catalog = set(aid_to_bd.keys()) | heard
+        # Keep L2CAP peers in the ring catalog even if OTA heard expired.
+        transport = self._transport
+        if transport is not None:
+            for bd in transport.connections():
+                try:
+                    catalog.add(hello.anon_id_for(bd))
+                except KeyError:
+                    continue
+
+        ring_aids = self._sparse_ring_successors(local_aid, catalog)
         targets = {aid_to_bd[a] for a in ring_aids if a in aid_to_bd}
-        # Sticky redial only for current ring successors we previously dialed.
-        for bd in sticky:
-            for aid, mapped in aid_to_bd.items():
-                if mapped == bd and aid in heard and aid in ring_aids:
-                    targets.add(bd)
-                    break
+        targets |= sticky
         return targets
 
     @staticmethod
@@ -717,25 +728,24 @@ class BBNode:
                 continue
             if now < self._protocol_quarantine_until.get(bd, 0.0):
                 continue
-            # Legacy mode uses a lower-BD tie-break to avoid both sides dialing.
-            # Connectionless mode already encodes the dialer in the backbone /
-            # ring plan, so skip the filter and force the transport past its
-            # own BD tie-break.
+            # Directed ring already names the sole dialer for each edge — always
+            # force that dial. BD tie-break is only for legacy full-mesh mode.
             if not connectionless and local >= bd:
                 continue
             addr_type = self._peer_addr_types.get(bd)
             try:
                 if self._cfg and self._cfg.transport_kind == "ble_l2cap":
-                    self._transport.connect(bd, addr_type=addr_type, force=connectionless)
+                    self._transport.connect(
+                        bd, addr_type=addr_type, force=connectionless
+                    )
                 else:
                     self._transport.connect(bd)
                 self._connect_last_err.pop(bd, None)
                 self._connect_backoff_until.pop(bd, None)
                 self._connect_streak.pop(bd, None)
-                # Sticky only peers *we* dial (ring successors). Accept-side peers
-                # must not become dial targets or both ends force-dial → ECONNREFUSED.
                 with self._lock:
                     self._sticky_peers.add(bd)
+                    self._peer_connected_at[bd] = time.monotonic()
             except OSError as e:
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
@@ -764,11 +774,14 @@ class BBNode:
         # Sticky peers: short backoff so the same sparse edge re-forms quickly.
         if e.errno == errno.EPERM:
             base_s = 10.0
+        elif e.errno == errno.ETIMEDOUT:
+            # Don't hammer unreachable ring successors (seen as flap fuel).
+            base_s = 8.0
         elif bd in self._sticky_peers:
-            base_s = 1.5
+            base_s = 4.0
         else:
             base_s = 4.0
-        self._connect_backoff_until[bd] = time.monotonic() + min(60.0, base_s * streak)
+        self._connect_backoff_until[bd] = time.monotonic() + min(90.0, base_s * streak)
 
     def _log_connect_failure(self, bd: str, e: OSError) -> None:
         key = f"{e.errno}"
@@ -817,6 +830,8 @@ class BBNode:
                     time.monotonic() + PROTOCOL_HELLO_GRACE_MULT * self._cfg.hello_interval_s
                 )
         self._active_peers.add(bd)
+        with self._lock:
+            self._peer_connected_at[bd] = time.monotonic()
         scanner = self._presence_scanner
         if scanner is not None:
             scanner.defer_next_pass()
@@ -828,9 +843,23 @@ class BBNode:
         if bd not in self._active_peers:
             return
         self._active_peers.discard(bd)
+        now = time.monotonic()
         with self._lock:
             self._peer_admission_deadline.pop(bd, None)
             self._admitted_peers.discard(bd)
+            connected_at = self._peer_connected_at.pop(bd, None)
+            if bd in self._sticky_peers:
+                # Instant flap (connect then drop <2s): long cooldown, do not
+                # clear backoff — that was re-creating the storm.
+                if connected_at is not None and (now - connected_at) < 2.0:
+                    streak = self._connect_streak.get(bd, 0) + 1
+                    self._connect_streak[bd] = streak
+                    cool = min(90.0, 15.0 * streak)
+                    self._connect_backoff_until[bd] = now + cool
+                    self._dispatch_log(f"flap cooldown {bd}: {cool:.0f}s")
+                elif now >= self._connect_backoff_until.get(bd, 0.0):
+                    # Stable link dropped: allow redial soon but not instantly.
+                    self._connect_backoff_until[bd] = now + 3.0
         if self._hello_mgr is not None:
             self._hello_mgr.on_peer_disconnected(bd)
         if self.on_peer_disconnected:

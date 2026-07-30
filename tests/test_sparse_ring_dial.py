@@ -34,7 +34,6 @@ def test_sparse_ring_empty_when_alone() -> None:
 
 
 def test_degree_and_successor_caps_are_small_constants() -> None:
-    # Guard against accidental full-mesh regression: these must stay O(1).
+    # Guard against accidental full-mesh / dual-dial regression.
     assert MAX_L2CAP_DEGREE <= 4
-    assert SPARSE_RING_SUCCESSORS <= 3
-    assert SPARSE_RING_SUCCESSORS >= 1
+    assert SPARSE_RING_SUCCESSORS == 1
