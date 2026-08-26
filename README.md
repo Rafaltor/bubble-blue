@@ -516,6 +516,102 @@ Exemple complet et exécutable : [`scripts/bb_probe.py`](scripts/bb_probe.py).
 
 ---
 
+## Application écran (`apps/`)
+
+### Pourquoi deux processus
+
+Le mesh exige **Python 3.14** (sockets L2CAP LE) alors que **PyGObject n’existe
+que pour le Python de la distribution** : les deux ne peuvent pas partager un
+interpréteur. Ils communiquent donc par une socket Unix en JSON ligne à ligne.
+
+Cette frontière est un choix, pas seulement une contrainte :
+
+- l’interface ne tourne **pas en root** — seul le démon en a besoin ;
+- l’UI peut planter ou être relancée **sans faire tomber les liens**, qui
+  mettent ~40 s à converger ;
+- c’est exactement là que passerait le Bridge RPC si les UNO Q étaient équipées
+  de leur shield (l’UI serait alors un sketch côté STM32, le démon ne bouge pas).
+
+| Fichier | Interpréteur | Droits | Rôle |
+|---------|--------------|--------|------|
+| `apps/meshd.py` | 3.14 | root | Porte le `BBNode`, sert la socket |
+| `apps/screen_ui.py` | système | utilisateur | Interface tactile GTK4 |
+| `apps/protocol.py` | les deux | — | Format de trame partagé |
+| `scripts/meshd_client.py` | système | utilisateur | Client terminal (sans écran) |
+| `scripts/meshd_fake.py` | système | utilisateur | Démon simulé, sans radio |
+
+Le protocole complet est décrit en tête de [`apps/protocol.py`](apps/protocol.py).
+
+### Développer sans matériel
+
+`meshd_fake.py` sert le vrai protocole sans toucher au Bluetooth — pas
+d’adaptateur, pas de root, pas d’attente de convergence :
+
+```bash
+python3 scripts/meshd_fake.py --socket /tmp/bb.sock &
+python3 apps/screen_ui.py    --socket /tmp/bb.sock
+```
+
+### Sur une board
+
+```bash
+# 1. le démon (root, une seule instance)
+sudo python3.14 apps/meshd.py
+
+# 2. l'interface, en utilisateur normal
+python3 apps/screen_ui.py --kiosk
+```
+
+Lancé via `sudo`, le démon donne l’accès à la socket au **groupe de
+l’utilisateur appelant** (`root:<groupe>`, mode `0660`) : l’UI s’y connecte sans
+privilège, mais la socket n’est pas ouverte à tout le monde — qui peut y écrire
+peut publier dans le chat au nom de la board.
+
+Sans écran physique, le client terminal suffit à valider une board :
+
+```bash
+python3 scripts/meshd_client.py                                  # interactif
+python3 scripts/meshd_client.py --send "test" --duration 60      # scripté
+```
+
+### Pile graphique (Rubik Pi 3)
+
+Le Rubik est livré *headless* : ni serveur graphique, ni typelib GTK.
+
+```bash
+sudo apt-get install -y gir1.2-gtk-4.0 cage
+```
+
+`cage` est un compositeur Wayland kiosque — une seule application, plein écran,
+pas d’environnement de bureau :
+
+```bash
+cage -- python3 apps/screen_ui.py --kiosk
+```
+
+### Interface
+
+Dimensionnée pour la dalle 1024×600. Elle embarque **son propre clavier
+AZERTY** : les dalles sont tactiles uniquement et une session kiosque n’a pas de
+shell d’où lancer un clavier système. Le clavier reste replié tant que la zone
+de saisie n’a pas été touchée, pour laisser la hauteur à la conversation.
+
+> **Piège de test.** Pour capturer l’UI sous `Xvfb`, forcer `GSK_RENDERER=cairo`
+> (sinon GTK4 rend via le pilote Adreno, hors du framebuffer capturable) et
+> vérifier qu’aucun `/tmp/.X99-lock` d’une instance précédente ne traîne — c’est
+> ce verrou qui produit des captures vides alors que l’application va bien.
+
+### Ce qui est vérifié
+
+| Vérification | Résultat |
+|--------------|----------|
+| Contrat démon↔UI (`tests/test_meshd_protocol.py`) | 7 cas, sans adaptateur |
+| Chat réel à travers le démon (arduinoq ↔ rubik-inria) | **14 envoyés / 14 reçus**, 0 refus |
+| UI GTK4 sur Rubik Pi 3, 1024×600 | rendu conforme sur le matériel cible |
+| Tenue de l’UI (démon simulé) | 4 h continues, aucune erreur |
+
+---
+
 ## Tests
 
 Les fichiers de `tests/` sont autonomes (aucune dépendance de dev, pytest
@@ -531,6 +627,7 @@ Bancs matériels (nécessitent des boards en portée) :
 | Script | Usage |
 |--------|-------|
 | `scripts/bb_probe.py` | Soak multi-board : stabilité des liens + livraison chat, résumé JSON |
+| `scripts/meshd_client.py` | Chat en terminal via le démon — valide une board sans écran |
 | `scripts/phase1a_manual.py` | Banc crypto interactif (`server` / `client` / `intruder` / `replay`) |
 
 Soak type — même commande sur chaque board, puis comparer les résumés :
@@ -567,11 +664,14 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `src/control/` | Hello, presence, ANNOUNCE |
 | `src/forwarding/` | CDS + forwarder |
 | `src/security/` | Crypto / keys / signing |
+| `apps/` | Application écran : démon mesh + UI GTK4 |
 | `tests/` | Tests autonomes (sans pytest) |
 | `sim/` | Simulation (pas de modèle OTA presence) |
 | `docs/` | Config, PDF sécu, HTML |
 | `scripts/run_tests.sh` | Runner de tests sans dépendance |
 | `scripts/bb_probe.py` | Soak stabilité + chat (résumé JSON) |
+| `scripts/meshd_client.py` | Client chat en terminal (sans écran) |
+| `scripts/meshd_fake.py` | Démon simulé pour développer l’UI |
 | `scripts/phase1a_manual.py` | Banc crypto interactif |
 | `scripts/install_py314_deps.sh` | Install deps root |
 
@@ -591,7 +691,8 @@ Mesuré sur boards (Rubik Pi + Arduino UNO Q, `scripts/bb_probe.py`) :
 | ⤷ multi-hop | 3 voisins directs max par nœud, portée 6/6 → relais effectif |
 | ⤷ CDS | 5 nœuds sur 6 élus RELAY |
 | Coupure d’un nœud puis retour | Lien rétabli en **~7 s**, aucune perte ensuite |
-| Suite unitaire (locale + boards) | **18/18** |
+| Chat via `apps/meshd.py` (2 nœuds) | **14/14** dans les deux sens, 0 refus |
+| Suite unitaire (locale + boards) | **19/19** |
 
 Topologie mesurée (6 nœuds) : chaque nœud n’ouvre que **2 à 3 liens L2CAP**
 et le reste passe en multi-hop — c’est le comportement sparse recherché, pas
