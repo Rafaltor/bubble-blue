@@ -13,7 +13,7 @@ Accessible to **any BB node**, independent of `BUBBLE_BLUE_GROUP_KEY`:
 | Presence AD | `src/transport/advertising.py` (`LEAdvertiser` / `update_presence`) | Legacy **connectable** Manufacturer Data: magic `BB`, protocol `0x01`, presence format **`0x02`**, compact Hello (anon_id, seq, CDS flag, BD_ADDR). Neighbor/MPR lists empty under `LEGACY_PRESENCE_MAX_VALUE_LEN` (~27 B value). |
 | Periodic scan | `PresenceScanner` + `le_scan.mgmt_scan_records` | LE scan window **3 s**; BLE mesh defaults **period 2 s** / **steady 4 s** (set in `BBNode`); MGMT *Device Found* carries full EIR each hit |
 | Link security | `ble_coc.apply_le_flowctl` | **`BT_SECURITY_LOW`** — no link encryption; app-layer crypto only (see note below) |
-| Auto-dial | `BBNode._backbone_dial_targets` | CDS backbone when relays known; else **dial every heard peer**; one dial/pass; 8 s timeout; `force=True` |
+| Auto-dial | `BBNode._backbone_dial_targets` | CDS backbone when relays known; else **dial the whole presence catalog**; one dial/pass; 8 s timeout; `force=True` |
 | Public Hellos | `hello` / `HelloManager` | OTA + L2CAP; anon_ids learned on the wire (cross-group) |
 | CDS / relay | `hello_manager`, `cds`, `forwarder._should_relay` | Wu-Li election; forward if CDS RELAY **or** ≥2 L2CAP links |
 
@@ -174,9 +174,32 @@ echo 300 | sudo tee /sys/kernel/debug/bluetooth/hci0/supervision_timeout
 | [bb-stack-actuel.html](bb-stack-actuel.html) | Vue stack tip (courte) |
 | [archive/](archive/) | Anciens decks (historique) |
 
+### Dial catalog vs `heard`
+
+`heard_anon_ids()` expires on a TTL (25 s, aligned with the scanner record
+retention) and `PresenceScanner` deliberately idles once every discovered
+candidate is an admitted, connected peer. A **stable** mesh therefore forgets
+every neighbour within about a minute — and that is precisely when a
+supervision timeout is most likely to drop a link.
+
+Dial targets are consequently built from `BBNode._presence_addr`, the
+cumulative anon_id → BD_ADDR catalog filled since process start, unioned with
+the live `heard` set and current L2CAP peers. Dialing only `heard` was observed
+on the lab boards to leave a node at zero peers for the rest of the run after a
+single drop. Regression coverage: `tests/test_dial_recovery.py`.
+
+### Self-originated packets
+
+`PacketForwarder.handle` drops any packet whose `src` is the local address. A
+neighbour relaying our own broadcast back would otherwise echo the sender's
+message into their own chat and re-flood a packet already sent to every peer.
+Applications therefore never see their own `send()` through `on_message` and
+must render local echo themselves. Coverage:
+`tests/test_forwarder.py::test_own_broadcast_flooded_back_is_dropped`.
+
 ## Residual design notes (honest)
 
-- **Empty OTA neighbor lists** under legacy AD → weak CDS election from air alone; **dial-every-heard** compensates in dense radio meshes.
+- **Empty OTA neighbor lists** under legacy AD → weak CDS election from air alone; the presence-catalog dial compensates in dense radio meshes.
 - **Adv+scan contention** can still churn fragile boards; Extended Advertising was retired because many controllers only hear legacy AD.
 - **`sim/`** models forwarding/CDS logically; it does **not** simulate OTA presence advertising.
 - Security PDF: [special_security_BB.pdf](special_security_BB.pdf) (mostly aligned; identity file store vs derived-identity recommendation in §3.1).

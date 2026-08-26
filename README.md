@@ -5,17 +5,16 @@ Implémentation du protocole mesh multi-hop **BUBBLE-BLUE** (arXiv:2509.00967) p
 - **Rubik Pi 3** — Ubuntu Linux, Bluetooth 5.0
 - **Arduino UNO Q** — Debian Linux, Bluetooth 5.1
 
-Dépôt GitLab (INRIA) :
+Dépôts :
 
-```text
-git@gitlab.inria.fr:bb/bb_v1.git
-```
+| Remote | URL | Usage |
+|--------|-----|-------|
+| `origin` | `https://github.com/Rafaltor/bubble-blue.git` | **Déploiement boards** (`git pull`) |
+| `gitlab` | `git@gitlab.inria.fr:bb/bb_v1.git` | Miroir INRIA |
 
-Clone HTTPS (si pas de clé SSH) :
-
-```text
-https://gitlab.inria.fr/bb/bb_v1.git
-```
+Les boards suivent `origin`. Pour déployer : commit + push sur GitHub, puis
+`git pull` sur chaque board — ne pas copier de fichiers à la main (`scp`),
+sous peine de laisser des arbres de travail divergents.
 
 ---
 
@@ -55,11 +54,15 @@ Outils système aussi requis par le code runtime :
 > qui ne se sont jamais rencontrés de communiquer, du moment qu’ils partagent
 > la clé de groupe.
 
+Le paquet **`bluez`** fournit à lui seul `hciconfig`, `btmgmt` et `btmon`
+(vérifié sur Debian 13 / BlueZ 5.82, image Arduino UNO Q) :
+
 ```bash
 sudo apt update
-sudo apt install -y git bluez bluez-tools
-# TODO: paquets apt exacts pour `hciconfig` / `btmgmt` selon distro
-# (souvent fournis par `bluez` / `bluez-hcidump` / outils BlueZ du labo).
+sudo apt install -y git bluez
+
+# Contrôle : les trois doivent répondre
+command -v hciconfig btmgmt btmon
 ```
 
 #### Ubuntu arm64 (Rubik Pi) — PPA deadsnakes
@@ -212,12 +215,25 @@ python3.14 config.py
 
 Prérequis radio (le code **n’allume pas** le contrôleur tout seul) :
 
+Sur les images Rubik Pi et UNO Q, `bluetooth.service` monte l’adaptateur au
+boot — il n’y a normalement **rien à faire**. Contrôle :
+
 ```bash
-# TODO: séquence power-on exacte selon image board.
-# Le runtime utilise ensuite btmgmt (advertising) et hciconfig (BD_ADDR).
-sudo btmgmt --index 0 power on
-hciconfig hci0
+hciconfig hci0      # attendu : UP RUNNING
+btmgmt info         # attendu : Index list with 1 item
 ```
+
+Si l’adaptateur est `DOWN` :
+
+```bash
+sudo systemctl restart bluetooth
+sudo hciconfig hci0 up
+```
+
+> **Ne jamais** utiliser `btmgmt power on/off` pour réveiller la radio : sur les
+> contrôleurs QCA (UNO Q) ce cycle tue le firmware jusqu’au reboot (§1 des
+> pièges). Le runtime n’en a pas besoin — il active l’advertising à chaud via
+> `btmgmt add-adv`.
 
 ### 5. Lancement
 
@@ -394,7 +410,7 @@ sudo reboot
 |------|------|
 | **Presence (OTA)** | Hello compact en AD **legacy connectable** (`presence` v0x02) : anon_id, seq, flag CDS, BD_ADDR |
 | **Scan** | MGMT *Device Found* → `PresenceScanner` (fenêtre 3 s, période 2 s / steady 4 s) |
-| **Dial** | Backbone CDS si relays connus ; sinon **dial every heard** ; 1 dial/passe ; timeout 8 s |
+| **Dial** | Backbone CDS si relays connus ; sinon **dial tout le catalogue de présence** ; 1 dial/passe ; timeout 8 s |
 | **Contrôle** | Hellos OTA + L2CAP ; CDS Wu-Li |
 | **Identité** | `PKT_ANNOUNCE` (burst + périodique) |
 | **Forward** | RELAY CDS **ou** ≥ 2 liens L2CAP |
@@ -408,6 +424,90 @@ sudo reboot
 | Applicatif (chat, déchiffrement) | `BUBBLE_BLUE_GROUP_KEY` |
 
 Détails : [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+> **Catalogue de présence vs `heard`.** Le set `heard` expire (TTL 25 s) et le
+> scanner se met volontairement en veille quand tous les candidats connus sont
+> déjà connectés. Un mesh stable « oublie » donc tout le monde en moins d’une
+> minute. Le dial part du **catalogue cumulé** (`_presence_addr`, tout anon_id
+> vu depuis le démarrage) : sans ça, la liste de dial est vide au moment précis
+> où un lien tombe, et le nœud ne peut plus jamais revenir
+> (`tests/test_dial_recovery.py`).
+
+---
+
+## API applicative (pour une app / un écran)
+
+Tout passe par `BBNode` — pas besoin de toucher au transport ni au forwarder.
+
+```python
+from src.api.bb_api import BBNode
+
+node = BBNode(interface="hci0", quiet=True)
+
+# Callbacks — à brancher AVANT start(). on_message est obligatoire.
+node.on_message = lambda sender_bd, text: print(f"{sender_bd}: {text}")
+node.on_peer_connected = lambda bd: print(f"+ {bd}")
+node.on_peer_disconnected = lambda bd: print(f"- {bd}")
+node.on_log = lambda msg, is_err: None          # diagnostics facultatifs
+
+node.start(l2cap_accept_all=True)               # root requis (L2CAP + MGMT)
+try:
+    node.send("hello mesh")                     # broadcast groupe
+finally:
+    node.stop()
+```
+
+| Membre | Type | Usage écran |
+|--------|------|-------------|
+| `on_message(sender_bd, text)` | callback | Afficher un message reçu |
+| `on_peer_connected(bd)` / `on_peer_disconnected(bd)` | callback | Mettre à jour la liste des voisins |
+| `on_log(msg, is_err)` | callback | Journal / debug (facultatif) |
+| `send(text)` | méthode | Broadcast à la bulle |
+| `send_unicast(text, dst_bd)` | méthode | Message dirigé (`via_peer=` pour forcer le lien) |
+| `send_subgroup(text, recipients)` | méthode | Multicast sous-groupe |
+| `peers()` | `list[str]` | Voisins L2CAP actifs |
+| `is_relay()` | `bool` | Badge RELAY / LEAF |
+| `local_bd_addr` | `str` | Identité locale à afficher |
+| `current_epoch()` | `int` | Époque de clé courante |
+
+Points à connaître côté UI :
+
+- `send()` lève si aucun pair n’est connecté — afficher l’état plutôt que
+  planter, et réessayer quand `on_peer_connected` arrive.
+- Les callbacks sont appelés depuis des **threads** du runtime : passer par la
+  file d’événements du toolkit graphique avant de toucher aux widgets.
+- Les messages émis localement ne reviennent **pas** via `on_message` : afficher
+  ses propres envois directement dans l’UI.
+
+Exemple complet et exécutable : [`scripts/bb_probe.py`](scripts/bb_probe.py).
+
+---
+
+## Tests
+
+Les fichiers de `tests/` sont autonomes (aucune dépendance de dev, pytest
+n’est pas requis) — c’est ce qui permet de les lancer tels quels sur les boards :
+
+```bash
+./scripts/run_tests.sh                          # python3.14, sinon python3
+PYTHON=./.venv314/bin/python ./scripts/run_tests.sh
+```
+
+Bancs matériels (nécessitent des boards en portée) :
+
+| Script | Usage |
+|--------|-------|
+| `scripts/bb_probe.py` | Soak multi-board : stabilité des liens + livraison chat, résumé JSON |
+| `scripts/phase1a_manual.py` | Banc crypto interactif (`server` / `client` / `intruder` / `replay`) |
+
+Soak type — même commande sur chaque board, puis comparer les résumés :
+
+```bash
+sudo python3.14 scripts/bb_probe.py --duration 300 --send-every 20
+```
+
+À lire dans le JSON : `flaps_after_warmup` doit rester à 0, et chaque board
+doit apparaître dans les `senders` des autres.
 
 ---
 
@@ -434,18 +534,37 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `src/control/` | Hello, presence, ANNOUNCE |
 | `src/forwarding/` | CDS + forwarder |
 | `src/security/` | Crypto / keys / signing |
-| `tests/` | Tests |
+| `tests/` | Tests autonomes (sans pytest) |
 | `sim/` | Simulation (pas de modèle OTA presence) |
 | `docs/` | Config, PDF sécu, HTML |
+| `scripts/run_tests.sh` | Runner de tests sans dépendance |
+| `scripts/bb_probe.py` | Soak stabilité + chat (résumé JSON) |
+| `scripts/phase1a_manual.py` | Banc crypto interactif |
 | `scripts/install_py314_deps.sh` | Install deps root |
 
 ---
 
 ## Statut
 
-- Mesh BLE ouvert avec presence legacy + auto-dial + ANNOUNCE
-- Multihop chat validé Arduino ↔ Rubik
-- Risques résiduels : contention adv+scan ; listes voisins OTA vides (compensées par dial-heard)
+Mesh BLE ouvert : presence legacy + auto-dial + ANNOUNCE + chat multihop.
+
+Mesuré sur boards (Rubik Pi ↔ Arduino UNO Q, `scripts/bb_probe.py`) :
+
+| Scénario | Résultat |
+|----------|----------|
+| Soak 7 min, 2 nœuds | **0 flap**, 20/20 messages livrés de part et d’autre |
+| Coupure d’un nœud puis retour | Lien rétabli en **~7 s**, aucune perte ensuite |
+| Suite unitaire (locale + 3 boards) | **18/18** |
+
+Risques résiduels :
+
+- **Contention adv+scan** sur contrôleurs fragiles : les liens tombent parfois
+  sur supervision timeout (`Errno 110`). La reprise est automatique depuis le
+  catalogue de présence, mais la coupure reste visible côté application.
+- **Listes de voisins OTA vides** sous AD legacy → l’élection CDS depuis l’air
+  seul est faible ; compensée par le dial sur catalogue.
+- **Firmware QCA fragile** (UNO Q) : un adaptateur peut tomber à
+  `btmgmt info → 0 items` et n’être récupérable que par reboot (§1 et §4).
 
 Spec sécu : [docs/special_security_BB.pdf](docs/special_security_BB.pdf).
 
