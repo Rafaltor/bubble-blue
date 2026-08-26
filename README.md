@@ -382,6 +382,27 @@ sudo reboot
 > Si le plantage suit un `btmgmt power off` sur wcn399x : **reboot immédiat**
 > (le `systemctl restart` ne suffit en général pas).
 
+#### Avant de rebooter : chercher un `btmgmt` zombie
+
+| | |
+|--|--|
+| **Symptôme** | `btmgmt info` ne rend **jamais la main** (aucune sortie, pas d’erreur) alors que `hciconfig hci0` affiche `UP RUNNING`. `bb_node` se fige au démarrage dans `LEAdvertiser.start()`. |
+| **Cause** | Un `btmgmt` précédent est resté bloqué et **monopolise la socket MGMT** — typiquement un `btmgmt power on` lancé à la main qui n’est jamais revenu. Observé sur une board avec un processus figé depuis 28 jours. |
+| **Solution** | Tuer les zombies **par PID** puis relancer BlueZ : |
+
+```bash
+ps -eo pid,etime,args | grep '[b]tmgmt'   # noter les PID et leur âge
+sudo kill -9 <PID>...
+sudo systemctl restart bluetooth
+timeout 10 btmgmt info                    # doit répondre en < 1 s
+```
+
+> Ne pas utiliser `pkill -f btmgmt` depuis un script : le motif matche aussi la
+> ligne de commande du shell appelant, qui se tue lui-même.
+>
+> Si `btmgmt info` reste muet **après** ce nettoyage, l’interface MGMT est
+> réellement bloquée → reboot.
+
 ---
 
 ### 5. Pas d’appairage Bluetooth requis (sécurité applicative)
@@ -548,13 +569,22 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 
 Mesh BLE ouvert : presence legacy + auto-dial + ANNOUNCE + chat multihop.
 
-Mesuré sur boards (Rubik Pi ↔ Arduino UNO Q, `scripts/bb_probe.py`) :
+Mesuré sur boards (Rubik Pi + Arduino UNO Q, `scripts/bb_probe.py`) :
 
 | Scénario | Résultat |
 |----------|----------|
-| Soak 7 min, 2 nœuds | **0 flap**, 20/20 messages livrés de part et d’autre |
+| **Soak 5 min, 5 nœuds** | Mesh **non partitionné** : chaque nœud reçoit des 4 autres |
+| ⤷ régime établi (t > 45 s) | **1 seule coupure** de lien en 255 s, 0 flap parasite |
+| ⤷ livraison chat | **240/240** (100 %) hors convergence et arrêt |
+| ⤷ multi-hop | Nœud à 2 voisins directs reçoit des 2 nœuds non adjacents |
+| Soak 7 min, 2 nœuds | **0 flap**, 20/20 messages de part et d’autre |
 | Coupure d’un nœud puis retour | Lien rétabli en **~7 s**, aucune perte ensuite |
-| Suite unitaire (locale + 3 boards) | **18/18** |
+| Suite unitaire (locale + boards) | **18/18** |
+
+Les pertes observées se limitent au **premier** message (émis avant que le mesh
+ait convergé, ~45 s à 5 nœuds) et aux **deux derniers** (émis pendant l’arrêt
+des nœuds). Une application doit donc tolérer une fenêtre de convergence au
+démarrage : afficher l’état du mesh plutôt que supposer la livraison.
 
 Risques résiduels :
 
@@ -565,6 +595,9 @@ Risques résiduels :
   seul est faible ; compensée par le dial sur catalogue.
 - **Firmware QCA fragile** (UNO Q) : un adaptateur peut tomber à
   `btmgmt info → 0 items` et n’être récupérable que par reboot (§1 et §4).
+- **Liens en limite de portée** : après un `ETIMEDOUT`, le backoff monte
+  jusqu’à 90 s et l’arête reste volontairement supprimée. Le mesh route par
+  ailleurs — c’est le comportement voulu, pas une panne.
 
 Spec sécu : [docs/special_security_BB.pdf](docs/special_security_BB.pdf).
 
