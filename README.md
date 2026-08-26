@@ -399,9 +399,21 @@ timeout 10 btmgmt info                    # doit répondre en < 1 s
 
 > Ne pas utiliser `pkill -f btmgmt` depuis un script : le motif matche aussi la
 > ligne de commande du shell appelant, qui se tue lui-même.
->
-> Si `btmgmt info` reste muet **après** ce nettoyage, l’interface MGMT est
-> réellement bloquée → reboot.
+
+**Attention au contexte d’exécution.** Si `btmgmt` se fige y compris **sans
+`sudo`** (au lieu de renvoyer une erreur de permission immédiate), il ne parle
+pas du tout à la socket MGMT : c’est l’environnement appelant qui est en cause,
+pas l’adaptateur. Un shell confiné (namespace utilisateur, sandbox d’agent,
+conteneur sans `CAP_NET_ADMIN`) produit exactement ce symptôme, et le `btmgmt`
+laissé derrière reste bloqué indéfiniment. Vérifier depuis un shell normal
+avant de conclure à une panne matérielle :
+
+```bash
+ssh user@la-machine 'timeout 8 sudo btmgmt info'   # doit répondre en < 2 s
+```
+
+Un reboot ne corrige **pas** ce cas — il faut lancer le nœud depuis un shell
+non confiné.
 
 ---
 
@@ -573,18 +585,22 @@ Mesuré sur boards (Rubik Pi + Arduino UNO Q, `scripts/bb_probe.py`) :
 
 | Scénario | Résultat |
 |----------|----------|
-| **Soak 5 min, 5 nœuds** | Mesh **non partitionné** : chaque nœud reçoit des 4 autres |
-| ⤷ régime établi (t > 45 s) | **1 seule coupure** de lien en 255 s, 0 flap parasite |
-| ⤷ livraison chat | **240/240** (100 %) hors convergence et arrêt |
-| ⤷ multi-hop | Nœud à 2 voisins directs reçoit des 2 nœuds non adjacents |
-| Soak 7 min, 2 nœuds | **0 flap**, 20/20 messages de part et d’autre |
+| **Soak 5 min, 6 nœuds** | Mesh **non partitionné** : chaque nœud reçoit des 5 autres |
+| ⤷ régime établi (60–290 s) | **0 événement de lien** — aucune coupure, aucun flap |
+| ⤷ livraison chat | **427/429** (99,5 %) hors convergence et arrêt |
+| ⤷ multi-hop | 3 voisins directs max par nœud, portée 6/6 → relais effectif |
+| ⤷ CDS | 5 nœuds sur 6 élus RELAY |
 | Coupure d’un nœud puis retour | Lien rétabli en **~7 s**, aucune perte ensuite |
 | Suite unitaire (locale + boards) | **18/18** |
 
-Les pertes observées se limitent au **premier** message (émis avant que le mesh
-ait convergé, ~45 s à 5 nœuds) et aux **deux derniers** (émis pendant l’arrêt
-des nœuds). Une application doit donc tolérer une fenêtre de convergence au
-démarrage : afficher l’état du mesh plutôt que supposer la livraison.
+Topologie mesurée (6 nœuds) : chaque nœud n’ouvre que **2 à 3 liens L2CAP**
+et le reste passe en multi-hop — c’est le comportement sparse recherché, pas
+un full-mesh O(N²).
+
+Les pertes se limitent au **premier** message (émis avant convergence, ~40 s à
+6 nœuds) et aux **derniers** (émis pendant l’arrêt des nœuds). Une application
+doit donc tolérer une fenêtre de convergence au démarrage : afficher l’état du
+mesh plutôt que supposer la livraison.
 
 Risques résiduels :
 
