@@ -69,8 +69,25 @@ class _FakeTransport:
         self.sent.append((bd_addr.upper(), bytes(data)))
 
 
-def _cfg():
-    return replace(load_config(), group_key=b"\x01" * 32, local_bd_addr="AA:BB:CC:DD:EE:01", ttl_max=10)
+def _cfg(local_bd: str = "AA:BB:CC:DD:EE:01"):
+    return replace(load_config(), group_key=b"\x01" * 32, local_bd_addr=local_bd, ttl_max=10)
+
+
+def _remote_packet(payload: bytes, dst: str = BROADCAST_BD_ADDR) -> bytes:
+    """
+    Build a packet as another node would.
+
+    Packets are dropped when ``src`` is the local address, so a forwarder
+    cannot stand in for its own peer when producing test input.
+    """
+    origin_cfg = _cfg("AA:BB:CC:DD:EE:09")
+    origin = PacketForwarder(
+        origin_cfg,
+        _FakeTransport([]),
+        _FakeHelloMgr(relay=False, group_key=origin_cfg.group_key),
+        on_message=lambda _s, _t: None,
+    )  # type: ignore[arg-type]
+    return origin.build_data_packet(payload, dst)
 
 
 def test_relay_decrypts_after_ttl_change() -> None:
@@ -79,7 +96,7 @@ def test_relay_decrypts_after_ttl_change() -> None:
     hello = _FakeHelloMgr(relay=True, group_key=cfg.group_key)
     fwd = PacketForwarder(cfg, transport, hello, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
 
-    pkt = fwd.build_data_packet(b"hop", BROADCAST_BD_ADDR)
+    pkt = _remote_packet(b"hop")
     transport.sent.clear()
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
 
@@ -106,7 +123,7 @@ def test_leaf_delivers_broadcast() -> None:
         hello,
         on_message=lambda _s, t: got.append(t),
     )  # type: ignore[arg-type]
-    fwd.handle("AA:BB:CC:DD:EE:02", fwd.build_data_packet(b"hi", BROADCAST_BD_ADDR))
+    fwd.handle("AA:BB:CC:DD:EE:02", _remote_packet(b"hi"))
     assert got == ["hi"]
 
 
@@ -123,11 +140,34 @@ def test_dedup_same_packet_twice() -> None:
         on_message=lambda _s, t: got.append(t),
         on_decrypt_fail=lambda s: fails.append(s),
     )  # type: ignore[arg-type]
-    pkt = fwd.build_data_packet(b"once", BROADCAST_BD_ADDR)
+    pkt = _remote_packet(b"once")
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
     fwd.handle("AA:BB:CC:DD:EE:02", pkt)
     assert got == ["once"]
     assert fails == []
+
+
+def test_own_broadcast_flooded_back_is_dropped() -> None:
+    # A neighbour relays our broadcast to us. Delivering it would echo the
+    # sender's own message into their chat; relaying it again duplicates the
+    # flood we already sent to every peer.
+    cfg = _cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"])
+    hello = _FakeHelloMgr(relay=True, group_key=cfg.group_key)
+    got: list[str] = []
+    fwd = PacketForwarder(
+        cfg,
+        transport,
+        hello,
+        on_message=lambda _s, t: got.append(t),
+    )  # type: ignore[arg-type]
+
+    pkt = fwd.build_data_packet(b"mine", BROADCAST_BD_ADDR)
+    transport.sent.clear()
+    fwd.handle("AA:BB:CC:DD:EE:02", pkt)
+
+    assert got == []
+    assert transport.sent == []
 
 
 def test_private_message_unknown_peer() -> None:
@@ -148,5 +188,6 @@ if __name__ == "__main__":
     test_relay_decrypts_after_ttl_change()
     test_leaf_delivers_broadcast()
     test_dedup_same_packet_twice()
+    test_own_broadcast_flooded_back_is_dropped()
     test_private_message_unknown_peer()
     print("✅ forwarder tests passed")

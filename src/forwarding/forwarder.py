@@ -583,6 +583,12 @@ class PacketForwarder:
             src = hdr["src"].upper()
             seq = int(hdr["seq"])
 
+            # Our own broadcast flooded back by a neighbour. Delivering it would
+            # echo the sender's message into their own chat, and relaying it
+            # again just duplicates what we already sent to every peer.
+            if src == local:
+                return
+
             if pkt_type == PKT_REKEY:
                 deliver_fn = self._try_deliver_rekey
             elif pkt_type == PKT_REKEY_FLOOD:

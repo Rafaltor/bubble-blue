@@ -609,14 +609,23 @@ class BBNode:
         if sym and relays:
             dominator = min(relays, key=_i)
             return _to_bd({dominator})
-        # Empty-CDS / no-symmetric fallback: dial every HEARD peer with a known
+        # Empty-CDS / no-symmetric fallback: dial every peer with a known
         # reachable address, not just symmetric ones. An L2CAP link is a separate
         # bidirectional channel: a node can dial a peer it hears even if that peer
         # does not (yet) hear its beacon back — the connection still establishes.
         # Requiring symmetry stranded edge nodes whose advertised neighbour list
         # was truncated or intermittently received (dial_targets stayed empty).
         # Unreachable dials self-suppress via ETIMEDOUT backoff.
-        return _to_bd(heard - {local_aid})
+        #
+        # Union the presence catalog with ``heard`` rather than trusting ``heard``
+        # alone: it expires on a TTL, and the presence scanner deliberately idles
+        # once every candidate is a live peer. A steady mesh therefore forgets
+        # everyone within minutes, and the dial list is empty at the exact moment
+        # a supervision timeout drops a link — the node can then never redial.
+        # ``_presence_addr`` keeps every anon_id seen this run, so recovery works.
+        catalog = set(aid_to_bd.keys()) | heard
+        catalog.discard(local_aid)
+        return _to_bd(catalog)
 
     def _on_presence_candidate(self, bd_addr: str, addr_type: str, _seen: float) -> None:
         bd = bd_addr.upper()
