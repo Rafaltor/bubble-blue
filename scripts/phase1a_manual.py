@@ -7,7 +7,7 @@ import time
 from cryptography.exceptions import InvalidTag
 
 # Ensure project root is importable when running as a script:
-#   python3 tests/test_phase1a.py ...
+#   python3.14 scripts/phase1a_manual.py ...
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -31,10 +31,10 @@ from src.transport.l2cap import L2CAPTransport  # noqa: E402
 def _usage() -> None:
     print(
         "Usage:\n"
-        "  python3 tests/test_phase1a.py server\n"
-        "  python3 tests/test_phase1a.py client <PEER_BD_ADDR>\n"
-        "  python3 tests/test_phase1a.py intruder <PEER_BD_ADDR>\n"
-        "  python3 tests/test_phase1a.py replay <PEER_BD_ADDR>",
+        "  python3.14 scripts/phase1a_manual.py server\n"
+        "  python3.14 scripts/phase1a_manual.py client <PEER_BD_ADDR>\n"
+        "  python3.14 scripts/phase1a_manual.py intruder <PEER_BD_ADDR>\n"
+        "  python3.14 scripts/phase1a_manual.py replay <PEER_BD_ADDR>",
         flush=True,
     )
 

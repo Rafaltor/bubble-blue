@@ -53,19 +53,39 @@ def test_make_transport_bt_classic() -> None:
     print("✅ make_transport(bt_classic) → L2CAPTransport")
 
 
-def test_make_transport_ble_unavailable() -> None:
+def test_make_transport_ble() -> None:
+    """
+    Either outcome is correct — which one depends on the interpreter.
+
+    Boards run CPython 3.14+ with LE L2CAP sockets, so the transport builds.
+    On an older build the factory must fail with an actionable message rather
+    than an opaque ImportError.
+    """
     try:
-        make_transport("ble_l2cap", quiet=True)
-        raise AssertionError("expected RuntimeError for missing ble_l2cap")
+        t = make_transport("ble_l2cap", quiet=True)
     except RuntimeError as exc:
         if "ble_l2cap" not in str(exc).lower():
             raise AssertionError(f"unexpected error: {exc}") from exc
-    print("✅ make_transport(ble_l2cap) raises clearly when module missing")
+        print("✅ make_transport(ble_l2cap) raises clearly when unsupported")
+        return
+    assert isinstance(t, ManagedTransport)
+    print("✅ make_transport(ble_l2cap) → BLEL2CAPTransport")
+
+
+def test_make_transport_unknown_kind() -> None:
+    try:
+        make_transport("carrier_pigeon", quiet=True)
+    except ValueError as exc:
+        assert "carrier_pigeon" in str(exc)
+        print("✅ make_transport rejects unknown kinds")
+        return
+    raise AssertionError("expected ValueError for unknown transport kind")
 
 
 if __name__ == "__main__":
     test_l2cap_satisfies_transport_protocol()
     test_sim_transport_satisfies_transport_protocol()
     test_make_transport_bt_classic()
-    test_make_transport_ble_unavailable()
+    test_make_transport_ble()
+    test_make_transport_unknown_kind()
     print("\n✅ transport protocol tests passed")
