@@ -395,11 +395,15 @@ class ChatWindow(Gtk.ApplicationWindow):
             self._add_system(reason)
         return False
 
+    def _set_identity(self, local: str) -> None:
+        if local and local != self._local:
+            self._local = local
+            self._identity.set_label(local)
+
     def _on_event(self, frame: dict) -> bool:
         ev = frame.get("ev")
         if ev == "hello":
-            self._local = frame.get("local", "")
-            self._identity.set_label(self._local)
+            self._set_identity(frame.get("local", ""))
             self._update_peers(frame.get("peers", []), frame.get("relay", False))
             if not self._seen_history:
                 self._seen_history = True
@@ -418,6 +422,9 @@ class ChatWindow(Gtk.ApplicationWindow):
                 float(frame.get("ts", 0)),
             )
         elif ev == "peers":
+            # Carries the address too: connecting while the daemon is still
+            # starting yields a hello with none.
+            self._set_identity(frame.get("local", ""))
             self._update_peers(frame.get("peers", []), frame.get("relay", False))
         elif ev == "ack" and not frame.get("ok", True):
             self._add_system(f"envoi refusé : {frame.get('error', 'inconnu')}")

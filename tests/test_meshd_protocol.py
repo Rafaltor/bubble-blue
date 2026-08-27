@@ -224,6 +224,29 @@ def test_reconnecting_ui_gets_the_conversation_back():
         second.close()
 
 
+def test_an_address_learned_after_connect_is_broadcast():
+    # The socket is bound before the node has started, so a client can connect
+    # in time to get a hello with no address. The periodic event is what makes
+    # that recoverable rather than permanent.
+    node = _FakeNode()
+    node.local_bd_addr = ""
+    with _Harness(node) as h:
+        conn = h.connect()
+        assert conn.next_frame("hello")["local"] == ""
+
+        threading.Thread(target=h.daemon._poll_loop, daemon=True).start()
+        node.local_bd_addr = _LOCAL
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            peers = conn.next_frame("peers", timeout=4.0)
+            if peers["local"]:
+                break
+        assert peers["local"] == _LOCAL
+        assert peers["epoch"] == 3
+        conn.close()
+
+
 def test_garbage_does_not_kill_the_daemon():
     node = _FakeNode()
     with _Harness(node) as h:
@@ -254,6 +277,7 @@ if __name__ == "__main__":
         test_send_failure_is_reported_not_swallowed,
         test_incoming_message_reaches_every_client,
         test_reconnecting_ui_gets_the_conversation_back,
+        test_an_address_learned_after_connect_is_broadcast,
         test_garbage_does_not_kill_the_daemon,
         test_unknown_command_is_rejected,
     ):

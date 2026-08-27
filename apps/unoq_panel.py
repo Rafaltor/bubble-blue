@@ -132,6 +132,15 @@ class PanelBridge:
             elif ev == "peers":
                 self.peers = len(frame.get("peers") or [])
                 self.relay = bool(frame.get("relay"))
+                # Also carries the address and epoch, which the hello may have
+                # been too early to know.
+                self.local = str(frame.get("local") or self.local)
+                self.epoch = int(frame.get("epoch") or self.epoch)
+            elif ev == "ack":
+                if not frame.get("ok", True):
+                    print(f"panel: envoi refuse ({frame.get('error', 'inconnu')})",
+                          file=sys.stderr, flush=True)
+                return
             elif ev == "message":
                 self.msg_from = str(frame.get("from", ""))
                 self.msg_text = str(frame.get("text", ""))
@@ -158,7 +167,11 @@ class PanelBridge:
             return
         if not 0 <= idx < len(self.presets):
             return
-        self._send({"cmd": "send", "text": self.presets[idx][1], "id": self._next_id()})
+        label, text = self.presets[idx]
+        # A tap is a deliberate act by whoever is standing at the board, so it
+        # belongs in the log whether or not the mesh accepts it.
+        print(f"panel: bouton {idx} ({label}) -> {text!r}", flush=True)
+        self._send({"cmd": "send", "text": text, "id": self._next_id()})
 
     def _next_id(self) -> int:
         with self._send_lock:

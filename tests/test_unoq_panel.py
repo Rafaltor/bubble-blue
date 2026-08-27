@@ -171,6 +171,19 @@ def test_presets_accept_a_label_or_stand_alone():
         raise AssertionError(f"{bad!r} aurait du etre refuse")
 
 
+def test_an_address_learned_late_still_reaches_the_panel():
+    # meshd binds its socket before the node has an address, so a panel that
+    # starts with it gets an empty hello and must take the correction.
+    panel = PanelBridge(_FakeLink(), _PRESETS, "/nonexistent")
+    panel.apply({"ev": "hello", "local": "", "peers": [], "relay": False, "epoch": 0})
+    assert panel.snapshot()["local"] == ""
+
+    panel.apply({"ev": "peers", "peers": ["BB:BB:BB:BB:BB:BB"],
+                 "relay": True, "local": _LOCAL, "epoch": 4})
+    snap = panel.snapshot()
+    assert (snap["local"], snap["peers"], snap["epoch"]) == (_LOCAL, 1, 4)
+
+
 def test_snapshot_cuts_text_to_the_three_lines_available():
     panel = PanelBridge(_FakeLink(), _PRESETS, "/nonexistent")
     panel.apply({"ev": "hello", "local": _LOCAL, "peers": [], "relay": False, "epoch": 1})
@@ -259,6 +272,7 @@ if __name__ == "__main__":
     for fn in (
         test_accents_are_folded_to_the_font_the_sketch_has,
         test_presets_accept_a_label_or_stand_alone,
+        test_an_address_learned_late_still_reaches_the_panel,
         test_snapshot_cuts_text_to_the_three_lines_available,
         test_peer_changes_reach_the_panel,
         test_incoming_message_is_pushed_to_the_sketch,

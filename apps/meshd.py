@@ -94,8 +94,7 @@ class MeshDaemon:
         self._clients_lock = threading.Lock()
         self._history: deque = deque(maxlen=HISTORY_LIMIT)
         self._history_lock = threading.Lock()
-        self._last_peers: tuple = ()
-        self._last_relay: bool | None = None
+        self._last_view: tuple | None = None
         self._stopping = threading.Event()
         self._srv: socket.socket | None = None
 
@@ -130,14 +129,29 @@ class MeshDaemon:
     def _poll_loop(self) -> None:
         while not self._stopping.is_set():
             try:
-                peers = tuple(sorted(self.node.peers()))
-                relay = bool(self.node.is_relay())
+                view = (
+                    tuple(sorted(self.node.peers())),
+                    bool(self.node.is_relay()),
+                    str(self.node.local_bd_addr or ""),
+                    int(self.node.current_epoch()),
+                )
             except Exception:  # noqa: BLE001 — node still starting up
                 self._stopping.wait(_POLL_INTERVAL_S)
                 continue
-            if peers != self._last_peers or relay != self._last_relay:
-                self._last_peers, self._last_relay = peers, relay
-                self._broadcast({"ev": "peers", "peers": list(peers), "relay": relay})
+            if view != self._last_view:
+                self._last_view = view
+                peers, relay, local, epoch = view
+                # local and epoch ride along because the socket is bound before
+                # the node has finished starting: a client that connects during
+                # those seconds gets a hello with no address, and this is what
+                # corrects it.
+                self._broadcast({
+                    "ev": "peers",
+                    "peers": list(peers),
+                    "relay": relay,
+                    "local": local,
+                    "epoch": epoch,
+                })
             self._stopping.wait(_POLL_INTERVAL_S)
 
     # ---- client handling ------------------------------------------------
@@ -153,7 +167,7 @@ class MeshDaemon:
             history = list(self._history)
         return {
             "ev": "hello",
-            "local": self.node.local_bd_addr,
+            "local": str(self.node.local_bd_addr or ""),
             "relay": relay,
             "epoch": epoch,
             "peers": peers,

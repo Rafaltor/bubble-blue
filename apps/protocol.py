@@ -11,8 +11,13 @@ Events flow daemon -> UI, commands flow UI -> daemon:
 
     {"ev": "hello",   "local": str, "relay": bool, "epoch": int,
                       "peers": [str], "history": [message, ...]}
+
+``peers`` repeats ``local`` and ``epoch`` so a client is not stuck with whatever
+was true at connect time: the socket is bound before the node has finished
+starting, so an early "hello" legitimately carries an empty address.
+
     {"ev": "message", "from": str, "text": str, "ts": float, "mine": bool}
-    {"ev": "peers",   "peers": [str], "relay": bool}
+    {"ev": "peers",   "peers": [str], "relay": bool, "local": str, "epoch": int}
     {"ev": "log",     "text": str, "error": bool}
 
     {"cmd": "send", "text": str, "id": int}
