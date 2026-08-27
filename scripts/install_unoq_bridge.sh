@@ -9,7 +9,8 @@
 #
 #   ./scripts/install_unoq_bridge.sh
 #
-# Needs sudo for docker and apt, nothing else. Re-running is harmless.
+# Only the msgpack install needs sudo; the arduino account is already in the
+# docker group. Re-running is harmless.
 
 set -euo pipefail
 
@@ -31,27 +32,28 @@ else
 fi
 
 say "== image App Lab =="
-IMAGE=$(sudo docker images --format '{{.Repository}}:{{.Tag}}' \
+docker info >/dev/null 2>&1 || die "docker inaccessible — le compte est-il dans le groupe docker ?"
+
+IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' \
         | grep "^${IMAGE_REPO}:" | sort -V | tail -1 || true)
 [ -n "$IMAGE" ] || die "image ${IMAGE_REPO} absente — ouvrir App Lab une fois pour la telecharger"
 say "   $IMAGE"
 
 # Resolve the interpreter directory inside the image rather than hardcoding a
 # Python version that will move under us on the next App Lab release.
-SITE=$(sudo docker run --rm --entrypoint sh "$IMAGE" -c \
+SITE=$(docker run --rm --entrypoint sh "$IMAGE" -c \
        'ls -d /usr/local/lib/python*/site-packages/arduino/app_utils' 2>/dev/null | head -1)
 [ -n "$SITE" ] || die "arduino/app_utils introuvable dans $IMAGE"
 
 say "== extraction =="
-CID=$(sudo docker create "$IMAGE")
-trap 'sudo docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+CID=$(docker create "$IMAGE")
+trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 
 TMP=$(mktemp -d)
 for mod in bridge.py logger.py; do
-  sudo docker cp "$CID:$SITE/$mod" "$TMP/$mod" >/dev/null \
+  docker cp "$CID:$SITE/$mod" "$TMP/$mod" >/dev/null \
     || die "copie de $mod echouee"
 done
-sudo chown "$(id -u):$(id -g)" "$TMP"/*.py
 
 PKG="$DEST/arduino/app_utils"
 mkdir -p "$PKG"
