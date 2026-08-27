@@ -456,6 +456,20 @@ def main() -> int:
     ap.add_argument("--socket", default=socket_path())
     ap.add_argument("--kiosk", action="store_true", help="fullscreen, no cursor")
     args = ap.parse_args()
+
+    # Launched over SSH with no panel attached this would otherwise die deep
+    # inside GTK on a null display, which says nothing useful.
+    # init_check() alone still reports success with no panel attached, so the
+    # display itself is what has to be checked.
+    if not Gtk.init_check() or Gdk.Display.get_default() is None:
+        print(
+            "aucun affichage disponible.\n"
+            "  - sur un bureau : lancer depuis la session graphique\n"
+            "  - sur une board dédiée : cage -- python3 apps/screen_ui.py --kiosk\n"
+            "  - sans écran du tout : python3 scripts/meshd_client.py",
+            file=sys.stderr,
+        )
+        return 1
     return ScreenApp(args.socket, args.kiosk).run([])
 
 

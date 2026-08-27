@@ -539,6 +539,7 @@ Cette frontière est un choix, pas seulement une contrainte :
 | `apps/protocol.py` | les deux | — | Format de trame partagé |
 | `scripts/meshd_client.py` | système | utilisateur | Client terminal (sans écran) |
 | `scripts/meshd_fake.py` | système | utilisateur | Démon simulé, sans radio |
+| `scripts/start_screen.sh` | — | — | Lanceur : démon + UI en une commande |
 
 Le protocole complet est décrit en tête de [`apps/protocol.py`](apps/protocol.py).
 
@@ -552,14 +553,49 @@ python3 scripts/meshd_fake.py --socket /tmp/bb.sock &
 python3 apps/screen_ui.py    --socket /tmp/bb.sock
 ```
 
-### Sur une board
+### Brancher la dalle (DFRobot DFR0506, 7″ 1024×600)
+
+La dalle est **HDMI pour la vidéo** et **micro-USB pour le tactile** (HID, sans
+driver) — deux câbles, pas un. Côté matériel :
+
+- alimentation **≥ 1,5 A en 5 V**, sinon le tactile devient mou (cause n°1 de
+  « l’écran répond mal ») ;
+- rafraîchissement **43 Hz**, pas 60 Hz — à 60 Hz l’image ne remplit pas la dalle ;
+- luminosité réglable uniquement par le **potentiomètre au dos**, pas en logiciel.
+
+Vérifier que la dalle est vue avant de lancer quoi que ce soit :
 
 ```bash
-# 1. le démon (root, une seule instance)
-sudo python3.14 apps/meshd.py
+cat /sys/class/drm/card0-HDMI-A-1/status     # doit passer à "connected"
+```
 
-# 2. l'interface, en utilisateur normal
-python3 apps/screen_ui.py --kiosk
+### Lancer
+
+Une seule commande, qui démarre le démon s’il ne tourne pas, attend la socket,
+puis choisit le mode d’affichage :
+
+```bash
+./scripts/start_screen.sh              # auto
+./scripts/start_screen.sh --kiosk      # force cage (board dédiée)
+./scripts/start_screen.sh --windowed   # force une fenêtre (dans un bureau)
+./scripts/start_screen.sh --fake       # mesh simulé, sans adaptateur ni root
+```
+
+Le mode dépend de ce que la board a déjà :
+
+| Board | Ce qui se passe à l’écran | Mode |
+|-------|---------------------------|------|
+| `rubik-q` | GNOME est installé → **écran de connexion GDM** | ouvrir un terminal, `windowed` |
+| `rubik-inria`, `rubik3` | headless, rien ne tient le DRM | `kiosk` via `cage` |
+
+Le démon **reste en vie quand l’interface se ferme** : les liens mettent ~40 s à
+converger, il serait absurde de les perdre en relançant l’UI.
+
+Lancé manuellement, l’équivalent est :
+
+```bash
+sudo python3.14 apps/meshd.py          # 1. démon (root, une seule instance)
+python3 apps/screen_ui.py --kiosk      # 2. interface, utilisateur normal
 ```
 
 Lancé via `sudo`, le démon donne l’accès à la socket au **groupe de
@@ -587,6 +623,16 @@ pas d’environnement de bureau :
 
 ```bash
 cage -- python3 apps/screen_ui.py --kiosk
+```
+
+Deux conditions pour que `cage` démarre : **rien d’autre ne doit tenir le DRM**
+(sur une board avec GDM actif, il faut `sudo systemctl disable --now gdm3`), et
+l’utilisateur doit pouvoir lire les périphériques d’entrée. Lancé depuis une
+session locale, logind s’en charge ; lancé **depuis SSH** il n’y a pas de seat,
+et il faut alors ajouter l’utilisateur au groupe `input` :
+
+```bash
+sudo usermod -aG input "$USER"      # relogin nécessaire
 ```
 
 ### Interface
