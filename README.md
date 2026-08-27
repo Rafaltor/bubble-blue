@@ -415,6 +415,31 @@ ssh user@la-machine 'timeout 8 sudo btmgmt info'   # doit répondre en < 2 s
 Un reboot ne corrige **pas** ce cas — il faut lancer le nœud depuis un shell
 non confiné.
 
+#### Les boards se découvrent mais ne se connectent jamais
+
+| | |
+|--|--|
+| **Symptôme** | `hciconfig` dit `UP RUNNING`, les voisins apparaissent puis disparaissent (`voisins=1` puis `0`), et le démon logue `BLE L2CAP socket error : [Errno 38] Function not implemented`. |
+| **Cause** | Le contrôleur QCA rejette `Opcode 0x2039` (*LE Extended Create Connection*) avec `-38`. Observé sur une board après **4 semaines d’uptime** : le firmware se dégrade sans que l’adaptateur tombe. |
+| **Solution** | Recharger le firmware — un `restart bluetooth` seul ne suffit pas, il faut faire descendre l’interface d’abord. Pas besoin de rebooter. |
+
+```bash
+sudo dmesg | grep -i 'hci0'            # chercher "Opcode 0x2039 failed: -38"
+
+sudo hciconfig hci0 down
+sudo systemctl restart bluetooth
+sudo hciconfig hci0 up
+
+sudo dmesg | tail -5                   # attendu : "QCA setup on UART is completed"
+```
+
+L’`ENOSYS` vient du contrôleur, **pas de Python** : vérifier au passage que la
+socket se crée bien, sinon c’est l’interpréteur qui est en cause (§1) :
+
+```bash
+python3.14 -c "import socket; socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)"
+```
+
 ---
 
 ### 5. Pas d’appairage Bluetooth requis (sécurité applicative)
@@ -529,14 +554,15 @@ Cette frontière est un choix, pas seulement une contrainte :
 - l’interface ne tourne **pas en root** — seul le démon en a besoin ;
 - l’UI peut planter ou être relancée **sans faire tomber les liens**, qui
   mettent ~40 s à converger ;
-- c’est exactement là que passerait le Bridge RPC si les UNO Q étaient équipées
-  de leur shield (l’UI serait alors un sketch côté STM32, le démon ne bouge pas).
+- c’est la frontière qu’emprunte le panneau UNO Q, où l’affichage est un sketch
+  sur le STM32 : le démon ne bouge pas, seul le client change.
 
 | Fichier | Interpréteur | Droits | Rôle |
 |---------|--------------|--------|------|
 | `apps/meshd.py` | 3.14 | root | Porte le `BBNode`, sert la socket |
 | `apps/screen_ui.py` | système | utilisateur | Interface tactile GTK4 |
 | `apps/protocol.py` | les deux | — | Format de trame partagé |
+| `apps/unoq_panel.py` | système | utilisateur | Panneau UNO Q : mesh → sketch |
 | `scripts/meshd_client.py` | système | utilisateur | Client terminal (sans écran) |
 | `scripts/meshd_fake.py` | système | utilisateur | Démon simulé, sans radio |
 | `scripts/start_screen.sh` | — | — | Lanceur : démon + UI en une commande |
@@ -651,10 +677,125 @@ de saisie n’a pas été touchée, pour laisser la hauteur à la conversation.
 
 | Vérification | Résultat |
 |--------------|----------|
-| Contrat démon↔UI (`tests/test_meshd_protocol.py`) | 7 cas, sans adaptateur |
+| Contrat démon↔UI (`tests/test_meshd_protocol.py`) | 8 cas, sans adaptateur |
 | Chat réel à travers le démon (arduinoq ↔ rubik-inria) | **14 envoyés / 14 reçus**, 0 refus |
 | UI GTK4 sur Rubik Pi 3, 1024×600 | rendu conforme sur le matériel cible |
 | Tenue de l’UI (démon simulé) | 4 h continues, aucune erreur |
+
+---
+
+## Panneau d’état UNO Q (`apps/unoq/`)
+
+Sur Rubik l’écran est en HDMI et l’interface est une application Linux. Sur
+UNO Q le shield est câblé **au STM32**, pas au SoC Linux : l’affichage doit donc
+être un sketch. Le mesh, lui, ne bouge pas — il reste côté Linux, où il est déjà
+validé.
+
+```
+meshd.py (3.14, root) ──socket Unix──▶ unoq_panel.py (système, utilisateur)
+                                              │  Router Bridge (msgpack-RPC)
+                                              ▼
+                                    /var/run/arduino-router.sock
+                                              │
+                                       panel.ino (STM32)
+                                              │
+                                  ILI9341 (SPI) + TSC2007 (I²C)
+```
+
+Le contrat RPC tient en quatre méthodes, décrites en tête de
+[`apps/unoq/panel/panel.ino`](apps/unoq/panel/panel.ino) : Linux pousse
+`panel_status`, `panel_message` et `panel_presets`, le sketch rappelle
+`panel_preset(index)` quand un bouton est touché. **Les deux boutons envoient donc
+toujours ce qu’ils affichent** : les libellés viennent du même endroit que les
+textes.
+
+Le texte part déjà **tronqué et translittéré en ASCII** : la police intégrée de
+GFX n’a pas d’accents, et découper côté Linux évite au sketch une gymnastique de
+chaînes pour laquelle il n’a pas de budget RAM.
+
+### Installer la bibliothèque du Bridge
+
+Le client Python du Router Bridge **n’est pas sur PyPI** : il est livré dans
+l’image conteneur d’App Lab. Le script en extrait les deux seuls modules utiles —
+importer le paquet complet tirerait numpy, opencv et une pile audio pour un
+panneau d’état.
+
+```bash
+./scripts/install_unoq_bridge.sh      # → ~/.local/lib/bubble-blue
+```
+
+### Flasher le sketch
+
+```bash
+arduino-cli lib install "Adafruit GFX Library" "Adafruit ILI9341" "Adafruit TSC2007"
+arduino-cli compile -u -b arduino:zephyr:unoq apps/unoq/panel
+```
+
+Compiler **depuis le chemin du dépôt** : `arduino-cli` retrouve le binaire par un
+hachage du chemin, et un `upload` après compilation ailleurs échoue sur
+« Compiled sketch not found ». Ne pas passer `-p` non plus — le port réseau
+réclame des identifiants interactifs, alors que sans port l’outil local
+(`remoteocd`) fait le travail.
+
+### Lancer
+
+```bash
+sudo python3.14 apps/meshd.py                                    # 1. le mesh
+python3 apps/unoq_panel.py --preset "OK|Bien recu" \
+                           --preset "ARRIVE|J'arrive"            # 2. le panneau
+```
+
+`--preset` accepte `LABEL|texte` — le libellé est ce qui tient sur le bouton, le
+texte est ce qui part dans le chat. Sans barre verticale, le libellé est déduit
+du texte.
+
+### Voir le panneau sans shield
+
+`panel_fake_sketch.py` enregistre les mêmes méthodes RPC que le sketch et redessine
+le panneau en texte, avec le même découpage 25 colonnes × 3 lignes. C’est un aperçu
+de la mise en page, et surtout un moyen d’exercer toute la chaîne avant qu’un
+shield existe :
+
+```bash
+python3 scripts/panel_fake_sketch.py     # 1/2 + Entrée = appui bouton
+```
+
+Ne pas le laisser tourner en même temps que le vrai sketch : les deux
+fourniraient les mêmes méthodes.
+
+### Brancher le shield (Adafruit 1651, 2,8″ 320×240)
+
+Écran **SPI** (DC 9, CS 10), tactile **résistif TSC2007 en I²C** à `0x48` — les
+révisions récentes ont remplacé le STMPE610, qui n’est plus fabriqué. Le shield
+prend son niveau logique sur **IOREF**, que l’UNO Q fournit en 3,3 V.
+
+> **Si l’écran reste noir.** Le shield existe en deux câblages SPI : broches
+> 11-13, ou header ICSP. Selon la révision reçue, il faut couper/ponter les
+> jumpers au dos — c’est la première chose à vérifier avant de suspecter le code.
+
+> **Si les boutons répondent à côté.** Les constantes de calibration en tête du
+> sketch sont les valeurs nominales d’Adafruit, et les dalles varient. Chaque
+> appui émet `panel_touch_raw` : lire les couples bruts dans le journal Linux et
+> ajuster `TS_MINX`/`TS_MAXX`/`TS_MINY`/`TS_MAXY`. La rangée de boutons est
+> découpée en deux moitiés d’écran, donc une calibration fausse échange les deux
+> boutons au pire — elle ne les rend pas inatteignables.
+
+### Un UNO Q en HDMI plutôt qu’en shield
+
+Rien à redévelopper : la Debian 13 des UNO Q a `gir1.2-gtk-4.0` (4.18) et `cage`
+en dépôt, donc l’application GTK4 des Rubik tourne telle quelle. C’est
+`start_screen.sh` qui s’applique, pas cette section.
+
+### Ce qui est vérifié
+
+| Vérification | Résultat |
+|--------------|----------|
+| Logique du panneau (`tests/test_unoq_panel.py`) | 11 cas, sans shield ni radio |
+| Empreinte du sketch sur STM32U585 | **37,5 Ko flash (4 %)**, 4,3 Ko RAM (3 %) |
+| Sketch flashé, méthodes RPC jointes depuis Linux | `panel_status` / `panel_message` / `panel_presets` : OK |
+| Poussée continue vers le sketch réel | 90 s, 0 erreur |
+| Bouton → mesh (arduinoq → arduino2) | `J'arrive` reçu sur la carte pair |
+| Message entrant → panneau | affiché, coupé sur 2 lignes, expéditeur correct |
 
 ---
 
@@ -674,6 +815,7 @@ Bancs matériels (nécessitent des boards en portée) :
 |--------|-------|
 | `scripts/bb_probe.py` | Soak multi-board : stabilité des liens + livraison chat, résumé JSON |
 | `scripts/meshd_client.py` | Chat en terminal via le démon — valide une board sans écran |
+| `scripts/panel_fake_sketch.py` | Aperçu texte du panneau UNO Q — exerce le Bridge sans shield |
 | `scripts/phase1a_manual.py` | Banc crypto interactif (`server` / `client` / `intruder` / `replay`) |
 
 Soak type — même commande sur chaque board, puis comparer les résumés :
@@ -711,6 +853,7 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `src/forwarding/` | CDS + forwarder |
 | `src/security/` | Crypto / keys / signing |
 | `apps/` | Application écran : démon mesh + UI GTK4 |
+| `apps/unoq/panel/` | Sketch STM32 du panneau d’état (shield Adafruit 1651) |
 | `tests/` | Tests autonomes (sans pytest) |
 | `sim/` | Simulation (pas de modèle OTA presence) |
 | `docs/` | Config, PDF sécu, HTML |
@@ -718,8 +861,10 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `scripts/bb_probe.py` | Soak stabilité + chat (résumé JSON) |
 | `scripts/meshd_client.py` | Client chat en terminal (sans écran) |
 | `scripts/meshd_fake.py` | Démon simulé pour développer l’UI |
+| `scripts/panel_fake_sketch.py` | Aperçu texte du panneau UNO Q |
 | `scripts/phase1a_manual.py` | Banc crypto interactif |
 | `scripts/install_py314_deps.sh` | Install deps root |
+| `scripts/install_unoq_bridge.sh` | Client Router Bridge pour le panneau UNO Q |
 
 ---
 
