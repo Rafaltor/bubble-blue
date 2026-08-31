@@ -74,10 +74,12 @@ class _FakeLink:
         self.pushes = []
         self.fail = fail
         self.handler = None
+        self.health = None
         self._lock = threading.Lock()
 
-    def provide_preset(self, handler):
+    def provide_preset(self, handler, health):
         self.handler = handler
+        self.health = health
 
     def push(self, method, *params):
         if self.fail:
@@ -238,6 +240,22 @@ def test_button_sends_the_message_not_the_label():
         assert node.sent == ["J'arrive dans cinq minutes"]
 
 
+def test_a_tap_from_linux_is_the_same_path_as_a_finger():
+    # --tap notifies panel_preset, which is exactly what the sketch calls, so a
+    # board with a dead touch controller still sends the same message.
+    node = _FakeNode()
+    link = _FakeLink()
+    with _Harness(node, link) as h:
+        assert h.link.health is not None  # the sketch can report touch loss
+        h.link.health(False)
+
+        h.link.handler(0)
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline and not node.sent:
+            time.sleep(0.05)
+        assert node.sent == ["Bien recu"]
+
+
 def test_a_bogus_button_index_is_ignored():
     node = _FakeNode()
     link = _FakeLink()
@@ -278,6 +296,7 @@ if __name__ == "__main__":
         test_incoming_message_is_pushed_to_the_sketch,
         test_panel_shows_the_labels_it_will_actually_send,
         test_button_sends_the_message_not_the_label,
+        test_a_tap_from_linux_is_the_same_path_as_a_finger,
         test_a_bogus_button_index_is_ignored,
         test_a_silent_sketch_does_not_kill_the_bridge,
         test_losing_meshd_blanks_the_numbers_rather_than_lying,

@@ -80,9 +80,19 @@ class BridgeLink:
 
         self._bridge = Bridge
 
-    def provide_preset(self, handler) -> None:
+    def provide_preset(self, handler, health) -> None:
         self._bridge.provide("panel_preset", handler)
+        self._bridge.provide("panel_health", health)
         self._bridge.provide("panel_touch_raw", lambda x, y: None)
+
+    def tap(self, index: int) -> None:
+        """Fire a preset as if the screen had been touched.
+
+        Goes through the same RPC name the sketch uses, so it reaches whichever
+        unoq_panel.py is running and sends that instance's preset text — no need
+        to repeat --preset here, and no second source of truth.
+        """
+        self._bridge.notify("panel_preset", index)
 
     def push(self, method: str, *params) -> None:
         # Short timeout: a sketch that is flashing or rebooting must not stall
@@ -218,8 +228,16 @@ class PanelBridge:
 
     # ---- lifecycle -------------------------------------------------------
 
+    def on_health(self, touch_ok) -> None:
+        """The sketch reporting whether its touch controller answered."""
+        if touch_ok:
+            print("panel: tactile operationnel", flush=True)
+        else:
+            print("panel: TACTILE HS — boutons inertes, utiliser --tap 0|1",
+                  file=sys.stderr, flush=True)
+
     def run(self) -> int:
-        self.link.provide_preset(self.send_preset)
+        self.link.provide_preset(self.send_preset, self.on_health)
         threading.Thread(target=self._push_loop, daemon=True).start()
 
         while not self._stop.is_set():
@@ -264,7 +282,23 @@ def main() -> int:
         metavar="[LABEL|]TEXTE",
         help="message pre-enregistre (deux fois; LABEL est ce qui s'affiche)",
     )
+    ap.add_argument(
+        "--tap",
+        type=int,
+        choices=(0, 1),
+        help="declencher un bouton sans toucher l'ecran, puis quitter "
+             "(demande un unoq_panel.py deja lance)",
+    )
     args = ap.parse_args()
+
+    if args.tap is not None:
+        try:
+            BridgeLink().tap(args.tap)
+        except ImportError:
+            print("panel: bibliotheque arduino absente — lancer "
+                  "scripts/install_unoq_bridge.sh", file=sys.stderr)
+            return 1
+        return 0
 
     specs = args.preset or ["OK|Bien recu", "ARRIVE|J'arrive"]
     if len(specs) != 2:

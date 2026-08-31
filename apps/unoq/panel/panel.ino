@@ -12,6 +12,8 @@
 //                    panel_presets(label0, label1)
 //   panel -> Linux   panel_preset(index)
 //                    panel_touch_raw(x, y)   diagnostics, see CALIBRATION
+//                    panel_health(touch_ok)  so a dead touch panel is visible
+//                                            over SSH, not only on the screen
 //
 // Text arrives pre-truncated and transliterated to ASCII: the built-in GFX font
 // has no accents, and doing it on the Linux side keeps this sketch free of
@@ -36,6 +38,15 @@ static const uint8_t TSC_ADDR = 0x48;
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC);
 Adafruit_TSC2007 ts;
 static bool touch_ok = false;
+
+// The controller may be absent at boot and turn up later — a cold I²C bus, or a
+// shield reseated on a running board. Latching the failure would mean the
+// buttons stay dead until someone presses reset, so keep probing. begin() frees
+// its previous interface before allocating a new one, so this does not leak.
+static const uint32_t TOUCH_PROBE_MS = 5000;
+static uint32_t last_touch_probe_ms = 0;
+static bool touch_probed_once = false;
+static bool touch_reported = false;
 
 // CALIBRATION. These are Adafruit's nominal values for the TSC2007; panels
 // vary. panel_touch_raw() notifies every press, so if the buttons respond in
@@ -69,6 +80,7 @@ static const uint16_t COL_OK = 0x07E0;   // green
 static const uint16_t COL_WARN = 0xFD20;  // orange
 static const uint16_t COL_BTN = 0x0210;   // dark green
 static const uint16_t COL_BTN_ON = 0x05E0;
+static const uint16_t COL_BTN_OFF = 0x2104;  // grey: touch is gone, button is inert
 
 // Message body: 25 characters per line at text size 2, three lines.
 static const uint8_t MSG_COLS = 25;
@@ -178,9 +190,16 @@ static void draw_status(const char *local, int32_t peers, int32_t epoch, bool li
     return;
   }
 
-  tft.setTextColor(COL_DIM);
+  // The address matters less than knowing the buttons are dead, so the warning
+  // takes its line when the touch controller is missing.
   tft.setCursor(6, STATUS_Y + 4);
-  tft.print(local);
+  if (touch_ok) {
+    tft.setTextColor(COL_DIM);
+    tft.print(local);
+  } else {
+    tft.setTextColor(COL_WARN);
+    tft.print("TACTILE HS - envoyer depuis Linux (--tap)");
+  }
 
   tft.setTextSize(2);
   tft.setTextColor(peers > 0 ? COL_OK : COL_WARN);
@@ -238,12 +257,13 @@ static void draw_message(const char *from, const char *text) {
 
 static void draw_button(uint8_t idx, const char *label, bool active) {
   int16_t x = idx == 0 ? BTN0_X : BTN1_X;
-  tft.fillRoundRect(x, BTN_Y, BTN_W, BTN_H, 6, active ? COL_BTN_ON : COL_BTN);
-  tft.drawRoundRect(x, BTN_Y, BTN_W, BTN_H, 6, COL_OK);
+  uint16_t fill = touch_ok ? (active ? COL_BTN_ON : COL_BTN) : COL_BTN_OFF;
+  tft.fillRoundRect(x, BTN_Y, BTN_W, BTN_H, 6, fill);
+  tft.drawRoundRect(x, BTN_Y, BTN_W, BTN_H, 6, touch_ok ? COL_OK : COL_DIM);
 
   if (label[0] == '\0') label = "...";
   tft.setTextSize(2);
-  tft.setTextColor(COL_TEXT);
+  tft.setTextColor(touch_ok ? COL_TEXT : COL_DIM);
   int16_t tw = strlen(label) * 12;
   if (tw > BTN_W - 8) tw = BTN_W - 8;
   tft.setCursor(x + (BTN_W - tw) / 2, BTN_Y + (BTN_H - 16) / 2);
@@ -258,6 +278,27 @@ static void draw_button(uint8_t idx, const char *label, bool active) {
 static int8_t hit_test(int16_t sx, int16_t sy) {
   if (sy < BTN_Y - 8) return -1;
   return sx < W / 2 ? 0 : 1;
+}
+
+// Retry until the controller answers, and tell Linux either way: a panel whose
+// buttons do nothing is otherwise indistinguishable from a mesh with no peers.
+static void probe_touch() {
+  if (touch_ok) return;
+  if (touch_probed_once && millis() - last_touch_probe_ms < TOUCH_PROBE_MS) return;
+  touch_probed_once = true;
+  last_touch_probe_ms = millis();
+
+  if (ts.begin(TSC_ADDR, &Wire)) {
+    touch_ok = true;
+    k_mutex_lock(&state_mutex, K_FOREVER);
+    dirty_status = dirty_btn = true;
+    k_mutex_unlock(&state_mutex);
+    Bridge.notify("panel_health", true);
+    touch_reported = true;
+  } else if (!touch_reported) {
+    touch_reported = true;
+    Bridge.notify("panel_health", false);
+  }
 }
 
 static void poll_touch() {
@@ -298,22 +339,17 @@ void setup() {
   tft.fillScreen(COL_BG);
   tft.setTextWrap(false);
 
-  touch_ok = ts.begin(TSC_ADDR, &Wire);
-
   Bridge.begin();
   Bridge.provide("panel_status", on_status);
   Bridge.provide("panel_message", on_message);
   Bridge.provide("panel_presets", on_presets);
 
-  if (!touch_ok) {
-    tft.setTextSize(1);
-    tft.setTextColor(COL_WARN);
-    tft.setCursor(6, H - 10);
-    tft.print("TSC2007 absent - tactile desactive");
-  }
+  // After Bridge.begin() so the first verdict can be reported, not just drawn.
+  probe_touch();
 }
 
 void loop() {
+  probe_touch();
   poll_touch();
 
   char local[20], from[20], text[sizeof(st_msg_text)], label[2][14];
