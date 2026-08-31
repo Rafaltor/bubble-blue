@@ -780,6 +780,38 @@ prend son niveau logique sur **IOREF**, que l’UNO Q fournit en 3,3 V.
 > découpée en deux moitiés d’écran, donc une calibration fausse échange les deux
 > boutons au pire — elle ne les rend pas inatteignables.
 
+### Si le tactile ne répond pas du tout
+
+Le sketch **ne fige pas** le verdict au démarrage : il resonde le TSC2007 toutes
+les 5 s, donc un bus I²C froid ou un shield remis en place sur une carte allumée
+se rattrape sans reset. Tant qu’il n’a pas répondu, les boutons sont **grisés**
+plutôt que faussement actifs, et la bande d’état affiche `TACTILE HS`.
+
+Le verdict remonte à Linux **en réponse au push de statut**, pas par une
+annonce : le MCU démarre bien avant Linux et le panneau se relance librement,
+donc une notification au boot serait criée dans le vide. Elle voyage sur le
+battement de cœur, et n’est journalisée qu’aux transitions :
+
+```
+panel: TACTILE HS - boutons inertes, utiliser --tap 0|1
+```
+
+Le chat reste utilisable sans y toucher — l’envoi passe par le même nom RPC que
+le sketch, donc c’est le panneau en cours d’exécution qui envoie son propre texte
+de préréglage :
+
+```bash
+python3 apps/unoq_panel.py --tap 0      # comme un appui sur le bouton gauche
+python3 apps/unoq_panel.py --tap 1
+```
+
+Si le tactile est mort côté matériel, deux issues, par coût croissant :
+
+| Issue | Ce que ça coûte |
+|-------|-----------------|
+| Écran HDMI sur cette carte plutôt que le shield | rien à développer (voir plus bas) |
+| Boutons physiques sur broches libres (D5/D6) | soudure ou entretoises : le shield recouvre les broches |
+
 ### Un UNO Q en HDMI plutôt qu’en shield
 
 Rien à redévelopper : la Debian 13 des UNO Q a `gir1.2-gtk-4.0` (4.18) et `cage`
@@ -790,12 +822,14 @@ en dépôt, donc l’application GTK4 des Rubik tourne telle quelle. C’est
 
 | Vérification | Résultat |
 |--------------|----------|
-| Logique du panneau (`tests/test_unoq_panel.py`) | 11 cas, sans shield ni radio |
-| Empreinte du sketch sur STM32U585 | **37,5 Ko flash (4 %)**, 4,3 Ko RAM (3 %) |
+| Logique du panneau (`tests/test_unoq_panel.py`) | 13 cas, sans shield ni radio |
+| Empreinte du sketch sur STM32U585 | **38 Ko flash (4 %)**, 4,3 Ko RAM (3 %) |
 | Sketch flashé, méthodes RPC jointes depuis Linux | `panel_status` / `panel_message` / `panel_presets` : OK |
 | Poussée continue vers le sketch réel | 90 s, 0 erreur |
 | Bouton → mesh (arduinoq → arduino2) | `J'arrive` reçu sur la carte pair |
 | Message entrant → panneau | affiché, coupé sur 2 lignes, expéditeur correct |
+| Détection du tactile absent (carte sans shield) | `panel_status` → `False`, signalé **une seule fois** |
+| `--tap` avec tactile HS | préréglage envoyé, même chemin qu’un appui |
 
 ---
 
