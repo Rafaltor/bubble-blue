@@ -7,13 +7,16 @@
 //
 // RPC contract (see apps/unoq_panel.py for the other end):
 //
-//   Linux -> panel   panel_status(local, peers, relay, epoch)
+//   Linux -> panel   panel_status(local, peers, relay, epoch) -> touch_ok
 //                    panel_message(sender, text)
 //                    panel_presets(label0, label1)
 //   panel -> Linux   panel_preset(index)
 //                    panel_touch_raw(x, y)   diagnostics, see CALIBRATION
-//                    panel_health(touch_ok)  so a dead touch panel is visible
-//                                            over SSH, not only on the screen
+//
+// panel_status answers with the touch verdict rather than announcing it: a
+// notification at boot would be shouted into the void, since Linux starts long
+// after the MCU and the panel process can restart at any time. Riding the
+// heartbeat means whoever is listening always has the current answer.
 //
 // Text arrives pre-truncated and transliterated to ASCII: the built-in GFX font
 // has no accents, and doing it on the Linux side keeps this sketch free of
@@ -46,7 +49,6 @@ static bool touch_ok = false;
 static const uint32_t TOUCH_PROBE_MS = 5000;
 static uint32_t last_touch_probe_ms = 0;
 static bool touch_probed_once = false;
-static bool touch_reported = false;
 
 // CALIBRATION. These are Adafruit's nominal values for the TSC2007; panels
 // vary. panel_touch_raw() notifies every press, so if the buttons respond in
@@ -125,7 +127,7 @@ static void copy_str(char *dst, size_t cap, const char *src) {
 
 // ------------------------------------------------------------- RPC handlers
 
-void on_status(String local, int peers, bool relay, int epoch) {
+bool on_status(String local, int peers, bool relay, int epoch) {
   k_mutex_lock(&state_mutex, K_FOREVER);
   if (strcmp(st_local, local.c_str()) != 0) {
     copy_str(st_local, sizeof(st_local), local.c_str());
@@ -141,6 +143,7 @@ void on_status(String local, int peers, bool relay, int epoch) {
   st_linked = true;
   last_push_ms = millis();
   k_mutex_unlock(&state_mutex);
+  return touch_ok;
 }
 
 void on_message(String sender, String text) {
@@ -280,25 +283,20 @@ static int8_t hit_test(int16_t sx, int16_t sy) {
   return sx < W / 2 ? 0 : 1;
 }
 
-// Retry until the controller answers, and tell Linux either way: a panel whose
-// buttons do nothing is otherwise indistinguishable from a mesh with no peers.
+// Retry until the controller answers. Linux reads the outcome from the reply to
+// panel_status, so nothing is announced here.
 static void probe_touch() {
   if (touch_ok) return;
   if (touch_probed_once && millis() - last_touch_probe_ms < TOUCH_PROBE_MS) return;
   touch_probed_once = true;
   last_touch_probe_ms = millis();
 
-  if (ts.begin(TSC_ADDR, &Wire)) {
-    touch_ok = true;
-    k_mutex_lock(&state_mutex, K_FOREVER);
-    dirty_status = dirty_btn = true;
-    k_mutex_unlock(&state_mutex);
-    Bridge.notify("panel_health", true);
-    touch_reported = true;
-  } else if (!touch_reported) {
-    touch_reported = true;
-    Bridge.notify("panel_health", false);
-  }
+  if (!ts.begin(TSC_ADDR, &Wire)) return;
+
+  touch_ok = true;
+  k_mutex_lock(&state_mutex, K_FOREVER);
+  dirty_status = dirty_btn = true;
+  k_mutex_unlock(&state_mutex);
 }
 
 static void poll_touch() {

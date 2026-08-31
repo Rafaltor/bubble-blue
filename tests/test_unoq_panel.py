@@ -70,22 +70,23 @@ class _FakeNode:
 class _FakeLink:
     """Stands in for the Router Bridge. Records pushes, can play dead."""
 
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, touch_ok=True):
         self.pushes = []
         self.fail = fail
+        self.touch_ok = touch_ok
         self.handler = None
-        self.health = None
         self._lock = threading.Lock()
 
-    def provide_preset(self, handler, health):
+    def provide_preset(self, handler):
         self.handler = handler
-        self.health = health
 
     def push(self, method, *params):
         if self.fail:
             raise TimeoutError("sketch muet")
         with self._lock:
             self.pushes.append((method, params))
+        # Only panel_status answers; the others are void on the sketch side.
+        return self.touch_ok if method == "panel_status" else None
 
     def last(self, method):
         with self._lock:
@@ -242,13 +243,10 @@ def test_button_sends_the_message_not_the_label():
 
 def test_a_tap_from_linux_is_the_same_path_as_a_finger():
     # --tap notifies panel_preset, which is exactly what the sketch calls, so a
-    # board with a dead touch controller still sends the same message.
+    # board whose touch controller never answered still sends the same message.
     node = _FakeNode()
-    link = _FakeLink()
+    link = _FakeLink(touch_ok=False)
     with _Harness(node, link) as h:
-        assert h.link.health is not None  # the sketch can report touch loss
-        h.link.health(False)
-
         h.link.handler(0)
         deadline = time.monotonic() + 4.0
         while time.monotonic() < deadline and not node.sent:
@@ -267,6 +265,27 @@ def test_a_bogus_button_index_is_ignored():
 
 
 # ---- neither side may take the process down ------------------------------
+
+
+def test_the_touch_verdict_is_reported_once_per_change():
+    # It rides every heartbeat, so a panel left running for days must not fill
+    # the log with it — only transitions are worth a line.
+    link = _FakeLink(touch_ok=False)
+    panel = PanelBridge(link, _PRESETS, "/nonexistent")
+    panel.apply({"ev": "hello", "local": _LOCAL, "peers": [], "relay": False, "epoch": 1})
+
+    seen = []
+    panel.note_touch = lambda ok, _s=seen: _s.append(bool(ok))
+    for _ in range(3):
+        panel.push_all()
+    assert seen == [False, False, False]  # push_all always forwards the answer
+
+    panel = PanelBridge(_FakeLink(touch_ok=False), _PRESETS, "/nonexistent")
+    panel.note_touch(False)
+    panel.note_touch(False)
+    assert panel._touch_ok is False
+    panel.note_touch(True)
+    assert panel._touch_ok is True
 
 
 def test_a_silent_sketch_does_not_kill_the_bridge():
@@ -298,6 +317,7 @@ if __name__ == "__main__":
         test_button_sends_the_message_not_the_label,
         test_a_tap_from_linux_is_the_same_path_as_a_finger,
         test_a_bogus_button_index_is_ignored,
+        test_the_touch_verdict_is_reported_once_per_change,
         test_a_silent_sketch_does_not_kill_the_bridge,
         test_losing_meshd_blanks_the_numbers_rather_than_lying,
     ):

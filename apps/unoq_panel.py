@@ -80,9 +80,8 @@ class BridgeLink:
 
         self._bridge = Bridge
 
-    def provide_preset(self, handler, health) -> None:
+    def provide_preset(self, handler) -> None:
         self._bridge.provide("panel_preset", handler)
-        self._bridge.provide("panel_health", health)
         self._bridge.provide("panel_touch_raw", lambda x, y: None)
 
     def tap(self, index: int) -> None:
@@ -94,10 +93,10 @@ class BridgeLink:
         """
         self._bridge.notify("panel_preset", index)
 
-    def push(self, method: str, *params) -> None:
+    def push(self, method: str, *params):
         # Short timeout: a sketch that is flashing or rebooting must not stall
         # the pusher, and the next heartbeat will catch up anyway.
-        self._bridge.call(method, *params, timeout=2)
+        return self._bridge.call(method, *params, timeout=2)
 
 
 class PanelBridge:
@@ -122,6 +121,9 @@ class PanelBridge:
         self._send_lock = threading.Lock()
         self._req_id = 0
         self._last_error = ""
+        # None until the sketch has answered once, so the first verdict is
+        # always worth reporting whichever way it goes.
+        self._touch_ok: bool | None = None
 
     # ---- mesh side -------------------------------------------------------
 
@@ -204,7 +206,9 @@ class PanelBridge:
         """Push the whole panel state. Returns False if the sketch is unreachable."""
         s = self.snapshot()
         try:
-            self.link.push("panel_status", s["local"], s["peers"], s["relay"], s["epoch"])
+            health = self.link.push(
+                "panel_status", s["local"], s["peers"], s["relay"], s["epoch"]
+            )
             self.link.push("panel_message", s["msg_from"], s["msg_text"])
             self.link.push("panel_presets", *[p[0] for p in self.presets])
         except Exception as e:  # noqa: BLE001 — sketch may be rebooting
@@ -218,6 +222,8 @@ class PanelBridge:
         if self._last_error:
             print("panel: sketch de nouveau joignable", file=sys.stderr, flush=True)
             self._last_error = ""
+        if health is not None:
+            self.note_touch(health)
         return True
 
     def _push_loop(self) -> None:
@@ -228,16 +234,24 @@ class PanelBridge:
 
     # ---- lifecycle -------------------------------------------------------
 
-    def on_health(self, touch_ok) -> None:
-        """The sketch reporting whether its touch controller answered."""
-        if touch_ok:
+    def note_touch(self, touch_ok) -> None:
+        """Record the sketch's touch verdict, logging only when it changes.
+
+        It rides every heartbeat, so logging each one would bury the log; but a
+        transition is exactly what someone debugging a silent panel needs.
+        """
+        state = bool(touch_ok)
+        if state == self._touch_ok:
+            return
+        self._touch_ok = state
+        if state:
             print("panel: tactile operationnel", flush=True)
         else:
-            print("panel: TACTILE HS — boutons inertes, utiliser --tap 0|1",
+            print("panel: TACTILE HS - boutons inertes, utiliser --tap 0|1",
                   file=sys.stderr, flush=True)
 
     def run(self) -> int:
-        self.link.provide_preset(self.send_preset, self.on_health)
+        self.link.provide_preset(self.send_preset)
         threading.Thread(target=self._push_loop, daemon=True).start()
 
         while not self._stop.is_set():
