@@ -911,7 +911,8 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `apps/unoq/panel/` | Sketch STM32 du panneau d’état (shield Adafruit 1651) |
 | `tests/` | Tests autonomes (sans pytest) |
 | `sim/` | Simulation (pas de modèle OTA presence) |
-| `sim/limits.py` | Étude des limites topologiques (échelle, densité, TTL) |
+| `sim/limits.py` | Limites topologiques et révocation (échelle, densité, TTL) |
+| `scripts/bb_load.py` | Limites de charge (taille, cadence, saturation du lien) |
 | `docs/` | Config, PDF sécu, HTML |
 | `scripts/run_tests.sh` | Runner de tests sans dépendance |
 | `scripts/bb_probe.py` | Sonde par carte : convergence, stabilité, chat (JSON) |
@@ -1278,6 +1279,98 @@ groupe grandit.
 > personne ne possède encore — il produit un échec de déchiffrement par pair
 > (29 sur 30 nœuds). Sans conséquence fonctionnelle, mais cela pollue les journaux
 > et peut déclencher des rappels `on_decrypt_fail` sans objet.
+
+---
+
+## Limites de charge (`scripts/bb_load.py`)
+
+```bash
+python3.14 scripts/bb_load.py --boards bench_boards.txt --sender rubik-q
+```
+
+Une carte génère, les autres comptent. L’émetteur unique est délibéré : quand
+tout le monde émet, une perte n’est imputable ni au lien, ni au relais, ni à une
+collision entre émetteurs, et le plafond mesuré n’est celui de personne. La
+livraison n’étant pas observable depuis l’émetteur, chaque message porte son
+palier et son indice, chaque récepteur note ce qui lui parvient, et
+l’orchestrateur recoupe — un message n’est livré que si un récepteur a vu cet
+indice exact.
+
+### La borne de taille
+
+| Transport | MTU | Surcoût | Charge utile |
+|-----------|-----|---------|--------------|
+| BLE L2CAP | 512 | 42 o | **470 o** |
+| BT Classic | 1021 | 42 o | 979 o |
+
+À 470 octets, la trame fait exactement 512 — la borne est atteinte pile, sans
+marge. 471 octets est refusé par une exception explicite (`PayloadTooLarge`),
+jamais tronqué silencieusement.
+
+Ce que cela vaut en caractères de chat, ce qui compte pour l’interface :
+
+| | Octets par caractère | Caractères par message |
+|---|---|---|
+| ASCII | 1 | 470 |
+| Français accentué | 2 | **235** |
+| Emoji | 4 | **117** |
+
+Le MTU réellement négocié sur les cartes est **672**, au-dessus des 512
+configurés : un message de taille maximale passe donc en une seule trame L2CAP,
+sans fragmentation. Les 512 de `config.py` sont un choix prudent, pas une
+contrainte du lien.
+
+### Le plafond est celui d’une carte, pas du protocole
+
+| Palier | rubik-inria | arduinoq |
+|--------|-------------|----------|
+| 128 o × 5/s | 40/40 | 40/40 |
+| 256 o × 5/s | 40/40 | 40/40 |
+| 470 o × 5/s | 40/40 | 40/40 |
+| 64 o × 10/s | 80/80 | 80/80 |
+| 64 o × 15/s | 120/120 | 87/120 |
+| 64 o × 20/s | 63/63 | **0/63** |
+| 64 o × 30/s | 240/240 | **0/240** |
+| récupération (64 o × 1/s) | 8/8 | **0/8** |
+
+Le Rubik Pi encaisse **tous** les paliers sans une seule perte, jusqu’à 30 msg/s
+et 2,35 ko/s. L’Arduino UNO Q suit jusqu’à 10 msg/s, fléchit à 15, puis tombe à
+zéro et **n’y revient pas** — même à 1 msg/s après 25 s de repos.
+
+> Avertissement méthodologique, appris à mes dépens : la colonne « pire
+> récepteur » ne distingue pas un mesh saturé d’une carte à moitié connectée, et
+> ces deux diagnostics mènent en sens opposés. Un premier dépouillement concluait
+> à un effondrement général du mesh ; le détail par récepteur a montré que la
+> carte saine avait reçu 701 messages sur 701. C’est pourquoi le rapport affiche
+> désormais chaque récepteur séparément.
+
+### Cause de l’enlisement : la pile hôte, pas la radio
+
+Sur l’Arduino bloqué, le noyau répète :
+
+```
+Bluetooth: Unable to allocate ident: -28
+```
+
+`-28` est `ENOSPC` : le pool d’identifiants de **signalisation** L2CAP de BlueZ
+est épuisé. Le contrôleur lui-même est irréprochable au même instant
+(`errors:0` en RX comme en TX) — ce n’est donc ni la radio ni le firmware.
+
+Le mécanisme est systémique et vaut d’être noté : saturer le plan de données
+retarde les Hellos, les voisins expirent, l’auto-dial repart, et cette rafale de
+demandes de connexion L2CAP épuise le pool d’identifiants. **La charge de données
+affame le plan de contrôle, qui se venge sur la pile.**
+
+Un `systemctl restart bluetooth` suffit à rétablir la carte — pas besoin de
+redémarrer. Vérifié : mesh revenu à 3/3, convergence 8–10 s, livraison 100 %.
+
+### En pratique
+
+Pour la démo, la marge est confortable : le chat humain se compte en messages par
+minute, pas par seconde. À retenir tout de même que **l’Arduino UNO Q est le nœud
+limitant** — c’est lui qui fixe le plafond du groupe, autour de 10 msg/s — et que
+la panne, si on le pousse, est un enlisement silencieux qui garde ses liens
+ouverts tout en ne livrant plus rien.
 
 ---
 
