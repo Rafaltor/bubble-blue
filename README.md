@@ -1009,7 +1009,7 @@ produire un nombre faussement assuré.
 
 | Mesure | Résultat |
 |--------|----------|
-| Convergence | **4–5 s** (les deux cartes) |
+| Convergence | **3–14 s** selon la campagne (2 à 3 nœuds) |
 | Temps en maillage complet | **97 %** du régime établi (carte la moins bonne) |
 | Flaps après warm-up | 5 sur 2 × 275 s, tous rattrapés |
 | Changements de rôle relais | **0** |
@@ -1019,6 +1019,48 @@ Campagne réduite à deux Rubik : les trois autres cartes étaient hors ligne et
 l’UNO Q a échoué au lancement (voir ci-dessous). Les chiffres à 6 nœuds du
 tableau *Statut* proviennent de la campagne manuelle antérieure et restent la
 référence à cette échelle.
+
+### Scénario de départ / retour
+
+```bash
+python3.14 scripts/bb_bench.py --duration 300 --pull \
+    --churn rubik-inria --churn-at 120 --churn-for 90
+```
+
+La carte désignée est **tuée sans préavis** à `--churn-at` — un nœud qui s’en va
+ne dit pas au revoir — puis relancée après `--churn-for`. Ce sont les *autres*
+cartes qui mesurent.
+
+Le délai se lit sur la **vue de présence**, pas sur les liens L2CAP. La
+distinction est le cœur du scénario : une socket meurt avec son processus, quel
+que soit le seuil de Hello configuré, donc chronométrer un lien reviendrait à
+chronométrer le noyau. C’est la table de voisins que le seuil fait expirer, donc
+c’est elle qu’on observe. La corrélation entre cartes passe par l’horloge murale,
+les cartes étant synchronisées à ~20 ms — négligeable face à un délai en dizaines
+de secondes.
+
+### Validation du seuil configurable
+
+Le paramètre ne vaut que si le délai mesuré bouge avec lui. Deux campagnes
+identiques, seul `BUBBLE_BLUE_HELLO_MISSES` change (`--board-env` l’impose aux
+sondes sans toucher au `.env` des cartes) :
+
+| `HELLO_MISSES` | Attendu | Départ vu par `rubik-q` | par `arduinoq` | Retour |
+|----------------|---------|-------------------------|----------------|--------|
+| 3 (défaut) | 15 s | **21 s** | **17 s** | 12 s / 7 s |
+| 6 | 30 s | **36 s** | **32 s** | 7 s / 10 s |
+
+Le délai suit bien le réglage. Le dépassement de quelques secondes est attendu :
+l’échantillonnage est à la seconde, et une entrée de présence peut être
+rafraîchie de seconde main par les voisins annoncés d’un autre nœud — un départ
+se propage donc un peu plus lentement qu’il n’est détecté en direct.
+
+Le **retour** ne bouge pas avec le seuil, et c’est cohérent : il dépend de la
+découverte et du dial, pas de l’expiration.
+
+> Une première campagne avait relevé 58 s sur une carte. Non reproduit à
+> l’identique, et la relance de cette campagne était par ailleurs cassée : gardé
+> ici comme rappel qu’une mesure isolée sur ce banc ne vaut rien sans rejeu.
 
 ### Limite d’exploitation observée : dégradation du contrôleur QCA
 
@@ -1034,8 +1076,9 @@ Bluetooth: hci0: Opcode 0x2039 failed: -110        # LE Extended Create Connecti
 Un redémarrage de la pile (`hciconfig down` + `systemctl restart bluetooth`)
 avait suffi lors des occurrences précédentes ; à ce stade il échoue avec
 `Operation not supported (95)` sans même recharger le firmware. **Seul un reboot
-récupère la carte.** À retenir pour un déploiement longue durée : prévoir une
-surveillance de l’état de l’adaptateur, pas seulement du processus.
+récupère la carte** — vérifié le 9 septembre : adaptateur `UP RUNNING` et carte
+opérationnelle dans la campagne suivante. À retenir pour un déploiement longue
+durée : surveiller l’état de l’adaptateur, pas seulement le processus.
 
 ---
 
