@@ -207,6 +207,27 @@ BUBBLE_BLUE_TRANSPORT=ble_l2cap
 - `BUBBLE_BLUE_GROUP_MEMBERS` / `BUBBLE_BLUE_TOPOLOGY` : **optionnels** (labo /
   `--topology`). En mesh ouvert, les omettre.
 
+#### Départ d’un nœud
+
+Un voisin n’est retiré qu’après **plusieurs Hello consécutifs manqués**, jamais
+au premier : perdre une annonce est banal sur le 2,4 GHz partagé, et y réagir
+ferait ré-élire les relais pour un nœud qui n’est jamais parti.
+
+```bash
+BUBBLE_BLUE_HELLO_INTERVAL_S=5    # période d'émission
+BUBBLE_BLUE_HELLO_MISSES=3        # minimum 2
+```
+
+Le délai de retrait est le produit des deux (5 × 3 = 15 s par défaut, valeur
+historique inchangée). L’exprimer en **nombre de périodes** plutôt qu’en
+secondes fixes lui conserve son sens si l’intervalle est retouché : passer
+l’intervalle à 2 s donne 6 s de tolérance, toujours 3 annonces manquées.
+
+Monter `MISSES` sur un déploiement bruité ou mobile, le descendre pour réagir
+plus vite à un départ réel. Une valeur de 1 est refusée — c’est exactement
+l’instabilité que ce seuil existe pour éviter. Une saisie invalide retombe sur
+le défaut avec un avertissement, plutôt que d’empêcher la board de démarrer.
+
 Contrôle config (BD_ADDR locale via `hciconfig`) :
 
 ```bash
@@ -899,6 +920,42 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `scripts/phase1a_manual.py` | Banc crypto interactif |
 | `scripts/install_py314_deps.sh` | Install deps root |
 | `scripts/install_unoq_bridge.sh` | Client Router Bridge pour le panneau UNO Q |
+
+---
+
+## Accélération cryptographique
+
+Question posée en réunion : les accélérateurs matériels des plateformes sont-ils
+exploités ? **Oui, déjà** — et pas par l’accélérateur auquel on pense.
+
+Les deux SoC exposent les *Cryptography Extensions* ARMv8 (`aes pmull sha1 sha2`
+dans `/proc/cpuinfo`), et le noyau enregistre `gcm(aes)` sous le pilote
+**`gcm-aes-ce`** : le suffixe `ce` désigne ces extensions, donc de l’AES exécuté
+par des instructions dédiées du CPU. Notre chemin passe par
+`cryptography.AESGCM`, adossé à OpenSSL, qui les emprunte.
+
+Le moteur Qualcomm QCE est bien présent, mais il **n’enregistre pas GCM** — que
+du CBC et du CCM (`ccm-aes-qce`, `authenc-hmac-sha256-cbc-aes-qce`) — et n’expose
+aucun `/dev/qcedev` côté espace utilisateur. L’y router demanderait de changer de
+mode AEAD pour un chemin plus lent que celui déjà pris.
+
+Mesures du chemin de chiffrement réel (`encrypt_with_key` + `decrypt_with_key`,
+AAD de 26 o, moyenne sur 20 000 itérations) :
+
+| Plateforme | Charge BLE (470 o) | Aller-retour |
+|------------|--------------------|--------------|
+| RUBIK Pi 3 | 3,0 µs + 2,8 µs | **173 000 paquets/s** |
+| Arduino UNO Q | 18,2 µs + 15,2 µs | **30 000 paquets/s** |
+
+À comparer au lien BLE CoC, qui transporte au mieux quelques centaines de
+paquets par seconde : **la crypto est deux à trois ordres de grandeur au-dessus
+du besoin**. Optimiser là n’achèterait rien de mesurable sur le débit — la marge
+est dans la radio et la topologie. L’angle qui resterait défendable est
+énergétique, pas latence, et demanderait une mesure de consommation dédiée.
+
+> À noter pour l’interprétation : à 470 o, l’essentiel de ces microsecondes est
+> le coût d’objet Python par appel, pas l’AES lui-même. On ne peut pas le mettre
+> en cache ici, la clé étant dérivée par paquet.
 
 ---
 

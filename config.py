@@ -29,6 +29,19 @@ PSM_BLE = 0x0081  # LE CoC PSM (dynamic range 0x80–0xFF; validated on hardware
 MTU_BT_CLASSIC = 1021
 MTU_BLE = 512
 
+# Control plane timing.
+#
+# A node is dropped only after several *consecutive* missed Hellos, never on the
+# first one: losing a single advertisement is routine on a shared 2.4 GHz band,
+# and reacting to it would churn the CDS — re-electing relays and tearing down
+# links for a neighbour that never actually left.
+#
+# The departure delay is therefore expressed as a count of missed periods rather
+# than a bare number of seconds, so it keeps its meaning when the Hello interval
+# is retuned. Defaults give 5 s x 3 = 15 s.
+DEFAULT_HELLO_INTERVAL_S = 5
+DEFAULT_HELLO_MISSES = 3
+
 # Security
 AES_KEY_SIZE = 32      # bytes
 AES_NONCE_SIZE = 12    # bytes  
@@ -80,7 +93,8 @@ class BubbleBlueConfig:
     # Node identity / control plane timers
     node_name: str
     hello_interval_s: int
-    neighbor_timeout_s: int
+    hello_misses: int          # consecutive missed Hellos before dropping a node
+    neighbor_timeout_s: int    # derived: hello_interval_s * hello_misses
 
     # Forwarding
     ttl_max: int
@@ -144,6 +158,26 @@ def _parse_group_members_env(*, exclude_local: str | None = None) -> list[str]:
         seen.add(bd)
         out.append(bd)
     return out
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    """Read a positive integer from the environment, warning instead of failing.
+
+    A typo in .env must not stop a board from joining the mesh — it is far more
+    useful to run with the default and say so.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        print(f"[BB] WARNING: {name}={raw!r} is not an integer, using {default}", flush=True)
+        return default
+    if value < minimum:
+        print(f"[BB] WARNING: {name}={value} is below {minimum}, using {minimum}", flush=True)
+        return minimum
+    return value
 
 
 def _load_transport_kind() -> str:
@@ -276,14 +310,23 @@ def load_config(
     remote_n = _normalize_bd_addr(remote, label="remote BD_ADDR") or "00:00:00:00:00:00"
     transport_kind = _load_transport_kind()
     psm = PSM_BLE if transport_kind == "ble_l2cap" else PSM_BT_CLASSIC
+
+    hello_interval_s = _env_int(
+        "BUBBLE_BLUE_HELLO_INTERVAL_S", DEFAULT_HELLO_INTERVAL_S, minimum=1
+    )
+    # 1 would mean dropping a node on a single lost packet, which is the
+    # instability this threshold exists to avoid.
+    hello_misses = _env_int("BUBBLE_BLUE_HELLO_MISSES", DEFAULT_HELLO_MISSES, minimum=2)
+
     return BubbleBlueConfig(
         psm=psm,
         local_bd_addr=local,
         remote_bd_addr=remote_n,
         transport_kind=transport_kind,
         node_name=socket.gethostname(),
-        hello_interval_s=5,
-        neighbor_timeout_s=15,
+        hello_interval_s=hello_interval_s,
+        hello_misses=hello_misses,
+        neighbor_timeout_s=hello_interval_s * hello_misses,
         ttl_max=10,
         group_key=_load_group_key(),
         group_members=_load_group_members(local_bd_addr=local),
@@ -301,7 +344,9 @@ def format_config(cfg: BubbleBlueConfig) -> str:
             f"- Local BD address     : {cfg.local_bd_addr}",
             f"- Remote BD address    : {cfg.remote_bd_addr}",
             f"- Hello interval (s)   : {cfg.hello_interval_s}",
-            f"- Neighbor timeout (s) : {cfg.neighbor_timeout_s}",
+            f"- Missed Hellos allowed: {cfg.hello_misses}",
+            f"- Neighbor timeout (s) : {cfg.neighbor_timeout_s} "
+            f"({cfg.hello_interval_s} x {cfg.hello_misses})",
             f"- TTL max              : {cfg.ttl_max}",
             f"- Group key            : {'SET' if cfg.group_key else 'NOT SET'}",
             f"- Group members        : {', '.join(cfg.group_members) or '(none — use --topology or .env)'}",

@@ -102,8 +102,9 @@ Related unit coverage: `tests/test_cross_group_hello.py`.
 |---------|-------|--------|
 | L2CAP PSM (Classic) | `0x1001` | `config.PSM_BT_CLASSIC` |
 | L2CAP PSM (BLE CoC) | `0x0081` | `config.PSM_BLE` |
-| Hello interval | 5 s | `config.py` |
-| Neighbor timeout | 15 s | `config.py` |
+| Hello interval | 5 s | `BUBBLE_BLUE_HELLO_INTERVAL_S` |
+| Missed Hellos before departure | 3 | `BUBBLE_BLUE_HELLO_MISSES` (min. 2) |
+| Neighbor timeout | 15 s | derived: interval × misses |
 | Dial timeout (BLE) | 8 s | `ble_l2cap._DIAL_TIMEOUT_S` |
 | ANNOUNCE burst / interval | see `config.py` | `ANNOUNCE_*` |
 | TTL max | 10 | `config.py` |
