@@ -386,6 +386,24 @@ def print_report(sender, listeners: list, rows: list[dict]) -> None:
         )
 
     load_rows = [r for r in rows if not r.get("is_recovery")]
+    # Per listener, because the worst-listener column above cannot tell a
+    # saturated mesh from one board being half connected -- and those two
+    # diagnoses lead opposite ways.
+    tags = [p["tag"] for p in (rows[0]["listeners"] if rows else [])]
+    if len(tags) > 1:
+        print(f"\n{'palier':>16} " + " ".join(f"{t:>14}" for t in tags))
+        for r in rows:
+            label = f"{r['size']}o x {r['rate_target']}/s"
+            if r.get("is_recovery"):
+                label = "recuperation"
+            cells = []
+            for t in tags:
+                p = next((x for x in r["listeners"] if x["tag"] == t), None)
+                cells.append(f"{p['received']:4d}/{r['sent']:<4d}" if p else "        -")
+            print(f"{label:>16} " + " ".join(f"{c:>14}" for c in cells))
+        print("(recus/envoyes : une colonne durablement basse est une carte, "
+              "pas le mesh)")
+
     clean = [r for r in load_rows if r["delivery_worst"] >= 0.99]
     if clean:
         best_rate = max(r["rate_achieved"] for r in clean)
