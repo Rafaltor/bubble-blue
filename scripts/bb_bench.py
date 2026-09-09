@@ -98,6 +98,32 @@ class Board:
             return f"printf '%s\\n' {shlex.quote(self.password)} | sudo -S -p '' {cmd}"
         return f"sudo -n {cmd}"
 
+    def bd_addr(self) -> str:
+        """The controller address, needed to spot this board in someone else's view."""
+        res = self._ssh(
+            "hciconfig hci0 | sed -n 's/.*BD Address: \\([0-9A-Fa-f:]\\{17\\}\\).*/\\1/p'",
+            timeout=45,
+        )
+        return (res.stdout or "").strip().upper()
+
+    def kill_probe(self) -> None:
+        """Stop the probe without warning — a node that leaves does not say goodbye."""
+        self._ssh(self._sudo("pkill -f 'bb_probe[.]py'"), timeout=45)
+
+    def relaunch_probe(self, repo: str, duration: float, send_every: float, expect: int) -> None:
+        """Bring the board back, detached so this call does not block the campaign."""
+        probe = (
+            f"python3.14 scripts/bb_probe.py"
+            f" --duration {duration} --send-every {send_every}"
+            f" --expect {expect} --tag {shlex.quote(self.tag)}"
+            f" --json-out {REMOTE_JSON}"
+        )
+        cmd = (
+            f"{self._cd(repo)} && setsid {self._sudo(probe)}"
+            f" >{REMOTE_LOG}.rejoin 2>&1 </dev/null &"
+        )
+        self._ssh(cmd, timeout=45)
+
     def _tail_log(self) -> str:
         """The last meaningful line of the probe's log, for the failure report.
 
@@ -207,6 +233,58 @@ def aggregate(boards: list[Board], expect: int) -> dict:
     }
 
 
+def churn_metrics(
+    boards: list[Board], churn_tag: str, churn_bd: str, t_kill: float, t_back: float
+) -> list[dict]:
+    """How long each *observer* took to notice a node leave, and come back.
+
+    Measured on the presence view rather than on L2CAP links, which is the whole
+    point: a link dies with its socket the instant the process stops, so it
+    would time the kernel rather than the protocol. The neighbour table is what
+    BUBBLE_BLUE_HELLO_MISSES governs, so that is what is timed here.
+
+    Wall clocks make this possible across boards; they are NTP-synced to well
+    under the second of sampling granularity.
+    """
+    out: list[dict] = []
+    for b in boards:
+        if b.tag == churn_tag or not b.summary:
+            continue
+        # sample = [t, wall, peers, relay, presence]
+        samples = b.summary.get("samples") or []
+        after_kill = [s for s in samples if s[1] >= t_kill]
+        after_back = [s for s in samples if s[1] >= t_back]
+
+        gone = next((s[1] - t_kill for s in after_kill if churn_bd not in s[4]), None)
+        back = next((s[1] - t_back for s in after_back if churn_bd in s[4]), None)
+        out.append(
+            {
+                "observer": b.tag,
+                "departure_noticed_s": round(gone, 1) if gone is not None else None,
+                "rejoin_noticed_s": round(back, 1) if back is not None else None,
+            }
+        )
+    return out
+
+
+def print_churn(rows: list[dict], churn_tag: str, expected_s: float | None) -> None:
+    if not rows:
+        return
+    print(f"\n=== DEPART / RETOUR DE {churn_tag} ===")
+    print(f"{'observateur':<14} {'depart vu en':>14} {'retour vu en':>14}")
+    for r in rows:
+        d = r["departure_noticed_s"]
+        j = r["rejoin_noticed_s"]
+        print(
+            f"{r['observer']:<14}"
+            f" {(f'{d:.0f} s' if d is not None else 'jamais'):>14}"
+            f" {(f'{j:.0f} s' if j is not None else 'jamais'):>14}"
+        )
+    if expected_s:
+        print(f"\nattendu pour le depart : ~{expected_s:.0f} s "
+              f"(HELLO_INTERVAL_S x HELLO_MISSES, +1 s d'echantillonnage)")
+
+
 def print_report(boards: list[Board], agg: dict, expect: int) -> None:
     print("\n=== PAR CARTE ===")
     head = f"{'carte':<12} {'pairs':>7} {'conv.':>7} {'complet':>8} {'flaps':>6} {'relais':>7} {'recu de':>8}"
@@ -253,6 +331,14 @@ def main() -> int:
     ap.add_argument("--send-every", type=float, default=20.0, help="chat period (s)")
     ap.add_argument("--repo", default="~/bubble-blue", help="repo path on the boards")
     ap.add_argument("--pull", action="store_true", help="git pull on every board first")
+    ap.add_argument("--churn", default="", metavar="TAG",
+                    help="take this board out mid-run and bring it back")
+    ap.add_argument("--churn-at", type=float, default=120.0,
+                    help="when to take it out (s into the run)")
+    ap.add_argument("--churn-for", type=float, default=60.0,
+                    help="how long it stays away (s)")
+    ap.add_argument("--expected-departure-s", type=float, default=15.0,
+                    help="HELLO_INTERVAL_S x HELLO_MISSES on the boards, for the report")
     ap.add_argument("--json-out", default="", help="write the full campaign JSON here")
     args = ap.parse_args()
 
@@ -281,23 +367,76 @@ def main() -> int:
             return 1
         print("  toutes les cartes sur le meme commit")
 
+    churn_board = None
+    churn_bd = ""
+    if args.churn:
+        churn_board = next((b for b in boards if b.tag == args.churn), None)
+        if churn_board is None:
+            print(f"bench: --churn {args.churn} ne correspond a aucune carte", file=sys.stderr)
+            return 2
+        churn_bd = churn_board.bd_addr()
+        if not churn_bd:
+            print(f"bench: adresse de {args.churn} illisible — scenario impossible",
+                  file=sys.stderr)
+            return 2
+        if args.churn_at + args.churn_for >= args.duration:
+            print("bench: la coupure deborde de la campagne — allonger --duration",
+                  file=sys.stderr)
+            return 2
+        print(f"bench: {args.churn} ({churn_bd}) sortira a t={args.churn_at:.0f}s"
+              f" pour {args.churn_for:.0f}s")
+
+    churn_times: dict[str, float] = {}
+
+    def drive_churn() -> None:
+        """Take the board out, then bring it back, noting the wall clock of each."""
+        time.sleep(args.churn_at)
+        churn_times["kill"] = time.time()
+        churn_board.kill_probe()
+        print(f"bench: {args.churn} coupee", flush=True)
+
+        time.sleep(args.churn_for)
+        churn_times["back"] = time.time()
+        remaining = max(30.0, args.duration - args.churn_at - args.churn_for)
+        churn_board.relaunch_probe(args.repo, remaining, args.send_every, expect)
+        print(f"bench: {args.churn} relancee", flush=True)
+
     print(f"bench: lancement simultane, resultats dans ~{args.duration + 30:.0f} s...")
     t0 = time.monotonic()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=expect) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=expect + 1) as pool:
         futures = [
             pool.submit(b.run_probe, args.repo, args.duration, args.send_every, expect)
             for b in boards
         ]
+        if churn_board is not None:
+            futures.append(pool.submit(drive_churn))
         concurrent.futures.wait(futures)
     print(f"bench: termine en {time.monotonic() - t0:.0f} s")
 
+    if churn_board is not None:
+        # Its own probe was killed mid-run, so an error here is the scenario
+        # working rather than a fault.
+        churn_board.error = ""
+
     agg = aggregate(boards, expect)
     print_report(boards, agg, expect)
+
+    churn_rows: list[dict] = []
+    if churn_board is not None and "kill" in churn_times:
+        churn_rows = churn_metrics(
+            boards, args.churn, churn_bd, churn_times["kill"], churn_times["back"]
+        )
+        print_churn(churn_rows, args.churn, args.expected_departure_s)
 
     if args.json_out:
         payload = {
             "campaign": agg,
             "duration_s": args.duration,
+            "churn": {
+                "board": args.churn,
+                "bd_addr": churn_bd,
+                "observers": churn_rows,
+            } if churn_rows else None,
             "boards": [
                 {"tag": b.tag, "error": b.error, "summary": b.summary} for b in boards
             ],
@@ -306,7 +445,9 @@ def main() -> int:
             json.dump(payload, fh, indent=2)
         print(f"\nJSON complet (series temporelles incluses) : {args.json_out}")
 
-    return 0 if agg.get("boards_reporting") == expect else 1
+    # The churned board deliberately loses its own summary when it is killed.
+    wanted = expect - (1 if churn_board is not None else 0)
+    return 0 if agg.get("boards_reporting") >= wanted else 1
 
 
 if __name__ == "__main__":

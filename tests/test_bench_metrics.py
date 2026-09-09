@@ -20,8 +20,14 @@ if _ROOT not in sys.path:
 
 sys.path.insert(0, os.path.join(_ROOT, "scripts"))
 
-from bb_bench import Board, aggregate  # noqa: E402
-from bb_probe import WARMUP_S, Probe  # noqa: E402
+from bb_bench import Board, aggregate, churn_metrics  # noqa: E402
+from bb_probe import WARMUP_S, Probe, Sample  # noqa: E402
+
+_T0 = 1_700_000_000.0  # arbitrary wall clock; only differences matter
+
+
+def _s(t, peers, relay=False, presence=()):
+    return Sample(float(t), _T0 + t, peers, relay, tuple(presence))
 
 
 class _FakeNode:
@@ -49,7 +55,7 @@ def _probe(expect_peers=5, elapsed=300.0):
 def test_convergence_is_when_every_peer_is_present():
     p = _probe(expect_peers=5)
     # Ramps 0..5 peers, one per second from t=1.
-    p.samples = [(float(t), min(t, 5), False) for t in range(0, 300)]
+    p.samples = [_s(t, min(t, 5)) for t in range(0, 300)]
 
     c = p._convergence()
     assert c["time_to_first_peer_s"] == 1.0
@@ -58,7 +64,7 @@ def test_convergence_is_when_every_peer_is_present():
 
 def test_a_mesh_that_never_completes_reports_null_not_zero():
     p = _probe(expect_peers=5)
-    p.samples = [(float(t), 3, False) for t in range(0, 300)]  # stuck at 3
+    p.samples = [_s(t, 3) for t in range(0, 300)]  # stuck at 3
 
     c = p._convergence()
     assert c["time_to_full_mesh_s"] is None
@@ -69,7 +75,7 @@ def test_convergence_is_undefined_without_a_board_count():
     # Without --expect there is no way to know what "complete" means, and
     # guessing would produce a confident wrong number.
     p = _probe(expect_peers=None)
-    p.samples = [(float(t), 4, False) for t in range(0, 300)]
+    p.samples = [_s(t, 4) for t in range(0, 300)]
 
     c = p._convergence()
     assert c["time_to_full_mesh_s"] is None
@@ -80,7 +86,7 @@ def test_convergence_is_undefined_without_a_board_count():
 def test_time_at_full_mesh_ignores_the_ramp_up():
     p = _probe(expect_peers=5)
     # Complete throughout steady state, incomplete only while converging.
-    p.samples = [(float(t), 0 if t < WARMUP_S else 5, False) for t in range(0, 300)]
+    p.samples = [_s(t, 0 if t < WARMUP_S else 5) for t in range(0, 300)]
 
     assert p._convergence()["full_mesh_frac_steady"] == 1.0
 
@@ -88,9 +94,7 @@ def test_time_at_full_mesh_ignores_the_ramp_up():
 def test_a_partition_shows_up_as_lost_time():
     p = _probe(expect_peers=5)
     # Steady state runs 25..299; drop to 4 peers for half of it.
-    p.samples = [
-        (float(t), 5 if t < 162 else 4, False) for t in range(0, 300)
-    ]
+    p.samples = [_s(t, 5 if t < 162 else 4) for t in range(0, 300)]
 
     frac = p._convergence()["full_mesh_frac_steady"]
     assert 0.45 < frac < 0.55, frac
@@ -101,10 +105,10 @@ def test_a_partition_shows_up_as_lost_time():
 
 def test_links_dropped_while_converging_are_not_flaps():
     p = _probe()
-    p.samples = [(float(t), 5, False) for t in range(0, 300)]
+    p.samples = [_s(t, 5) for t in range(0, 300)]
     p.events = [
-        (5.0, "down", "BB:BB:BB:BB:BB:BB"),   # during warm-up: converging
-        (200.0, "down", "CC:CC:CC:CC:CC:CC"),  # after: a real flap
+        (5.0, "down", "BB:BB:BB:BB:BB:BB", _T0 + 5),     # warm-up: converging
+        (200.0, "down", "CC:CC:CC:CC:CC:CC", _T0 + 200),  # after: a real flap
     ]
 
     s = p._stability()
@@ -115,7 +119,7 @@ def test_links_dropped_while_converging_are_not_flaps():
 def test_a_stable_relay_role_is_not_counted_as_churn():
     p = _probe()
     # Relay for the whole run: many samples, zero transitions.
-    p.samples = [(float(t), 5, True) for t in range(0, 300)]
+    p.samples = [_s(t, 5, relay=True) for t in range(0, 300)]
 
     s = p._stability()
     assert s["relay_transitions"] == 0
@@ -125,7 +129,7 @@ def test_a_stable_relay_role_is_not_counted_as_churn():
 def test_relay_churn_counts_changes_of_mind():
     p = _probe()
     # Flips role every 50 s from t=0; steady state starts at 25.
-    p.samples = [(float(t), 5, (t // 50) % 2 == 1) for t in range(0, 300)]
+    p.samples = [_s(t, 5, relay=(t // 50) % 2 == 1) for t in range(0, 300)]
 
     assert p._stability()["relay_transitions"] == 5
 
@@ -133,7 +137,7 @@ def test_relay_churn_counts_changes_of_mind():
 def test_the_minimum_peer_count_survives_the_average():
     # A mean of 5 can hide a board that briefly saw nobody, so both are kept.
     p = _probe()
-    p.samples = [(float(t), 0 if t == 150 else 5, False) for t in range(0, 300)]
+    p.samples = [_s(t, 0 if t == 150 else 5) for t in range(0, 300)]
 
     s = p._stability()
     assert s["min_peers_steady"] == 0
@@ -200,6 +204,68 @@ def test_a_silent_link_shows_up_in_delivery_not_in_peer_counts():
     assert agg["delivery_mean"] < 1.0
 
 
+def _observer(tag, local, gone_at, back_at, churn_bd=_C, span=300):
+    """An observer that sees churn_bd until gone_at and again from back_at."""
+    b = Board(tag, f"user@{tag}")
+    b.summary = {
+        "local": local,
+        "senders": [],
+        "samples": [
+            [
+                float(t),
+                _T0 + t,
+                2,
+                0,
+                [churn_bd] if (t < gone_at or t >= back_at) else [],
+            ]
+            for t in range(span)
+        ],
+    }
+    return b
+
+
+def test_departure_is_timed_from_the_presence_view():
+    # Killed at t=100, the observer's neighbour table forgets it at t=116:
+    # 15 s of Hello timeout plus a second of sampling granularity.
+    boards = [_observer("obs", _A, gone_at=116, back_at=999)]
+    rows = churn_metrics(boards, "churned", _C, t_kill=_T0 + 100, t_back=_T0 + 200)
+
+    assert rows[0]["departure_noticed_s"] == 16.0
+    assert rows[0]["rejoin_noticed_s"] is None
+
+
+def test_rejoin_is_timed_from_the_relaunch_not_the_kill():
+    boards = [_observer("obs", _A, gone_at=116, back_at=214)]
+    rows = churn_metrics(boards, "churned", _C, t_kill=_T0 + 100, t_back=_T0 + 200)
+
+    assert rows[0]["departure_noticed_s"] == 16.0
+    assert rows[0]["rejoin_noticed_s"] == 14.0
+
+
+def test_the_churned_board_is_not_its_own_observer():
+    boards = [
+        _observer("obs", _A, gone_at=116, back_at=214),
+        _observer("churned", _C, gone_at=116, back_at=214),
+    ]
+    rows = churn_metrics(boards, "churned", _C, t_kill=_T0 + 100, t_back=_T0 + 200)
+
+    assert [r["observer"] for r in rows] == ["obs"]
+
+
+def test_a_node_that_is_never_forgotten_reports_nothing_rather_than_zero():
+    # Presence that never drops means the timeout did not fire — a real result,
+    # and one that must not be confused with "noticed instantly".
+    b = Board("obs", "user@obs")
+    b.summary = {
+        "local": _A,
+        "senders": [],
+        "samples": [[float(t), _T0 + t, 2, 0, [_C]] for t in range(300)],
+    }
+    rows = churn_metrics([b], "churned", _C, t_kill=_T0 + 100, t_back=_T0 + 200)
+
+    assert rows[0]["departure_noticed_s"] is None
+
+
 def test_a_board_that_never_reported_is_not_silently_dropped():
     boards = [
         _board("a", _A, [_B], 10.0, 1.0),
@@ -226,6 +292,10 @@ if __name__ == "__main__":
         test_the_campaign_converges_when_the_last_board_does,
         test_the_worst_board_sets_the_campaign_figure,
         test_a_silent_link_shows_up_in_delivery_not_in_peer_counts,
+        test_departure_is_timed_from_the_presence_view,
+        test_rejoin_is_timed_from_the_relaunch_not_the_kill,
+        test_the_churned_board_is_not_its_own_observer,
+        test_a_node_that_is_never_forgotten_reports_nothing_rather_than_zero,
         test_a_board_that_never_reported_is_not_silently_dropped,
     ):
         fn()

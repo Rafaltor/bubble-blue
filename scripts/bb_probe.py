@@ -35,6 +35,7 @@ import os
 import sys
 import threading
 import time
+from typing import NamedTuple
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
@@ -46,6 +47,27 @@ from src.api.bb_api import BBNode  # noqa: E402
 WARMUP_S = 25.0
 
 
+class Sample(NamedTuple):
+    """One second of observation.
+
+    ``wall`` is here so samples from different boards can be lined up: the
+    boards run NTP and agree to within tens of milliseconds, which is ample
+    against a departure delay measured in seconds.
+
+    ``peers`` and ``presence`` are deliberately separate views. ``peers`` counts
+    open L2CAP links, which die with the socket the moment a process stops.
+    ``presence`` is the neighbour table, which only forgets a node after the
+    configured number of missed Hellos — so it is the one that shows what
+    BUBBLE_BLUE_HELLO_MISSES actually does.
+    """
+
+    t: float
+    wall: float
+    peers: int
+    relay: bool
+    presence: tuple[str, ...]
+
+
 class Probe:
     def __init__(self, tag: str, expect_peers: int | None = None) -> None:
         self.tag = tag
@@ -54,11 +76,11 @@ class Probe:
         self.expect_peers = expect_peers
         self.started = time.monotonic()
         self.lock = threading.Lock()
-        self.events: list[tuple[float, str, str]] = []
+        self.events: list[tuple[float, str, str, float]] = []
         self.received: list[tuple[float, str, str]] = []
-        # (t, peer_count, is_relay), once per second. Kept raw so a run can be
-        # replotted later without re-running it on six boards.
-        self.samples: list[tuple[float, int, bool]] = []
+        # Once per second, kept raw so a run can be replotted — or correlated
+        # against another board's run — without re-running six boards.
+        self.samples: list[Sample] = []
         self.sent = 0
         self.peak_peers = 0
 
@@ -67,12 +89,12 @@ class Probe:
 
     def on_connect(self, bd: str) -> None:
         with self.lock:
-            self.events.append((self._t(), "up", bd))
+            self.events.append((self._t(), "up", bd, time.time()))
         print(f"[{self._t():7.1f}] + {bd}", flush=True)
 
     def on_disconnect(self, bd: str) -> None:
         with self.lock:
-            self.events.append((self._t(), "down", bd))
+            self.events.append((self._t(), "down", bd, time.time()))
         print(f"[{self._t():7.1f}] - {bd}", flush=True)
 
     def on_message(self, sender: str, text: str) -> None:
@@ -81,11 +103,15 @@ class Probe:
         print(f"[{self._t():7.1f}] RX {sender}: {text}", flush=True)
 
     def sample(self, node: BBNode) -> None:
-        """One observation of peer count and CDS role. Called once per second."""
+        """One observation of links, presence and CDS role. Once per second."""
         n = len(node.peers())
         relay = node.is_relay()
+        local = (node.local_bd_addr or "").upper()
+        presence = tuple(
+            sorted(a for a in node.resolved_member_addresses() if a != local)
+        )
         with self.lock:
-            self.samples.append((self._t(), n, relay))
+            self.samples.append(Sample(self._t(), time.time(), n, relay, presence))
             self.peak_peers = max(self.peak_peers, n)
 
     def _convergence(self) -> dict:
@@ -94,7 +120,7 @@ class Probe:
         Both are measured from process start, so they include discovery and
         dialling — that is the number an operator actually waits through.
         """
-        first = next((t for t, n, _r in self.samples if n >= 1), None)
+        first = next((s.t for s in self.samples if s.peers >= 1), None)
         out: dict[str, object] = {
             "expect_peers": self.expect_peers,
             "time_to_first_peer_s": first,
@@ -106,17 +132,17 @@ class Probe:
 
         want = self.expect_peers
         out["time_to_full_mesh_s"] = next(
-            (t for t, n, _r in self.samples if n >= want), None
+            (s.t for s in self.samples if s.peers >= want), None
         )
-        steady = [s for s in self.samples if s[0] > WARMUP_S]
+        steady = [s for s in self.samples if s.t > WARMUP_S]
         if steady:
-            full = sum(1 for _t, n, _r in steady if n >= want)
+            full = sum(1 for s in steady if s.peers >= want)
             out["full_mesh_frac_steady"] = round(full / len(steady), 3)
         return out
 
     def _stability(self) -> dict:
         """Steady-state behaviour only: the ramp-up would flatter every figure."""
-        steady = [s for s in self.samples if s[0] > WARMUP_S]
+        steady = [s for s in self.samples if s.t > WARMUP_S]
         flaps = [e for e in self.events if e[1] == "down" and e[0] > WARMUP_S]
         span_s = max(self._t() - WARMUP_S, 0.0)
 
@@ -133,8 +159,8 @@ class Probe:
         if not steady:
             return out
 
-        counts = [n for _t, n, _r in steady]
-        roles = [r for _t, _n, r in steady]
+        counts = [s.peers for s in steady]
+        roles = [s.relay for s in steady]
         out["mean_peers_steady"] = round(sum(counts) / len(counts), 2)
         out["min_peers_steady"] = min(counts)
         out["relay_transitions"] = sum(1 for a, b in zip(roles, roles[1:]) if a != b)
@@ -144,6 +170,7 @@ class Probe:
     def summary(self, node: BBNode) -> dict:
         with self.lock:
             peers_seen = sorted({e[2] for e in self.events})
+            presence_final = self.samples[-1].presence if self.samples else ()
             senders = sorted({s for _t, s, _txt in self.received})
             out = {
                 "tag": self.tag,
@@ -152,6 +179,7 @@ class Probe:
                 "warmup_s": WARMUP_S,
                 "peers_seen": peers_seen,
                 "peers_final": sorted(node.peers()),
+                "presence_final": list(presence_final),
                 "peak_peers": self.peak_peers,
                 "is_relay": node.is_relay(),
                 "links_up": sum(1 for e in self.events if e[1] == "up"),
@@ -163,8 +191,13 @@ class Probe:
             out.update(self._convergence())
             out.update(self._stability())
             # Last, and raw: the aggregate reads the fields above, but a plot for
-            # the paper needs the series itself.
-            out["samples"] = [[t, n, int(r)] for t, n, r in self.samples]
+            # the paper needs the series, and a churn scenario needs to line
+            # this board's timeline up against another's.
+            out["samples"] = [
+                [s.t, round(s.wall, 3), s.peers, int(s.relay), list(s.presence)]
+                for s in self.samples
+            ]
+            out["events"] = [[t, kind, bd, round(wall, 3)] for t, kind, bd, wall in self.events]
             return out
 
 
