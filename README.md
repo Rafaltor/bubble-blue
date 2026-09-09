@@ -1175,6 +1175,112 @@ la question du routage ne se pose même plus.
 
 ---
 
+## Limites de sécurité : la révocation (`--study revocation`)
+
+```bash
+python3.14 sim/limits.py --study revocation
+```
+
+Le scénario révoque un membre depuis le coordinateur, puis mesure trois choses :
+les **égarés** (membres légitimes restés à l’ancienne époque, qui ne lisent donc
+plus le groupe), les **fuites** (la victime lit-elle encore le trafic d’après ?)
+et le **coût** en émissions.
+
+Cette campagne a mis au jour deux défauts du code livré, tous deux corrigés.
+
+### Défaut 1 — ANNOUNCE avalait des messages de chat
+
+Un nœud numérote ses paquets depuis **deux compteurs indépendants** :
+`HelloManager` numérote Hello, presence et ANNOUNCE ; `PacketForwarder`
+numérote DATA, SUBGROUP et REKEY. Les deux partent de zéro et avancent à des
+rythmes très différents — l’un sur minuterie, l’autre seulement quand quelqu’un
+écrit.
+
+Or les deux étaient contrôlés par la **même** fenêtre anti-rejeu par émetteur, et
+par le même cache de réémission. Une fenêtre anti-rejeu suppose un compteur
+unique et monotone par émetteur : partagée entre deux compteurs, elle jette du
+trafic légitime. Un message dont la séquence coïncidait avec celle d’un ANNOUNCE
+antérieur du même nœud était rejeté comme rejeu par **tous** les destinataires,
+et refusé par **tous** les relais. Le message disparaissait à l’échelle du mesh
+sans que rien ne remonte à l’expéditeur.
+
+Reproduction déterministe :
+
+| Séquence du message | Reçu par |
+|---------------------|----------|
+| 4 | 5/5 |
+| **5** (celle de l’ANNOUNCE) | **0/5** |
+| 6 | 5/5 |
+
+ANNOUNCE a désormais sa propre fenêtre, et le cache de relayage est indexé par le
+compteur d’origine du paquet. Verrouillé par `tests/test_announce_seq_space.py`.
+
+C’est très probablement l’explication des rares pertes jamais élucidées des
+campagnes précédentes (427/429 messages, 99,5 %).
+
+### Défaut 2 — plusieurs coordinateurs sur un mesh épars
+
+L’autorité de révocation repose sur une règle unique : le membre de plus petit
+`anon_id` parle pour le groupe. Cette règle était appliquée **deux fois sur deux
+bases différentes** :
+
+| | Base de membres |
+|---|---|
+| Élire (`is_coordinator`) | membres résolus par Hello — **voisins directs seulement** |
+| Valider (côté récepteur) | membres résolus **+ pairs appris par ANNOUNCE** |
+
+Sur un mesh dense les deux vues coïncident et rien ne se voit. Sur un mesh épars
+la vue de voisinage est un sous-ensemble strict : plusieurs nœuds se trouvent
+chacun le plus petit et agissent en coordinateur, et toute révocation qu’ils
+émettent est refusée partout en « not coordinator » — pendant que l’initiateur
+voit sa propre époque avancer et se croit servi.
+
+Mesuré sur un mesh filiforme de 30 nœuds (degré moyen 3,3) : **4 coordinateurs**
+auto-déclarés et **28 des 29** membres légitimes abandonnés sur l’ancienne clé.
+
+L’élection utilise maintenant la même base que la validation. Verrouillé par
+`tests/test_coordinator_agreement.py`.
+
+### Résultats après correction
+
+| n | ANNOUNCE établi | Révocations refusées | Égarés | Fuites | Émissions / nœud |
+|---|-----------------|----------------------|--------|--------|------------------|
+| 6 | non | 2 / 4 | 3 | 0 | 10,8 |
+| 6 | oui | 0 | **0** | **0** | 12,0 |
+| 10 | non | 3 / 4 | 5 | 0 | 10,5 |
+| 10 | oui | 0 | **0** | **0** | 32,5 |
+| 20 | non | 4 / 4 | — | 0 | — |
+| 20 | oui | 0 | **0** | **0** | 77,1 |
+| 30 | non | 4 / 4 | — | 0 | — |
+| 30 | oui | 0 | **0** | **0** | 82,8 |
+
+La victime n’a **jamais** lu le trafic postérieur, dans aucune configuration —
+y compris celles où la révocation échouait par ailleurs. L’exclusion elle-même
+n’a jamais été en défaut ; c’est la mise à jour des membres restants qui l’était.
+
+### Deux limites d’exploitation
+
+**La fenêtre d’adhésion.** Le coordinateur ne peut envelopper une clé que pour un
+membre dont il détient la clé publique, et Hello ne fournit que celles des voisins
+directs — les autres arrivent par ANNOUNCE, diffusé toutes les 30 s. Révoquer
+avant que ce plan ne soit établi est soit **refusé d’emblée**, soit source
+d’égarés. En pratique : **laisser passer un intervalle d’ANNOUNCE après l’arrivée
+d’un nœud avant de révoquer.**
+
+**Le coût.** Il croît d’environ 12 à 83 émissions par nœud entre 6 et 30 membres,
+soit un total à peu près **quadratique** en la taille du groupe : chaque membre
+exige son propre enveloppement de clé, et chaque paquet du flood est relayé par
+toute la dorsale. À 6 nœuds c’est négligeable ; c’est le poste à surveiller si le
+groupe grandit.
+
+> Observation mineure non corrigée : `revoke_member` appelle `emit_announce()`
+> après avoir changé de clé, si bien que cet ANNOUNCE est chiffré sous une clé que
+> personne ne possède encore — il produit un échec de déchiffrement par pair
+> (29 sur 30 nœuds). Sans conséquence fonctionnelle, mais cela pollue les journaux
+> et peut déclencher des rappels `on_decrypt_fail` sans objet.
+
+---
+
 ## Statut
 
 Mesh BLE ouvert : presence legacy + auto-dial + ANNOUNCE + chat multihop.

@@ -138,6 +138,127 @@ def measure_topology(
     }
 
 
+def measure_revocation(
+    positions: dict, announce_rounds: int, algorithm, catchup_rounds: int = 3
+) -> dict:
+    """Revoke one member and see who is left behind.
+
+    ``announce_rounds`` is the interesting knob. The coordinator can only wrap a
+    rekey for a member whose public key it holds, and Hello only ever supplies
+    the keys of direct neighbours — the rest arrive by PKT_ANNOUNCE, which a
+    real node floods on a 30 s timer. Setting this to 0 reproduces the window
+    just after a node joins, before its key has propagated.
+    """
+    n = len(positions)
+    engine = ForwardingSimEngine(positions, RADIUS, algorithm, ttl_max=40)
+    engine.converge(max_steps=60, announce_rounds=announce_rounds)
+
+    bds = sorted(engine.nodes)
+    epoch_of = lambda bd: engine.nodes[bd].hello_mgr.epoch_store.current_epoch()  # noqa: E731
+    coord = next((b for b in bds if engine.nodes[b].hello_mgr.is_coordinator()), None)
+    if coord is None:
+        return {"n_nodes": n, "announce_rounds": announce_rounds, "no_coordinator": True}
+    victim = next(b for b in bds if b != coord)
+
+    before = engine.bus.unicast_count
+    try:
+        with engine.bus.breadth_first():
+            engine.nodes[coord].forwarder.revoke_member(victim)
+    except RuntimeError as e:
+        # The coordinator does not even know the victim's key: revocation
+        # cannot start. Worth reporting rather than crashing the sweep.
+        return {
+            "n_nodes": n,
+            "announce_rounds": announce_rounds,
+            "refused": str(e).split("—")[0].strip(),
+        }
+    cost = engine.bus.unicast_count - before
+
+    # Let the gossip catch-up run, as it would on a live mesh.
+    for _ in range(catchup_rounds):
+        with engine.bus.breadth_first():
+            engine.step()
+
+    new_epoch = epoch_of(coord)
+    legit = [b for b in bds if b != victim]
+    stranded = [b for b in legit if epoch_of(b) < new_epoch]
+
+    text = f"post-revocation-{n}-{announce_rounds}"
+    with engine.bus.breadth_first():
+        engine.nodes[coord].forwarder.send_broadcast(text)
+    reads = lambda bd: any(t == text for _, t in engine.nodes[bd].delivered)  # noqa: E731
+
+    return {
+        "n_nodes": n,
+        "announce_rounds": announce_rounds,
+        "epoch": new_epoch,
+        "stranded": len(stranded),
+        "stranded_frac": round(len(stranded) / max(1, len(legit)), 3),
+        # The whole point of a revocation: the victim must go dark.
+        "victim_still_reads": reads(victim),
+        "emissions": cost,
+        "emissions_per_node": round(cost / n, 1),
+    }
+
+
+def run_revocation_study(
+    sizes: list[int], degree: float, seeds: int, algorithm
+) -> list[dict]:
+    out = []
+    for n in sizes:
+        area = _area_for_target_degree(n, radius=RADIUS, target_degree=degree)
+        for rounds in (0, 2):
+            runs = []
+            for seed in range(1, seeds + 1):
+                try:
+                    positions = generate_connected_geometric(n, area, RADIUS, seed=seed)
+                except RuntimeError:
+                    continue
+                runs.append(measure_revocation(positions, rounds, algorithm))
+            done = [r for r in runs if "stranded" in r]
+            out.append(
+                {
+                    "n_nodes": n,
+                    "announce_rounds": rounds,
+                    "draws": len(runs),
+                    "refused": sum(1 for r in runs if "refused" in r),
+                    "stranded_worst": max((r["stranded"] for r in done), default=None),
+                    "stranded_mean": (
+                        round(statistics.mean(r["stranded"] for r in done), 2)
+                        if done
+                        else None
+                    ),
+                    "victim_leaks": sum(1 for r in done if r["victim_still_reads"]),
+                    "emissions_per_node": (
+                        round(statistics.mean(r["emissions_per_node"] for r in done), 1)
+                        if done
+                        else None
+                    ),
+                }
+            )
+    return out
+
+
+def print_revocation(rows: list[dict]) -> None:
+    head = (
+        f"{'n':>4} {'announce':>9} {'refusees':>9} {'egares max':>11} "
+        f"{'egares moy':>11} {'fuites':>7} {'emis./noeud':>12}"
+    )
+    print(head)
+    print("-" * len(head))
+    for r in rows:
+        print(
+            f"{r['n_nodes']:>4} {r['announce_rounds']:>9} {r['refused']:>9} "
+            f"{str(r['stranded_worst']):>11} {str(r['stranded_mean']):>11} "
+            f"{r['victim_leaks']:>7} {str(r['emissions_per_node']):>12}"
+        )
+    print(
+        "\n« egares » = membres legitimes restes a l'ancienne epoque (ne lisent plus "
+        "le groupe).\n« fuites » = revocations ou la victime lit encore le trafic "
+        "d'apres (doit rester 0)."
+    )
+
+
 def run_study(
     sizes: list[int],
     degrees: list[float],
@@ -221,7 +342,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--study", choices=("scale", "density"), default="scale")
+    ap.add_argument(
+        "--study", choices=("scale", "density", "revocation"), default="scale"
+    )
     ap.add_argument("--sizes", default="", help="comma-separated node counts")
     ap.add_argument("--degrees", default="", help="comma-separated target mean degrees")
     ap.add_argument("--seeds", type=int, default=5, help="topologies per point")
@@ -233,6 +356,21 @@ def main() -> int:
     args = ap.parse_args()
 
     algorithm = CDSAlgorithm.MPR if args.mpr else CDSAlgorithm.WU_LI_1999
+
+    if args.study == "revocation":
+        sizes = [int(s) for s in args.sizes.split(",")] if args.sizes else [
+            6, 10, 20, 30
+        ]
+        degree = float(args.degrees.split(",")[0]) if args.degrees else 6.0
+        print(f"etude revocation — {algorithm.value}, {args.seeds} topologies par point, "
+              f"degre visé {degree}\n")
+        rows = run_revocation_study(sizes, degree, args.seeds, algorithm)
+        print_revocation(rows)
+        if args.json_out:
+            with open(args.json_out, "w", encoding="utf-8") as fh:
+                json.dump({"study": "revocation", "rows": rows}, fh, indent=2)
+            print(f"\nJSON : {args.json_out}")
+        return 0
 
     if args.study == "scale":
         sizes = [int(s) for s in args.sizes.split(",")] if args.sizes else [

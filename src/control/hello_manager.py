@@ -124,12 +124,40 @@ class HelloManager:
     def get_peer_epoch(self, bd_addr: str) -> int:
         return int(self._peer_epochs.get(bd_addr.strip().upper(), 0))
 
+    def member_anon_ids(self) -> dict[str, bytes]:
+        """anon_id of every member this node knows of, itself included.
+
+        Membership arrives by two routes: Hello, which only ever resolves direct
+        neighbours, and PKT_ANNOUNCE, which carries a binding across the whole
+        mesh. Both must count, and the same basis must be used to *elect* a
+        coordinator and to *validate* one — otherwise the two disagree.
+
+        They used to. Election looked at resolved members alone, while the
+        receiver checking an incoming rekey also counted announce-learned peers.
+        On a dense mesh the two views coincide and nothing shows. On a sparse one
+        the neighbourhood view is a strict subset, so several nodes each find
+        themselves smallest and act as coordinator, and every rekey they issue is
+        refused mesh-wide as "not coordinator" — revocation silently stops
+        working while looking perfectly healthy from the initiator's side.
+        """
+        aids: dict[str, bytes] = {self._local_bd: self.anon_id}
+        for m in self.get_resolved_members():
+            bd = str(m["bd_addr"]).upper()
+            aid = m.get("anon_id")
+            if isinstance(aid, (bytes, bytearray)) and len(aid) == 8:
+                aids[bd] = bytes(aid)
+            else:
+                aids[bd] = self.anon_id_for_or_compute(bd)
+        for bd in self.key_store.known_peers():
+            bd_u = bd.strip().upper()
+            if bd_u not in aids:
+                aids[bd_u] = self.anon_id_for_or_compute(bd_u)
+        return aids
+
     def is_coordinator(self) -> bool:
-        """True if this node has the smallest anon_id among resolved members."""
+        """True if this node has the smallest anon_id among all known members."""
         member_aids = [
-            bytes(m["anon_id"])
-            for m in self.get_resolved_members()
-            if str(m["bd_addr"]).upper() != self._local_bd
+            aid for bd, aid in self.member_anon_ids().items() if bd != self._local_bd
         ]
         return is_coordinator(self.anon_id, member_aids)
 
