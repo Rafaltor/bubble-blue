@@ -67,8 +67,21 @@ class Board:
         self.target = target
         self.password = password
         self.repo = repo
+        self.env: list[str] = []
         self.summary: dict | None = None
         self.error = ""
+
+    def _probe_cmd(self, duration: float, send_every: float, expect: int) -> str:
+        # config.py's .env loader does not override what is already exported, so
+        # passing settings through env here beats editing .env on every board --
+        # and leaves nothing behind to contaminate the next campaign.
+        env = ("env " + " ".join(shlex.quote(e) for e in self.env) + " ") if self.env else ""
+        return (
+            f"{env}python3.14 scripts/bb_probe.py"
+            f" --duration {duration} --send-every {send_every}"
+            f" --expect {expect} --tag {shlex.quote(self.tag)}"
+            f" --json-out {REMOTE_JSON}"
+        )
 
     def _cd(self, default_repo: str) -> str:
         return cd_into(self.repo or default_repo)
@@ -112,12 +125,7 @@ class Board:
 
     def relaunch_probe(self, repo: str, duration: float, send_every: float, expect: int) -> None:
         """Bring the board back, detached so this call does not block the campaign."""
-        probe = (
-            f"python3.14 scripts/bb_probe.py"
-            f" --duration {duration} --send-every {send_every}"
-            f" --expect {expect} --tag {shlex.quote(self.tag)}"
-            f" --json-out {REMOTE_JSON}"
-        )
+        probe = self._probe_cmd(duration, send_every, expect)
         # The whole pipeline goes inside sh -c: backgrounding it directly would
         # apply setsid to the printf alone, and the </dev/null needed to let ssh
         # return would then land on sudo and swallow the password it reads from
@@ -147,12 +155,7 @@ class Board:
         return True
 
     def run_probe(self, repo: str, duration: float, send_every: float, expect: int) -> None:
-        probe = (
-            f"python3.14 scripts/bb_probe.py"
-            f" --duration {duration} --send-every {send_every}"
-            f" --expect {expect} --tag {shlex.quote(self.tag)}"
-            f" --json-out {REMOTE_JSON}"
-        )
+        probe = self._probe_cmd(duration, send_every, expect)
         # Keep the probe's own output on the board rather than streaming five
         # minutes of link events back: a failure is unreadable without it, and
         # the first version of this script discarded it and cost a whole run.
@@ -341,8 +344,10 @@ def main() -> int:
                     help="when to take it out (s into the run)")
     ap.add_argument("--churn-for", type=float, default=60.0,
                     help="how long it stays away (s)")
-    ap.add_argument("--expected-departure-s", type=float, default=15.0,
-                    help="HELLO_INTERVAL_S x HELLO_MISSES on the boards, for the report")
+    ap.add_argument("--expected-departure-s", type=float, default=0.0,
+                    help="override the departure delay the report compares against")
+    ap.add_argument("--board-env", action="append", default=[], metavar="KEY=VALUE",
+                    help="set on every probe; repeatable (e.g. BUBBLE_BLUE_HELLO_MISSES=6)")
     ap.add_argument("--json-out", default="", help="write the full campaign JSON here")
     args = ap.parse_args()
 
@@ -357,7 +362,21 @@ def main() -> int:
         return 2
 
     expect = len(boards)
+    for b in boards:
+        b.env = list(args.board_env)
+
+    # Derive what the departure delay should be from whatever the sweep set, so
+    # the report compares against the run's own configuration rather than a
+    # default that a --board-env has just invalidated.
+    env_map = dict(e.split("=", 1) for e in args.board_env if "=" in e)
+    expected_departure = args.expected_departure_s or (
+        int(env_map.get("BUBBLE_BLUE_HELLO_INTERVAL_S", 5))
+        * int(env_map.get("BUBBLE_BLUE_HELLO_MISSES", 3))
+    )
+
     print(f"bench: {expect} cartes, {args.duration:.0f} s par carte")
+    if args.board_env:
+        print(f"bench: reglages imposes : {' '.join(args.board_env)}")
 
     if args.pull:
         print("bench: synchronisation git...")
@@ -435,7 +454,7 @@ def main() -> int:
         churn_rows = churn_metrics(
             boards, args.churn, churn_bd, churn_times["kill"], churn_times["back"]
         )
-        print_churn(churn_rows, args.churn, args.expected_departure_s)
+        print_churn(churn_rows, args.churn, expected_departure)
 
     if args.json_out:
         payload = {
