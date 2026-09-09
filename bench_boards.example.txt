@@ -2,15 +2,19 @@
 #
 # Copy to bench_boards.txt (gitignored) and fill in. One board per line:
 #
-#   tag        user@host              [password]
+#   tag        user@host              [password]  [repo path]
 #
 # The password column is optional and only there because these boards ship with
-# password auth; with SSH keys in place and passwordless sudo, leave it out.
+# password auth; with SSH keys and passwordless sudo in place, put "-" instead.
 # It is used for both ssh (via sshpass) and sudo -S on the board.
+#
+# The repo path defaults to --repo (~/bubble-blue). Give it per board when a
+# checkout lives somewhere else — the boards were set up at different times and
+# do not agree.
 #
 # The tag is what appears in the report, so keep it short and recognisable.
 
-rubik-q       ubuntu@100.79.229.15     CHANGEME
+rubik-q       ubuntu@100.79.229.15     CHANGEME   ~/Documents/bubble-blue
 rubik-inria   ubuntu@100.75.154.37     CHANGEME
 rubik3        ubuntu@100.88.98.123     CHANGEME
 arduinoq      arduino@100.75.58.105    CHANGEME

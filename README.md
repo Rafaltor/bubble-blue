@@ -913,7 +913,8 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `sim/` | Simulation (pas de modèle OTA presence) |
 | `docs/` | Config, PDF sécu, HTML |
 | `scripts/run_tests.sh` | Runner de tests sans dépendance |
-| `scripts/bb_probe.py` | Soak stabilité + chat (résumé JSON) |
+| `scripts/bb_probe.py` | Sonde par carte : convergence, stabilité, chat (JSON) |
+| `scripts/bb_bench.py` | Campagne multi-cartes : lance les sondes et agrège |
 | `scripts/meshd_client.py` | Client chat en terminal (sans écran) |
 | `scripts/meshd_fake.py` | Démon simulé pour développer l’UI |
 | `scripts/panel_fake_sketch.py` | Aperçu texte du panneau UNO Q |
@@ -959,6 +960,85 @@ est dans la radio et la topologie. L’angle qui resterait défendable est
 
 ---
 
+## Banc de convergence et de stabilité
+
+Les campagnes multi-cartes se lançaient jusqu’ici à la main, carte par carte en
+SSH — d’où des runs jamais tout à fait comparables. `scripts/bb_bench.py` pilote
+`scripts/bb_probe.py` sur toutes les cartes **simultanément** (un démarrage
+échelonné flatterait la convergence), collecte les JSON et réduit le tout aux
+quelques chiffres citables.
+
+```bash
+cp bench_boards.example.txt bench_boards.txt   # gitignoré : contient des mots de passe
+python3.14 scripts/bb_bench.py --duration 300 --pull --json-out campagne.json
+```
+
+`--pull` synchronise les cartes par git et **abandonne** si l’une d’elles n’est
+pas sur le même commit : comparer des cartes qui n’exécutent pas le même code ne
+veut rien dire. Le chemin du dépôt se règle par carte dans le fichier de liste,
+les cartes ayant été installées à des dates différentes et n’étant pas d’accord
+entre elles.
+
+### Ce que mesurent les métriques
+
+Deux conventions gouvernent la lecture. Le **warm-up** (25 s) est la phase de
+convergence : les liens qui s’y forment ne sont pas des flaps, donc la stabilité
+l’ignore — mais la convergence, elle, se mesure dedans et n’est pas tronquée. Le
+**régime établi** est tout ce qui suit ; une moyenne qui mélangerait les deux ne
+dirait rien de l’un ni de l’autre.
+
+| Métrique | Ce qu’elle capture |
+|----------|--------------------|
+| `time_to_full_mesh_s` | Délai avant que la carte voie **toutes** les autres, depuis le lancement du processus (découverte et dial compris) |
+| `full_mesh_frac_steady` | Part du régime établi passée en maillage complet — une partition transitoire s’y voit |
+| `flaps_after_warmup` | Liens tombés une fois le mesh posé, et leur taux horaire |
+| `relay_transitions` | Changements de rôle CDS : un relais qui change d’avis coûte aussi cher qu’un lien qui tombe |
+| `delivery` | Part des autres cartes effectivement **entendues** en chat — un lien monté mais muet ne se voit que là |
+
+Les chiffres de campagne sont des **pires cas**, pas des moyennes : un mesh est
+convergé quand la *dernière* carte a rejoint, et stable seulement si le maillon
+le plus faible l’était. La série par seconde est conservée brute dans le JSON,
+de quoi retracer une courbe sans refaire tourner six cartes.
+
+`--expect` (renseigné automatiquement par `bb_bench`) est ce qui distingue le
+banc du simple soak : sans savoir combien de cartes participent, « convergé » n’a
+pas de définition, et les champs correspondants restent nuls plutôt que de
+produire un nombre faussement assuré.
+
+### Référence du 9 septembre (2 nœuds)
+
+| Mesure | Résultat |
+|--------|----------|
+| Convergence | **4–5 s** (les deux cartes) |
+| Temps en maillage complet | **97 %** du régime établi (carte la moins bonne) |
+| Flaps après warm-up | 5 sur 2 × 275 s, tous rattrapés |
+| Changements de rôle relais | **0** |
+| Livraison chat | **100 %** |
+
+Campagne réduite à deux Rubik : les trois autres cartes étaient hors ligne et
+l’UNO Q a échoué au lancement (voir ci-dessous). Les chiffres à 6 nœuds du
+tableau *Statut* proviennent de la campagne manuelle antérieure et restent la
+référence à cette échelle.
+
+### Limite d’exploitation observée : dégradation du contrôleur QCA
+
+Résultat de caractérisation à part entière, et le premier point dur trouvé par
+le banc : après **5 semaines et 6 jours** d’uptime continu, le contrôleur QCA de
+l’UNO Q refuse `btmgmt add-adv`, l’adaptateur reste `DOWN` et `dmesg` accumule
+
+```
+Bluetooth: hci0: Reading QCA version information failed (-110)
+Bluetooth: hci0: Opcode 0x2039 failed: -110        # LE Extended Create Connection
+```
+
+Un redémarrage de la pile (`hciconfig down` + `systemctl restart bluetooth`)
+avait suffi lors des occurrences précédentes ; à ce stade il échoue avec
+`Operation not supported (95)` sans même recharger le firmware. **Seul un reboot
+récupère la carte.** À retenir pour un déploiement longue durée : prévoir une
+surveillance de l’état de l’adaptateur, pas seulement du processus.
+
+---
+
 ## Statut
 
 Mesh BLE ouvert : presence legacy + auto-dial + ANNOUNCE + chat multihop.
@@ -974,7 +1054,7 @@ Mesuré sur boards (Rubik Pi + Arduino UNO Q, `scripts/bb_probe.py`) :
 | ⤷ CDS | 5 nœuds sur 6 élus RELAY |
 | Coupure d’un nœud puis retour | Lien rétabli en **~7 s**, aucune perte ensuite |
 | Chat via `apps/meshd.py` (2 nœuds) | **14/14** dans les deux sens, 0 refus |
-| Suite unitaire (locale + boards) | **19/19** |
+| Suite unitaire (locale + boards) | **22/22** |
 
 Topologie mesurée (6 nœuds) : chaque nœud n’ouvre que **2 à 3 liens L2CAP**
 et le reste passe en multi-hop — c’est le comportement sparse recherché, pas

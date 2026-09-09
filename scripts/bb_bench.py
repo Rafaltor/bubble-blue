@@ -12,12 +12,14 @@ worth quoting:
 Boards come from a file (default ``bench_boards.txt``, gitignored because it may
 hold passwords — see ``bench_boards.example.txt``):
 
-    # tag       target                  [sudo/ssh password]
-    rubik-q     ubuntu@100.79.229.15     tmpXUV!!
-    arduinoq    arduino@100.75.58.105    arduinoq
+    # tag       target                   [password]  [repo path]
+    rubik-q     ubuntu@100.79.229.15      tmpXUV!!    ~/Documents/bubble-blue
+    arduinoq    arduino@100.75.58.105     arduinoq
 
-SSH keys are the better answer and the password column can be left out entirely
-when they are in place; it exists because these boards ship with password auth.
+SSH keys are the better answer and the password column can be set to ``-`` when
+they are in place; it exists because these boards ship with password auth. The
+repo path is per board rather than a single flag because the boards were set up
+at different times and genuinely disagree about where the checkout lives.
 
 Starting the boards is deliberately *simultaneous*: convergence time is only
 meaningful if nobody had a head start, so the probes are launched in parallel
@@ -39,19 +41,37 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 DEFAULT_BOARDS = os.path.join(_ROOT, "bench_boards.txt")
 REMOTE_JSON = "/tmp/bb_bench_probe.json"
+REMOTE_LOG = "/tmp/bb_bench_probe.log"
 
 # Room for SSH setup, the probe's own startup and the summary write-back, so a
 # board that dies mid-run fails the campaign instead of hanging it.
 SSH_OVERHEAD_S = 90
 
 
+def cd_into(repo: str) -> str:
+    """A ``cd`` the remote shell will accept, tilde included.
+
+    ``shlex.quote`` would protect a leading ``~`` from expansion, so hand that
+    part to ``$HOME`` and quote only the rest.
+    """
+    if repo == "~":
+        return 'cd "$HOME"'
+    if repo.startswith("~/"):
+        return f'cd "$HOME"/{shlex.quote(repo[2:])}'
+    return f"cd {shlex.quote(repo)}"
+
+
 class Board:
-    def __init__(self, tag: str, target: str, password: str = "") -> None:
+    def __init__(self, tag: str, target: str, password: str = "", repo: str = "") -> None:
         self.tag = tag
         self.target = target
         self.password = password
+        self.repo = repo
         self.summary: dict | None = None
         self.error = ""
+
+    def _cd(self, default_repo: str) -> str:
+        return cd_into(self.repo or default_repo)
 
     def _ssh(self, remote_cmd: str, timeout: float) -> subprocess.CompletedProcess:
         base = [
@@ -78,9 +98,19 @@ class Board:
             return f"printf '%s\\n' {shlex.quote(self.password)} | sudo -S -p '' {cmd}"
         return f"sudo -n {cmd}"
 
+    def _tail_log(self) -> str:
+        """The last meaningful line of the probe's log, for the failure report.
+
+        Tracebacks end on the exception, which is the one line worth showing;
+        anything more would drown the per-board table.
+        """
+        res = self._ssh(f"tail -n 20 {REMOTE_LOG} 2>/dev/null", timeout=45)
+        lines = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip()]
+        return lines[-1][:160] if lines else "(pas de log)"
+
     def pull(self, repo: str) -> bool:
         """Sync the board from git, so every board runs the same commit."""
-        res = self._ssh(f"cd {shlex.quote(repo)} && git pull --ff-only 2>&1", timeout=120)
+        res = self._ssh(f"{self._cd(repo)} && git pull --ff-only 2>&1", timeout=120)
         if res.returncode != 0:
             self.error = f"git pull: {(res.stdout or res.stderr).strip()[:200]}"
             return False
@@ -93,19 +123,22 @@ class Board:
             f" --expect {expect} --tag {shlex.quote(self.tag)}"
             f" --json-out {REMOTE_JSON}"
         )
-        cmd = f"cd {shlex.quote(repo)} && {self._sudo(probe)} >/dev/null 2>&1"
+        # Keep the probe's own output on the board rather than streaming five
+        # minutes of link events back: a failure is unreadable without it, and
+        # the first version of this script discarded it and cost a whole run.
+        cmd = f"{self._cd(repo)} && {self._sudo(probe)} >{REMOTE_LOG} 2>&1"
         try:
             res = self._ssh(cmd, timeout=duration + SSH_OVERHEAD_S)
         except subprocess.TimeoutExpired:
             self.error = "timeout: the probe never returned"
             return
         if res.returncode != 0:
-            self.error = f"probe exited {res.returncode}: {(res.stderr or '').strip()[:200]}"
+            self.error = f"probe exited {res.returncode}: {self._tail_log()}"
             return
 
         got = self._ssh(f"cat {REMOTE_JSON}", timeout=60)
         if got.returncode != 0:
-            self.error = "no summary written"
+            self.error = f"no summary written: {self._tail_log()}"
             return
         try:
             self.summary = json.loads(got.stdout)
@@ -124,7 +157,10 @@ def load_boards(path: str) -> list[Board]:
             if len(parts) < 2:
                 print(f"bench: ligne ignoree (tag et cible attendus) : {line!r}", file=sys.stderr)
                 continue
-            boards.append(Board(parts[0], parts[1], parts[2] if len(parts) > 2 else ""))
+            # "-" means "no password, use the key" and exists so a repo path can
+            # be given without inventing one.
+            password = parts[2] if len(parts) > 2 and parts[2] != "-" else ""
+            boards.append(Board(parts[0], parts[1], password, parts[3] if len(parts) > 3 else ""))
     return boards
 
 
