@@ -292,6 +292,8 @@ class ForwardingSimEngine(SimEngine):
         source_bd: str,
         ttl: int,
         text: str = "probe",
+        *,
+        breadth_first: bool = False,
     ) -> BroadcastMetrics:
         """
         Inject one group broadcast from ``source_bd`` after convergence.
@@ -309,7 +311,12 @@ class ForwardingSimEngine(SimEngine):
             raise KeyError(f"unknown source node: {source_bd}")
 
         self._prepare_broadcast_probe()
-        self._send_broadcast(src, ttl, text)
+        if breadth_first:
+            # Radio order rather than call-stack order; see SimBus.breadth_first.
+            with self.bus.breadth_first():
+                self._send_broadcast(src, ttl, text)
+        else:
+            self._send_broadcast(src, ttl, text)
 
         return BroadcastMetrics(
             backbone_size=self._backbone_size,

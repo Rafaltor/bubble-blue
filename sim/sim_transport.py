@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import math
 import time
+from collections import deque
 from typing import Any, Callable
 
 from config import PKT_DATA
@@ -67,6 +69,9 @@ class SimBus:
         # Passive PKT_DATA propagation trace (see start_data_log / get_data_log).
         self._data_log_active = False
         self._data_log: list[DataLogEvent] = []
+        # When set, deliveries queue here instead of recursing (see
+        # breadth_first). None means the default synchronous behaviour.
+        self._pending: deque[tuple[str, str, bytes]] | None = None
 
     def register(self, bd_addr: str, position: Position, on_receive: OnReceive) -> SimTransport:
         """Add a node at ``position`` and return its SimTransport façade."""
@@ -155,7 +160,47 @@ class SimBus:
                 pass
         if not in_range:
             return  # out of range → packet lost
+        if self._pending is not None:
+            self._pending.append((s, d, data))
+            return
         self._on_receive[d](s, data)
+
+    @contextlib.contextmanager
+    def breadth_first(self, max_events: int = 5_000_000):
+        """Propagate one flood level at a time instead of recursing.
+
+        Delivering synchronously means a relay's handler re-emits from inside
+        the sender's own call, so a flood explores the graph depth-first: one
+        branch is walked to exhaustion before its siblings hear anything. A
+        radio does the opposite — every neighbour hears the same transmission at
+        once — and the difference is not cosmetic, because duplicate suppression
+        locks in whichever copy arrives first. Under depth-first order that can
+        be a copy which took a long way round and has little TTL left, so the
+        subtree behind it is explored on a smaller budget than it deserves.
+
+        Queueing deliveries and draining FIFO restores level-by-level order:
+        everything one hop out is handled before anything two hops out.
+
+        Counting and range checks stay at enqueue time, which is where the
+        transmission conceptually happens; only the handler call is deferred.
+        """
+        if self._pending is not None:
+            raise RuntimeError("breadth_first() is not reentrant")
+        self._pending = deque()
+        try:
+            yield
+            drained = 0
+            while self._pending:
+                s, d, data = self._pending.popleft()
+                drained += 1
+                if drained > max_events:
+                    raise RuntimeError(
+                        f"breadth-first drain exceeded {max_events} deliveries — "
+                        "a forwarding loop would otherwise hang the run"
+                    )
+                self._on_receive[d](s, data)
+        finally:
+            self._pending = None
 
     def reset_data_unicast_count(self) -> None:
         """Zero the PKT_DATA unicast counter (broadcast overhead measurement)."""

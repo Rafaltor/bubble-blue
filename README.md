@@ -911,6 +911,7 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `apps/unoq/panel/` | Sketch STM32 du panneau d’état (shield Adafruit 1651) |
 | `tests/` | Tests autonomes (sans pytest) |
 | `sim/` | Simulation (pas de modèle OTA presence) |
+| `sim/limits.py` | Étude des limites topologiques (échelle, densité, TTL) |
 | `docs/` | Config, PDF sécu, HTML |
 | `scripts/run_tests.sh` | Runner de tests sans dépendance |
 | `scripts/bb_probe.py` | Sonde par carte : convergence, stabilité, chat (JSON) |
@@ -1079,6 +1080,98 @@ avait suffi lors des occurrences précédentes ; à ce stade il échoue avec
 récupère la carte** — vérifié le 9 septembre : adaptateur `UP RUNNING` et carte
 opérationnelle dans la campagne suivante. À retenir pour un déploiement longue
 durée : surveiller l’état de l’adaptateur, pas seulement le processus.
+
+---
+
+## Limites topologiques (`sim/limits.py`)
+
+Six cartes ne peuvent pas répondre à « jusqu’où ça monte ». La question se
+traite donc en simulation — mais sur le **vrai** `HelloManager` et le **vrai**
+`PacketForwarder`, que le moteur pilote à travers une radio synthétique au lieu
+de les réimplémenter. Ce qui est simulé, c’est le milieu ; le protocole testé
+est celui qui est déployé.
+
+```bash
+python3.14 sim/limits.py --study scale      # taille, à densité constante
+python3.14 sim/limits.py --study density    # densité, à taille constante
+```
+
+### Correction préalable : l’ordre de propagation
+
+Le bus livrait les paquets **de façon synchrone** : le gestionnaire du
+destinataire s’exécutait depuis la pile d’appel de l’émetteur, donc une
+diffusion explorait le graphe **en profondeur d’abord** — une branche parcourue
+jusqu’au bout avant que ses sœurs n’entendent quoi que ce soit. Une radio fait
+l’inverse : tous les voisins reçoivent la même émission en même temps.
+
+L’écart n’est pas cosmétique, parce que la suppression des doublons fige la
+première copie arrivée. En profondeur d’abord, ce peut être une copie venue par
+un long détour, avec peu de TTL restant : tout le sous-arbre derrière elle est
+alors exploré avec un budget amputé. Symptôme observé : une couverture **non
+monotone** en TTL (85 % à TTL 10, puis 51 % à TTL 15 à 75 nœuds).
+
+`SimBus.breadth_first()` met les livraisons en file et les draine niveau par
+niveau. Toute mesure ci-dessous l’utilise ; sans lui les chiffres sont
+pessimistes et dépendent de l’ordre des appels.
+
+| n | Profondeur d’abord (TTL 10) | Ordre radio (TTL 10) |
+|---|------------------------------|----------------------|
+| 30 | 83 % | **100 %** |
+| 50 | 78 % | **100 %** |
+| 75 | 85 % | 86 % |
+
+### Résultat : le CDS n’allonge aucun chemin
+
+Sur **tous** les points mesurés, le TTL minimal qui atteint tout le monde est
+exactement égal à l’excentricité de la source en sauts :
+
+| n | Degré moyen | Relais | Diamètre | TTL min | Livraison à TTL 10 |
+|---|-------------|--------|----------|---------|--------------------|
+| 10 | 3,9 | 45 % | 4 | **4** | 100 % |
+| 20 | 4,3 | 50 % | 8 | **8** | 100 % |
+| 30 | 3,3 | 67 % | 11 | **11** | 93 % |
+| 50 | 5,2 | 52 % | 13 | **13** | 94 % |
+| 75 | 4,9 | 48 % | 17 | **17** | 54 % |
+| 100 | 5,2 | 55 % | 19 | **19** | 23 % |
+
+Autrement dit le dorsale CDS relaie **le long des plus courts chemins**, sans
+détour. C’est une propriété du `PacketForwarder` livré, pas du simulateur : elle
+est donc vérifiée par `sim/test_limits.py`, sur chaînes (où aucune route
+alternative n’existe) comme sur graphes géométriques aléatoires.
+
+### La limite d’exploitation est le TTL, pas la taille
+
+Il n’y a donc pas de « ça casse à N nœuds ». Il y a : **au-delà d’un diamètre de
+10 sauts, le TTL par défaut ne traverse plus le réseau.** À un degré moyen de 4
+à 5, cela correspond à une vingtaine de nœuds. Au-delà, `ttl_max` doit suivre le
+diamètre — et le diamètre croît avec la taille à densité constante.
+
+Pour la démo à 6 nœuds, le TTL par défaut de 10 est très largement suffisant :
+la limite ne mord qu’à une échelle qu’on n’atteindra pas physiquement.
+
+### Densité : plus dense coûte moins de relais mais plus d’émissions
+
+| Degré moyen visé | Degré obtenu | Relais | Diamètre | Réémissions / nœud |
+|------------------|--------------|--------|----------|--------------------|
+| 3 | *aucun tirage connexe* | — | — | — |
+| 4 | *aucun tirage connexe* | — | — | — |
+| 6 | 5,2 | 52 % | 13 | 4,2 |
+| 8 | 6,0 | 47 % | 11 | 5,1 |
+| 12 | 8,9 | **38 %** | 7 | 8,1 |
+
+Deux tendances opposées : densifier **réduit** la part de relais (52 % → 38 %),
+le CDS ayant besoin de proportionnellement moins de nœuds pour dominer un graphe
+serré, mais **augmente** le coût par diffusion, chaque relais ayant plus de
+voisins à servir.
+
+En dessous d’un degré moyen d’environ 5, aucun tirage n’est connexe en 100
+essais : c’est le seuil de percolation, et la limite physique en deçà de laquelle
+la question du routage ne se pose même plus.
+
+> Réserve méthodologique : le degré obtenu est inférieur au degré visé (effets de
+> bord — les nœuds près du bord ont moins de voisins) et le filtrage sur
+> connexité biaise vers les tirages denses. Les tableaux reportent donc le degré
+> **mesuré**, pas la consigne.
 
 ---
 
