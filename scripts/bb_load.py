@@ -165,6 +165,10 @@ def run_send(args) -> dict:
     steps = parse_steps(args.steps) if args.steps else default_steps(args.max_size)
 
     node = BBNode(interface=args.interface, quiet=True)
+    # Required before start(), and worth counting: anything the generator hears
+    # back from its own load would be a self-echo.
+    echoes: list[str] = []
+    node.on_message = lambda sender, text: echoes.append(text)
     node.start(l2cap_accept_all=True)
     print(f"send {args.tag} local={node.local_bd_addr}", flush=True)
 
@@ -237,6 +241,7 @@ def run_send(args) -> dict:
         "converged_s": round(converged, 1),
         "peers_at_start": len(node.peers()),
         "warmup_sent": warmup_ok,
+        "self_echoes": sum(1 for t in echoes if decode(t) is not None),
         "steps": results,
     }
     node.stop()
