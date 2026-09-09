@@ -74,10 +74,12 @@ def parse_steps(spec: str) -> list[Step]:
 
 def default_steps(max_size: int) -> list[Step]:
     """Rate first at a small payload, then size at a modest rate."""
-    rate_sweep = [Step(64, r, 8.0) for r in (1, 2, 5, 10, 20, 40)]
-    # 64 B is already covered by the rate sweep at this rate, so start at 128.
-    size_sweep = [Step(s, 5.0, 8.0) for s in (128, 256, max_size)]
-    return rate_sweep + size_sweep
+    # Size first, rate second. Overload is destructive — a board that has just
+    # been pushed past its limit stops sending entirely — so anything measured
+    # after a rate sweep measures the damage instead of the payload.
+    size_sweep = [Step(s, 5.0, 8.0) for s in (64, 128, 256, max_size)]
+    rate_sweep = [Step(64, r, 8.0) for r in (10, 15, 20, 30)]
+    return size_sweep + rate_sweep
 
 
 def encode(step: int, idx: int, size: int) -> str:
@@ -189,6 +191,10 @@ def run_send(args) -> dict:
         period = 1.0 / step.rate if step.rate > 0 else 0.0
         sent = 0
         errors: dict[str, int] = {}
+        # One message per error type: a bare count says something failed, not
+        # what, and the whole point of a saturation test is the failure mode.
+        error_texts: dict[str, str] = {}
+        peers_before = len(node.peers())
         latencies: list[float] = []
         t0 = time.monotonic()
         next_at = t0
@@ -207,6 +213,7 @@ def run_send(args) -> dict:
             except Exception as e:  # noqa: BLE001
                 name = type(e).__name__
                 errors[name] = errors.get(name, 0) + 1
+                error_texts.setdefault(name, str(e)[:200])
             latencies.append(time.monotonic() - call)
         elapsed = time.monotonic() - t0
 
@@ -221,6 +228,9 @@ def run_send(args) -> dict:
                 "sent": sent,
                 "seconds": round(elapsed, 2),
                 "errors": errors,
+                "error_texts": error_texts,
+                "peers_before": peers_before,
+                "peers_after": len(node.peers()),
                 "send_ms_mean": round(statistics.mean(latencies) * 1000, 2)
                 if latencies
                 else None,
@@ -229,10 +239,21 @@ def run_send(args) -> dict:
         )
         print(
             f"step {i}: {step.size}o x {step.rate}/s -> envoyes {sent} "
-            f"({results[-1]['rate_achieved']}/s), erreurs {errors or 'aucune'}",
+            f"({results[-1]['rate_achieved']}/s), pairs "
+            f"{peers_before}->{results[-1]['peers_after']}, "
+            f"erreurs {errors or 'aucune'} {error_texts or ''}",
             flush=True,
         )
         time.sleep(1.0)
+
+    # Does the mesh come back on its own once the load stops? A limit that
+    # heals is a capacity figure; one that does not is an outage.
+    recovery = {"peers_after_steps": len(node.peers()), "recovered_s": None}
+    if len(node.peers()) < expect_peers:
+        waited = _wait_for_mesh(node, expect_peers, args.recovery_timeout)
+        recovery["recovered_s"] = round(waited, 1) if waited >= 0 else None
+        recovery["peers_after_wait"] = len(node.peers())
+        print(f"recuperation: {recovery}", flush=True)
 
     out = {
         "role": "send",
@@ -242,6 +263,7 @@ def run_send(args) -> dict:
         "peers_at_start": len(node.peers()),
         "warmup_sent": warmup_ok,
         "self_echoes": sum(1 for t in echoes if decode(t) is not None),
+        "recovery": recovery,
         "steps": results,
     }
     node.stop()
@@ -320,7 +342,13 @@ def print_report(sender, listeners: list, rows: list[dict]) -> None:
     s = sender.summary or {}
     print(f"{sender.tag}: {s.get('peers_at_start')} pairs, "
           f"convergence {s.get('converged_s')}s, warmup "
-          f"{'OK' if s.get('warmup_sent') else 'ECHEC'}")
+          f"{'OK' if s.get('warmup_sent') else 'ECHEC'}, "
+          f"auto-echos {s.get('self_echoes')}")
+    rec = s.get("recovery") or {}
+    if rec.get("peers_after_steps") is not None:
+        print(f"  apres charge : {rec['peers_after_steps']} pairs ; "
+              f"recuperation {rec.get('recovered_s') or 'JAMAIS'}"
+              f"{'s' if rec.get('recovered_s') else ''}")
     for b in listeners:
         if b.summary:
             print(f"  ecoute {b.tag}: {b.summary.get('total_received')} messages recus "
@@ -377,7 +405,8 @@ def orchestrate(args) -> int:
     steps = args.steps or ""
     plan = parse_steps(steps) if steps else default_steps(args.max_size)
     # Convergence, warm-up and the per-step pause all sit outside the steps.
-    need = sum(s.secs + 1.0 for s in plan) + args.converge_timeout + 20
+    need = (sum(s.secs + 1.0 for s in plan) + args.converge_timeout
+            + args.recovery_timeout + 20)
     duration = args.duration or need
     print(f"{len(plan)} paliers, {duration:.0f}s par carte\n")
 
@@ -425,6 +454,8 @@ def main() -> int:
     ap.add_argument("--steps", default="", help="size,rate,secs;...")
     ap.add_argument("--max-size", type=int, default=0, help="0 = transport maximum")
     ap.add_argument("--converge-timeout", type=float, default=60.0)
+    ap.add_argument("--recovery-timeout", type=float, default=45.0,
+                    help="how long to wait for links to come back after load")
     ap.add_argument("--tag", default=os.uname().nodename)
     ap.add_argument("--interface", default="hci0")
     ap.add_argument("--repo", default="~/bubble-blue")
