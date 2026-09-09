@@ -188,3 +188,6 @@ meson-info/
 site/
 docs/_build/
 
+
+# Board list for bb_bench.py: may contain passwords
+bench_boards.txt

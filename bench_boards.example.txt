@@ -1,0 +1,16 @@
+# Boards taking part in a bb_bench.py campaign.
+#
+# Copy to bench_boards.txt (gitignored) and fill in. One board per line:
+#
+#   tag        user@host              [password]
+#
+# The password column is optional and only there because these boards ship with
+# password auth; with SSH keys in place and passwordless sudo, leave it out.
+# It is used for both ssh (via sshpass) and sudo -S on the board.
+#
+# The tag is what appears in the report, so keep it short and recognisable.
+
+rubik-q       ubuntu@100.79.229.15     CHANGEME
+rubik-inria   ubuntu@100.75.154.37     CHANGEME
+rubik3        ubuntu@100.88.98.123     CHANGEME
+arduinoq      arduino@100.75.58.105    CHANGEME
