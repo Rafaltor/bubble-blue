@@ -118,11 +118,15 @@ class Board:
             f" --expect {expect} --tag {shlex.quote(self.tag)}"
             f" --json-out {REMOTE_JSON}"
         )
-        cmd = (
-            f"{self._cd(repo)} && setsid {self._sudo(probe)}"
-            f" >{REMOTE_LOG}.rejoin 2>&1 </dev/null &"
-        )
-        self._ssh(cmd, timeout=45)
+        # The whole pipeline goes inside sh -c: backgrounding it directly would
+        # apply setsid to the printf alone, and the </dev/null needed to let ssh
+        # return would then land on sudo and swallow the password it reads from
+        # that same pipe.
+        inner = f"{self._cd(repo)} && {self._sudo(probe)} >{REMOTE_LOG}.rejoin 2>&1"
+        cmd = f"setsid sh -c {shlex.quote(inner)} </dev/null >/dev/null 2>&1 &"
+        res = self._ssh(cmd, timeout=45)
+        if res.returncode != 0:
+            raise RuntimeError((res.stderr or "relance refusee").strip()[:160])
 
     def _tail_log(self) -> str:
         """The last meaningful line of the probe's log, for the failure report.
@@ -398,7 +402,12 @@ def main() -> int:
         time.sleep(args.churn_for)
         churn_times["back"] = time.time()
         remaining = max(30.0, args.duration - args.churn_at - args.churn_for)
-        churn_board.relaunch_probe(args.repo, remaining, args.send_every, expect)
+        try:
+            churn_board.relaunch_probe(args.repo, remaining, args.send_every, expect)
+        except Exception as e:  # noqa: BLE001 — a thread swallowing this cost a run
+            churn_times.pop("back", None)
+            print(f"bench: relance de {args.churn} ECHOUEE ({e})", file=sys.stderr, flush=True)
+            return
         print(f"bench: {args.churn} relancee", flush=True)
 
     print(f"bench: lancement simultane, resultats dans ~{args.duration + 30:.0f} s...")
