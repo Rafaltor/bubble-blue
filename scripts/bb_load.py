@@ -186,8 +186,7 @@ def run_send(args) -> dict:
         print(f"warmup failed: {e}", flush=True)
     time.sleep(2.0)
 
-    results = []
-    for i, step in enumerate(steps):
+    def run_one_step(i: int, step: Step) -> dict:
         period = 1.0 / step.rate if step.rate > 0 else 0.0
         sent = 0
         errors: dict[str, int] = {}
@@ -217,8 +216,7 @@ def run_send(args) -> dict:
             latencies.append(time.monotonic() - call)
         elapsed = time.monotonic() - t0
 
-        results.append(
-            {
+        return {
                 "step": i,
                 "size": step.size,
                 "rate_target": step.rate,
@@ -236,24 +234,39 @@ def run_send(args) -> dict:
                 else None,
                 "send_ms_max": round(max(latencies) * 1000, 2) if latencies else None,
             }
-        )
+
+    results = []
+    for i, step in enumerate(steps):
+        row = run_one_step(i, step)
+        results.append(row)
         print(
-            f"step {i}: {step.size}o x {step.rate}/s -> envoyes {sent} "
-            f"({results[-1]['rate_achieved']}/s), pairs "
-            f"{peers_before}->{results[-1]['peers_after']}, "
-            f"erreurs {errors or 'aucune'} {error_texts or ''}",
+            f"step {i}: {step.size}o x {step.rate}/s -> envoyes {row['sent']} "
+            f"({row['rate_achieved']}/s), pairs "
+            f"{row['peers_before']}->{row['peers_after']}, "
+            f"erreurs {row['errors'] or 'aucune'} {row['error_texts'] or ''}",
             flush=True,
         )
         time.sleep(1.0)
 
-    # Does the mesh come back on its own once the load stops? A limit that
-    # heals is a capacity figure; one that does not is an outage.
-    recovery = {"peers_after_steps": len(node.peers()), "recovered_s": None}
-    if len(node.peers()) < expect_peers:
-        waited = _wait_for_mesh(node, expect_peers, args.recovery_timeout)
-        recovery["recovered_s"] = round(waited, 1) if waited >= 0 else None
-        recovery["peers_after_wait"] = len(node.peers())
-        print(f"recuperation: {recovery}", flush=True)
+    # Does the mesh carry traffic again once the load stops?
+    #
+    # Peer count is not the test. An overloaded board keeps its links up while
+    # delivering nothing, so the only honest question is whether a quiet, small
+    # message gets through after a pause. A ceiling the mesh recovers from is a
+    # capacity figure; one it does not is an outage.
+    recovery: dict[str, object] = {"peers_after_steps": len(node.peers())}
+    if args.cooldown > 0:
+        print(f"repos {args.cooldown}s avant le palier de recuperation...", flush=True)
+        time.sleep(args.cooldown)
+        idx = len(steps)
+        row = run_one_step(idx, Step(64, 1.0, 8.0))
+        row["is_recovery"] = True
+        results.append(row)
+        recovery["peers_after_cooldown"] = row["peers_after"]
+        recovery["recovery_step"] = idx
+        recovery["recovery_sent"] = row["sent"]
+        print(f"palier de recuperation: envoyes {row['sent']} "
+              f"({row['rate_achieved']}/s), pairs {row['peers_after']}", flush=True)
 
     out = {
         "role": "send",
@@ -346,9 +359,7 @@ def print_report(sender, listeners: list, rows: list[dict]) -> None:
           f"auto-echos {s.get('self_echoes')}")
     rec = s.get("recovery") or {}
     if rec.get("peers_after_steps") is not None:
-        print(f"  apres charge : {rec['peers_after_steps']} pairs ; "
-              f"recuperation {rec.get('recovered_s') or 'JAMAIS'}"
-              f"{'s' if rec.get('recovered_s') else ''}")
+        print(f"  apres charge : {rec['peers_after_steps']} pairs")
     for b in listeners:
         if b.summary:
             print(f"  ecoute {b.tag}: {b.summary.get('total_received')} messages recus "
@@ -365,18 +376,22 @@ def print_report(sender, listeners: list, rows: list[dict]) -> None:
     for r in rows:
         errs = sum(r["errors"].values()) if r["errors"] else 0
         flag = "" if r["delivery_worst"] >= 0.99 else "  <-- pertes"
+        if r.get("is_recovery"):
+            flag = ("  <-- RECUPERATION OK" if r["delivery_worst"] >= 0.99
+                    else "  <-- TOUJOURS BLOQUE apres repos")
         print(
             f"{r['size']:>7} {r['rate_target']:>8} {r['rate_achieved']:>9} "
             f"{r['sent']:>8} {r['delivery_worst']:>9.0%} {r['goodput_Bs']:>10} "
             f"{str(r['send_ms_max']):>12} {errs:>9}{flag}"
         )
 
-    clean = [r for r in rows if r["delivery_worst"] >= 0.99]
+    load_rows = [r for r in rows if not r.get("is_recovery")]
+    clean = [r for r in load_rows if r["delivery_worst"] >= 0.99]
     if clean:
         best_rate = max(r["rate_achieved"] for r in clean)
         best_gp = max(r["goodput_Bs"] for r in clean)
         print(f"\nSans perte : jusqu'a {best_rate}/s et {best_gp} o/s.")
-    lossy = [r for r in rows if r["delivery_worst"] < 0.99]
+    lossy = [r for r in load_rows if r["delivery_worst"] < 0.99]
     if lossy:
         r = lossy[0]
         print(f"Premiere perte a {r['size']} o x {r['rate_target']}/s "
@@ -406,7 +421,7 @@ def orchestrate(args) -> int:
     plan = parse_steps(steps) if steps else default_steps(args.max_size)
     # Convergence, warm-up and the per-step pause all sit outside the steps.
     need = (sum(s.secs + 1.0 for s in plan) + args.converge_timeout
-            + args.recovery_timeout + 20)
+            + args.cooldown + 30)
     duration = args.duration or need
     print(f"{len(plan)} paliers, {duration:.0f}s par carte\n")
 
@@ -454,8 +469,8 @@ def main() -> int:
     ap.add_argument("--steps", default="", help="size,rate,secs;...")
     ap.add_argument("--max-size", type=int, default=0, help="0 = transport maximum")
     ap.add_argument("--converge-timeout", type=float, default=60.0)
-    ap.add_argument("--recovery-timeout", type=float, default=45.0,
-                    help="how long to wait for links to come back after load")
+    ap.add_argument("--cooldown", type=float, default=25.0,
+                    help="idle seconds before the recovery step (0 to skip)")
     ap.add_argument("--tag", default=os.uname().nodename)
     ap.add_argument("--interface", default="hci0")
     ap.add_argument("--repo", default="~/bubble-blue")
