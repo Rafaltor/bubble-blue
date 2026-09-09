@@ -138,6 +138,9 @@ class PacketForwarder:
         self._fwd_cache = _ForwardCache()
         self._replay: dict[str, ReplayFilter] = {}
         self._relay_replay: dict[str, ReplayFilter] = {}
+        # PKT_ANNOUNCE numbers itself from HelloManager's counter, not this
+        # forwarder's, so it needs its own window — see _check_announce_replay.
+        self._announce_replay: dict[str, ReplayFilter] = {}
         self._replay_lock = threading.RLock()
         self._fwd_lock = threading.RLock()
         self._seq_lock = threading.Lock()
@@ -623,10 +626,15 @@ class PacketForwarder:
         ts_ms = int(hdr["ts_ms"])
         if dst != local and ttl > 0:
             new_ttl = ttl - 1
-            if new_ttl > 0 and self._check_relay_ingress(src, seq, ts_ms):
+            # Relay dedup keys on (src, seq), but a node numbers ANNOUNCE from
+            # HelloManager's counter and everything else from this forwarder's.
+            # Left in one space, an ANNOUNCE burns a sequence number that a
+            # later message reuses, and relays silently refuse to forward it.
+            relay_src = f"{src}|{self._relay_seq_space(data)}"
+            if new_ttl > 0 and self._check_relay_ingress(relay_src, seq, ts_ms):
                 with self._fwd_lock:
-                    if not self._fwd_cache.seen(src, seq):
-                        self._fwd_cache.mark(src, seq)
+                    if not self._fwd_cache.seen(relay_src, seq):
+                        self._fwd_cache.mark(relay_src, seq)
                         wire = _decrement_ttl(data, new_ttl)
                         for peer in self._other_peers(exclude=ingress):
                             try:
@@ -636,6 +644,11 @@ class PacketForwarder:
 
         if self._for_us(dst, local):
             deliver_fn(ingress, data, hdr)
+
+    @staticmethod
+    def _relay_seq_space(data: bytes) -> str:
+        """Which sequence counter numbered this packet."""
+        return "ANNOUNCE" if data and data[0] == PKT_ANNOUNCE else "FWD"
 
     def _check_relay_ingress(self, src: str, seq: int, ts_ms: int) -> bool:
         """
@@ -656,6 +669,31 @@ class PacketForwarder:
             if rf.check_and_update(src_u, seq):
                 return True
         self._log(f"[FWD] relay-replay dropped src={src_u} seq={seq}")
+        return False
+
+    def _check_announce_replay(self, src: str, seq: int) -> bool:
+        """Anti-replay for PKT_ANNOUNCE, in its own sequence space.
+
+        A replay window assumes one monotonic counter per sender, but a node has
+        two: HelloManager numbers Hello, presence and ANNOUNCE, while this
+        forwarder numbers DATA, SUBGROUP and REKEY. Both spaces start at zero
+        and advance at very different rates — the Hello side ticks on a timer,
+        the data side only when someone sends a message.
+
+        Sharing one window between them therefore drops good traffic: a chat
+        message whose sequence happens to equal that of an earlier ANNOUNCE from
+        the same node is rejected as a replay by *every* receiver, silently and
+        network-wide. Two counters, two windows.
+        """
+        src_u = src.upper()
+        with self._replay_lock:
+            rf = self._announce_replay.get(src_u)
+            if rf is None:
+                rf = ReplayFilter()
+                self._announce_replay[src_u] = rf
+            if rf.check_and_update(src_u, seq):
+                return True
+        self._log(f"[FWD] announce-replay dropped src={src_u} seq={seq}")
         return False
 
     def _check_replay(self, src: str, seq: int, ts_ms: int) -> bool:
@@ -834,8 +872,7 @@ class PacketForwarder:
         _ = ingress_peer
         src = hdr["src"].upper()
         seq = int(hdr["seq"])
-        ts_ms = int(hdr["ts_ms"])
-        if not self._check_replay(src, seq, ts_ms):
+        if not self._check_announce_replay(src, seq):
             return
         if src == self._cfg.local_bd_addr.upper():
             return

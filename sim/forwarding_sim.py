@@ -187,6 +187,10 @@ class ForwardingSimNode:
             self.hello_mgr,
             on_message=self._on_message,
         )
+        # BBNode wires this; without it a member that misses the revocation
+        # flood is never caught up, and the simulation invents a security
+        # partition the deployed code does not have.
+        self.hello_mgr.set_rekey_catchup(self.forwarder.send_rekey_catchup)
 
     def _on_receive(self, peer: str, data: bytes) -> None:
         if not data:
@@ -241,12 +245,32 @@ class ForwardingSimEngine(SimEngine):
         self._convergence: ConvergenceResult | None = None
         self._backbone_size: int = 0
 
-    def converge(self, max_steps: int = 100) -> ConvergenceResult:
-        """Run Hello cycles until roles stabilize; record backbone size."""
+    def converge(self, max_steps: int = 100, announce_rounds: int = 2) -> ConvergenceResult:
+        """Run Hello cycles until roles stabilize, then settle the ANNOUNCE plane.
+
+        A real node floods PKT_ANNOUNCE on a timer from the moment it starts, so
+        a converged mesh is one where every member knows every other member's
+        public key — not just its direct neighbours', which is all Hello gives.
+
+        The distinction is not academic. Without it the coordinator cannot wrap a
+        rekey for a member it has never met directly, and revocation silently
+        strands legitimate two-hop members at the old epoch. Skipping this makes
+        the simulation invent a vulnerability the deployed code does not have.
+
+        Pass ``announce_rounds=0`` to study that pre-ANNOUNCE window on purpose.
+        """
         self._convergence = self.run_until_stable(max_steps=max_steps)
+        self.run_announce_rounds(announce_rounds)
         roles = self.roles()
         self._backbone_size = sum(1 for r in roles.values() if r == "RELAY")
         return self._convergence
+
+    def run_announce_rounds(self, rounds: int = 1) -> None:
+        """Every node floods its public key binding, in radio order."""
+        for _ in range(max(0, rounds)):
+            with self.bus.breadth_first():
+                for bd in sorted(self.nodes):
+                    self.nodes[bd].hello_mgr.emit_announce()
 
     @property
     def backbone_size(self) -> int:
