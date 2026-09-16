@@ -1,0 +1,61 @@
+This is BibTeX, Version 0.99d (TeX Live 2023/Debian)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: main.aux
+The style file: IEEEtran.bst
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Reallocated wiz_functions (elt_size=4) to 6000 items from 3000.
+Reallocated singl_function (elt_size=4) to 100 items from 50.
+Database file #1: refs.bib
+-- IEEEtran.bst version 1.14 (2015/08/26) by Michael Shell.
+-- http://www.michaelshell.org/tex/ieeetran/bibtex/
+-- See the "IEEEtran_bst_HOWTO.pdf" manual for usage information.
+Warning--missing institution in rfc3626
+Warning--missing institution in nist-gcm
+Warning--missing institution in rfc7748
+Warning--missing institution in rfc8032
+
+Done.
+You've used 17 entries,
+            4087 wiz_defined-function locations,
+            907 strings with 9319 characters,
+and the built_in function-call counts, 8384 in all, are:
+= -- 651
+> -- 158
+< -- 37
++ -- 81
+- -- 30
+* -- 355
+:= -- 1368
+add.period$ -- 33
+call.type$ -- 17
+change.case$ -- 16
+chr.to.int$ -- 81
+cite$ -- 21
+duplicate$ -- 676
+empty$ -- 751
+format.name$ -- 39
+if$ -- 1893
+int.to.chr$ -- 0
+int.to.str$ -- 17
+missing$ -- 145
+newline$ -- 74
+num.names$ -- 15
+pop$ -- 350
+preamble$ -- 1
+purify$ -- 0
+quote$ -- 2
+skip$ -- 656
+stack$ -- 0
+substring$ -- 206
+swap$ -- 463
+text.length$ -- 10
+text.prefix$ -- 0
+top$ -- 5
+type$ -- 17
+warning$ -- 4
+while$ -- 31
+width$ -- 19
+write$ -- 162
+(There were 4 warnings)

@@ -16,6 +16,22 @@ Les boards suivent `origin`. Pour déployer : commit + push sur GitHub, puis
 `git pull` sur chaque board — ne pas copier de fichiers à la main (`scp`),
 sous peine de laisser des arbres de travail divergents.
 
+### À quoi sert chaque document
+
+Ce n’est **pas** l’article. Le README est le manuel de la *codebase* : installer
+une board, lancer le mesh, lire un log, retrouver un script. Nadjib et Wilfred
+n’ont pas besoin de le lire pour l’article ; toi et quiconque flashe une carte,
+si.
+
+| Fichier | Lecteur | Rôle |
+|---------|---------|------|
+| [`README.md`](README.md) | Toi, une board, un nouveau sur le dépôt | Setup, commandes, pièges Bluetooth, ce qui marche aujourd’hui |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Toi, en labo | `.env`, mesh ouvert vs allow-list, timers |
+| [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) | Nadjib + toi, avant les dalles | Plan d’expériences figé (métrique + critère de passage) |
+| [`docs/paper/bb-implementation-draft.md`](docs/paper/bb-implementation-draft.md) | Nadjib, Philippe, (Wilfred en ack) | **L’article** — version technique longue |
+| [`docs/bb-stack-actuel.html`](docs/bb-stack-actuel.html), [`docs/bb-cds-pipeline.html`](docs/bb-cds-pipeline.html) | Présentation orale | Slides à jour |
+| [`docs/archive/`](docs/archive/) | Personne en réunion | Anciens decks, **ne pas présenter** |
+
 ---
 
 ## Board Setup
@@ -914,6 +930,8 @@ Navigation slides : flèches ← → · molette · `F` plein écran.
 | `sim/limits.py` | Limites topologiques et révocation (échelle, densité, TTL) |
 | `scripts/bb_load.py` | Limites de charge (taille, cadence, saturation du lien) |
 | `docs/` | Config, PDF sécu, HTML |
+| `docs/EXPERIMENTS.md` | Plan d’expériences (labo + terrain dès les dalles) |
+| `docs/paper/bb-implementation-draft.md` | Brouillon technique de l’article (version longue) |
 | `scripts/run_tests.sh` | Runner de tests sans dépendance |
 | `scripts/bb_probe.py` | Sonde par carte : convergence, stabilité, chat (JSON) |
 | `scripts/bb_bench.py` | Campagne multi-cartes : lance les sondes et agrège |
@@ -1415,7 +1433,23 @@ Risques résiduels :
 
 Spec sécu : [docs/special_security_BB.pdf](docs/special_security_BB.pdf).
 
+## Publication
+
+L’article de protocole et de simulation est [arXiv:2509.00967](https://arxiv.org/abs/2509.00967)
+(Achir & Jacquet). La version **technique complète** — implémentation BLE,
+formats de trame, banc de mesure, limites déjà chiffrées, plan terrain — se
+rédige directement ici, pas via un rapport à convertir plus tard :
+
+- Brouillon conférence : [`docs/paper/bb-implementation-draft.md`](docs/paper/bb-implementation-draft.md)
+  (canevas IEEE ~6 p. ; le plan terrain reste dans EXPERIMENTS.md, pas dans l’article)
+- Expériences figées avant les dalles : [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)
+
+Une note courte de conférence se découpe dans le même texte (section *Cut-down*
+du brouillon). Le rapport technique *est* cette version longue.
+
 ## Références
 
-- Paper : [arXiv:2509.00967](https://arxiv.org/abs/2509.00967)
+- Paper protocole : [arXiv:2509.00967](https://arxiv.org/abs/2509.00967)
+- Brouillon implémentation : [docs/paper/bb-implementation-draft.md](docs/paper/bb-implementation-draft.md)
+- Plan d’expériences : [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
 - Config lab : [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
