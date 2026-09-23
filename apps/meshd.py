@@ -535,7 +535,7 @@ def _adapter_powered(index: int) -> bool:
     try:
         out = subprocess.run(
             ["btmgmt", "--index", str(index), "info"],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True, text=True, input="", timeout=5, check=False,
         ).stdout
     except subprocess.TimeoutExpired:
         return False

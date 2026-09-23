@@ -106,6 +106,7 @@ class PresenceScanner:
             check=False,
             capture_output=True,
             text=True,
+            input="",
         )
         return result.stdout or ""
 
@@ -116,6 +117,7 @@ class PresenceScanner:
             check=False,
             capture_output=True,
             text=True,
+            input="",
         )
         return result.stdout or ""
 
@@ -126,6 +128,7 @@ class PresenceScanner:
             check=False,
             capture_output=True,
             text=True,
+            input="",
         )
         return result.stdout or ""
 

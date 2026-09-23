@@ -426,6 +426,7 @@ def _run_scan(mode: str, timeout_s: float) -> subprocess.CompletedProcess[str]:
         check=False,
         capture_output=True,
         text=True,
+        input="",
     )
 
 
@@ -435,6 +436,7 @@ def _bluetoothctl_info(bd_addr: str) -> str:
         check=False,
         capture_output=True,
         text=True,
+        input="",
     )
     return info.stdout or ""
 
@@ -498,6 +500,7 @@ def discover_devices(*, timeout_s: float = 5.0, modes: tuple[str, ...] = ("le", 
         check=False,
         capture_output=True,
         text=True,
+        input="",
     )
     for raw in (devs.stdout or "").splitlines():
         parsed = _parse_device_line(raw)

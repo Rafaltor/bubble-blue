@@ -106,7 +106,7 @@ OWNER_GROUP="$(id -gn "${SUDO_USER:-root}")"
   echo "BB_MESHD_ARGS=--group $OWNER_GROUP"
   if [ "$MODE" = screen ]; then
     echo "BUBBLE_BLUE_LINK_ROLE=peripheral"
-    [ "$ADMIN" = 1 ] && echo "BB_UI_ARGS=--admin"
+    if [ "$ADMIN" = 1 ]; then echo "BB_UI_ARGS=--admin"; else echo "BB_UI_ARGS="; fi
     if [ "$PIXMAN" = 1 ]; then
       echo "WLR_RENDERER=pixman"
       echo "GSK_RENDERER=cairo"

@@ -41,6 +41,8 @@ BB_BEACON_AD: bytes = _FLAGS_AD + _MFG_AD_STRUCTURE
 # btmgmt add-adv -d payload only: kernel mgmt sets Flags itself (type 0x01 rejected).
 BB_BEACON_ADV_DATA: bytes = _MFG_AD_STRUCTURE
 
+_BTMGMT_TIMEOUT_S = 15
+
 
 def build_bb_beacon_ad() -> bytes:
     """Return the full on-air AD bytes (Flags + Manufacturer Specific Data)."""
@@ -297,12 +299,20 @@ def _hci_index(interface: str | int) -> int:
 
 
 def _run_btmgmt(hci_index: int, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["btmgmt", "--index", str(hci_index), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    argv = ["btmgmt", "--index", str(hci_index), *args]
+    try:
+        # btmgmt never exits when stdin is /dev/null (as under systemd); an
+        # empty pipe makes it run the command and quit.
+        return subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            input="",
+            timeout=_BTMGMT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(argv, 124, "", f"btmgmt timed out after {_BTMGMT_TIMEOUT_S} s")
 
 
 class LEAdvertiser:
