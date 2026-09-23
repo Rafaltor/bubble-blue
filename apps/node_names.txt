@@ -1,0 +1,10 @@
+# How each board shows up on the screens. Every daemon announces its own line
+# to the mesh, so a board missing here still appears, under its address.
+#
+# BD address         role    display name
+40:D9:5A:8B:69:3F    screen  Rubik Q
+9C:B8:B4:9F:2D:75    screen  Rubik INRIA
+40:D9:5A:89:B6:2B    screen  Rubik 3
+14:B5:CD:E2:12:4F    relay   UNO Q 1
+14:B5:CD:E8:75:33    relay   UNO Q 2
+14:B5:CD:EA:AB:B3    relay   UNO Q 3

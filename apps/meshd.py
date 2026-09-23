@@ -20,6 +20,7 @@ import grp
 import os
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -30,6 +31,12 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from apps.mesh_control import (  # noqa: E402
+    KIND_RELAY,
+    decode_control,
+    encode_control,
+    load_node_names,
+)
 from apps.protocol import (  # noqa: E402
     CLIENT_QUEUE_LIMIT,
     HISTORY_LIMIT,
@@ -42,6 +49,22 @@ from src.api.bb_api import BBNode  # noqa: E402
 # Peers and relay status have no callback of their own, so poll them and emit
 # an event only when the picture actually changes.
 _POLL_INTERVAL_S = 1.0
+
+# Topology reports flood every link, and on the UNO Q each received PDU spends
+# one of the idents the kernel leaks (see config.l2cap_ident_budget), so they go
+# out on change plus a slow heartbeat for boards that joined late — not on a
+# fast timer.
+_TOPO_HEARTBEAT_S = 60.0
+_TOPO_MIN_GAP_S = 3.0
+_TOPO_EXPIRY_S = 100.0
+_TOPO_MAX_PEERS = 16
+
+# A restart order keeps flooding through boards that are themselves going
+# down, and a daemon that just came back has no memory of it: a late copy must
+# not send it round again.
+_RESTART_GUARD_S = 60.0
+# Long enough for the order to be relayed before this board drops its links.
+_RESTART_GRACE_S = 3.0
 
 
 class _Client:
@@ -86,6 +109,7 @@ class MeshDaemon:
         # without an adapter; production always builds a real BBNode.
         self.node = node if node is not None else BBNode(interface=interface, quiet=True)
         self.node.on_message = self._on_message
+        self.node.on_message_route = self._on_message_route
         self.node.on_peer_connected = lambda bd: self._on_log(f"peer up {bd}", False)
         self.node.on_peer_disconnected = lambda bd: self._on_log(f"peer down {bd}", False)
         self.node.on_log = self._on_log
@@ -96,27 +120,195 @@ class MeshDaemon:
         self._history_lock = threading.Lock()
         self._last_view: tuple | None = None
         self._stopping = threading.Event()
+        self._stopped = threading.Event()
         self._srv: socket.socket | None = None
+
+        self._names = load_node_names()
+        self._started_at = time.monotonic()
+        # remote BD -> its last topology report, stamped with time.monotonic()
+        self._topo: dict[str, dict] = {}
+        self._topo_lock = threading.Lock()
+        self._topo_due = True
+        self._topo_sent_at = float("-inf")
+        self._last_topology: list | None = None
+        self._restart_lock = threading.Lock()
+        self._restarting = False
+        self._restart_orders: set[str] = set()
+        # Read by main() once run() returns: the process is replaced rather
+        # than restarted in place, so nothing from the old mesh state survives.
+        self.restart_requested = False
 
     # ---- BBNode callbacks (runtime threads) ----------------------------
 
     def _on_message(self, sender_bd: str, text: str) -> None:
-        self._record_and_broadcast(sender_bd, text, mine=False)
+        self._on_message_route(sender_bd, text, "", 0)
+
+    def _on_message_route(self, sender_bd: str, text: str, via: str, hops: int) -> None:
+        control = decode_control(text)
+        if control is not None:
+            self._on_control(sender_bd.upper(), control)
+            return
+        self._record_and_broadcast(sender_bd, text, mine=False, via=via, hops=hops)
 
     def _on_log(self, text: str, is_err: bool) -> None:
         self._broadcast({"ev": "log", "text": str(text), "error": bool(is_err)})
 
-    def _record_and_broadcast(self, sender: str, text: str, mine: bool) -> None:
+    def _record_and_broadcast(
+        self, sender: str, text: str, mine: bool, via: str = "", hops: int = 0
+    ) -> None:
         frame = {
             "ev": "message",
             "from": sender,
+            "name": self._name_of(sender),
             "text": text,
             "ts": time.time(),
             "mine": mine,
+            "via": via,
+            "via_name": self._name_of(via) if via else "",
+            "hops": hops,
         }
         with self._history_lock:
             self._history.append(frame)
         self._broadcast(frame)
+
+    # ---- mesh control (topology, restart) -------------------------------
+
+    def _local_identity(self) -> tuple[str, str]:
+        local = str(self.node.local_bd_addr or "").upper()
+        if local in self._names:
+            return self._names[local]
+        return KIND_RELAY, socket.gethostname()
+
+    def _name_of(self, bd: str) -> str:
+        bd = str(bd or "").upper()
+        if bd and bd == str(self.node.local_bd_addr or "").upper():
+            return self._local_identity()[1]
+        with self._topo_lock:
+            report = self._topo.get(bd)
+        if report and report["name"]:
+            return report["name"]
+        return self._names.get(bd, ("", bd))[1]
+
+    def _on_control(self, src: str, body: dict) -> None:
+        kind = body.get("t")
+        if kind == "topo":
+            peers = body.get("peers")
+            if not isinstance(peers, list):
+                return
+            known = self._names.get(src, (KIND_RELAY, ""))
+            report = {
+                "peers": sorted({str(p).upper() for p in peers[:_TOPO_MAX_PEERS]}),
+                "relay": bool(body.get("relay")),
+                "name": str(body.get("name") or known[1])[:32],
+                "kind": str(body.get("kind") or known[0])[:16],
+                "seen": time.monotonic(),
+            }
+            with self._topo_lock:
+                self._topo[src] = report
+            self._publish_topology()
+        elif kind == "restart":
+            self._on_restart_order(src, str(body.get("id", "")))
+
+    def _topology_nodes(self) -> list[dict]:
+        now = time.monotonic()
+        with self._topo_lock:
+            for bd in [bd for bd, r in self._topo.items() if now - r["seen"] > _TOPO_EXPIRY_S]:
+                del self._topo[bd]
+            remote = {bd: dict(r) for bd, r in self._topo.items()}
+
+        local = str(self.node.local_bd_addr or "").upper()
+        peers, relay = ([], False) if self._last_view is None else (
+            [p.upper() for p in self._last_view[0]], self._last_view[1])
+        nodes = []
+        if local:
+            kind, name = self._local_identity()
+            nodes.append({"bd": local, "name": name, "kind": kind,
+                          "relay": relay, "peers": peers})
+        for bd, r in sorted(remote.items()):
+            if bd != local:
+                nodes.append({"bd": bd, "name": r["name"], "kind": r["kind"],
+                              "relay": r["relay"], "peers": r["peers"]})
+        # A neighbour whose first report has not arrived yet is still on the map.
+        known = {n["bd"] for n in nodes}
+        mentioned = set(peers).union(*(r["peers"] for r in remote.values()))
+        for bd in sorted(mentioned - known):
+            kind, name = self._names.get(bd, (KIND_RELAY, bd))
+            nodes.append({"bd": bd, "name": name, "kind": kind, "relay": False, "peers": []})
+        return nodes
+
+    def _publish_topology(self) -> None:
+        nodes = self._topology_nodes()
+        if nodes == self._last_topology:
+            return
+        self._last_topology = nodes
+        self._broadcast(self._topology_frame(nodes))
+
+    def _topology_frame(self, nodes: list | None = None) -> dict:
+        return {
+            "ev": "topology",
+            "local": str(self.node.local_bd_addr or "").upper(),
+            "nodes": self._topology_nodes() if nodes is None else nodes,
+        }
+
+    def _maybe_announce_topology(self) -> None:
+        now = time.monotonic()
+        if not self._topo_due and now - self._topo_sent_at < _TOPO_HEARTBEAT_S:
+            return
+        if now - self._topo_sent_at < _TOPO_MIN_GAP_S or self._last_view is None:
+            return
+        peers, relay = self._last_view[0], self._last_view[1]
+        if not peers:
+            return
+        kind, name = self._local_identity()
+        try:
+            self.node.send(encode_control(
+                "topo", peers=list(peers), relay=relay, name=name, kind=kind))
+        except Exception:  # noqa: BLE001 — links dropping as we send
+            return
+        self._topo_sent_at = now
+        self._topo_due = False
+
+    def request_mesh_restart(self) -> None:
+        """Restart every daemon in the mesh, this one included."""
+        order = os.urandom(4).hex()
+        with self._restart_lock:
+            self._restart_orders.add(order)
+        self._start_restart(order)
+
+    def _on_restart_order(self, src: str, order: str) -> None:
+        with self._restart_lock:
+            if not order or order in self._restart_orders:
+                return
+            self._restart_orders.add(order)
+        if time.monotonic() - self._started_at < _RESTART_GUARD_S:
+            self._on_log(f"restart order from {src} ignored: just restarted", False)
+            return
+        # No need to pass it on: the forwarder has already relayed it.
+        self._start_restart(None)
+
+    def _start_restart(self, order: str | None) -> None:
+        with self._restart_lock:
+            if self._restarting:
+                return
+            self._restarting = True
+        threading.Thread(target=self._restart_sequence, args=(order,), daemon=True).start()
+
+    def _restart_sequence(self, order: str | None) -> None:
+        self._broadcast({"ev": "restarting", "grace_s": _RESTART_GRACE_S})
+        if order is not None:
+            # Twice: a board recycling a link at that instant would miss a
+            # single copy, and duplicates are dropped by id.
+            for _ in range(2):
+                try:
+                    self.node.send(encode_control("restart", id=order))
+                except Exception:  # noqa: BLE001 — alone: restart ourselves anyway
+                    pass
+                if self._stopping.wait(1.0):
+                    return
+        if self._stopping.wait(_RESTART_GRACE_S):
+            return
+        self.restart_requested = True
+        self.shutdown()
 
     # ---- fan-out --------------------------------------------------------
 
@@ -138,6 +330,8 @@ class MeshDaemon:
             except Exception:  # noqa: BLE001 — node still starting up
                 self._stopping.wait(_POLL_INTERVAL_S)
                 continue
+            if view[:2] != (self._last_view or (None, None))[:2]:
+                self._topo_due = True
             if view != self._last_view:
                 self._last_view = view
                 peers, relay, local, epoch = view
@@ -152,6 +346,8 @@ class MeshDaemon:
                     "local": local,
                     "epoch": epoch,
                 })
+            self._maybe_announce_topology()
+            self._publish_topology()
             self._stopping.wait(_POLL_INTERVAL_S)
 
     # ---- client handling ------------------------------------------------
@@ -177,6 +373,7 @@ class MeshDaemon:
     def _serve_client(self, client: _Client) -> None:
         threading.Thread(target=client.writer_loop, daemon=True).start()
         client.send(self._hello_frame())
+        client.send(self._topology_frame())
         for frame in read_frames(client.sock):
             if not client.alive:
                 break
@@ -190,6 +387,8 @@ class MeshDaemon:
         cmd = frame.get("cmd")
         req_id = frame.get("id")
         if cmd == "send":
+            # strip() also eats the \x1e that opens CONTROL_PREFIX, which is
+            # what keeps a client from posting a control message as chat.
             text = str(frame.get("text", "")).strip()
             if not text:
                 client.send({"ev": "ack", "id": req_id, "ok": False, "error": "empty"})
@@ -205,6 +404,10 @@ class MeshDaemon:
             self._record_and_broadcast(self.node.local_bd_addr, text, mine=True)
         elif cmd == "status":
             client.send(self._hello_frame())
+        elif cmd == "restart_mesh":
+            client.send({"ev": "ack", "id": req_id, "ok": True, "error": ""})
+            self._on_log("mesh restart requested from the UI", False)
+            self.request_mesh_restart()
         else:
             client.send({"ev": "ack", "id": req_id, "ok": False, "error": "unknown command"})
 
@@ -254,6 +457,9 @@ class MeshDaemon:
                 threading.Thread(target=self._serve_client, args=(client,), daemon=True).start()
         finally:
             self.shutdown()
+            # A restart shuts down from its own thread; the node must be fully
+            # stopped before main() replaces the process.
+            self._stopped.wait(15.0)
         return 0
 
     def shutdown(self) -> None:
@@ -261,6 +467,11 @@ class MeshDaemon:
             return
         self._stopping.set()
         if self._srv is not None:
+            # close() alone does not wake an accept() blocked in another thread.
+            try:
+                self._srv.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 self._srv.close()
             except OSError:
@@ -278,6 +489,7 @@ class MeshDaemon:
                 os.unlink(self.path)
             except OSError:
                 pass
+        self._stopped.set()
 
 
 def main() -> int:
@@ -290,11 +502,20 @@ def main() -> int:
         action="store_true",
         help="refuse inbound L2CAP (dial-only node)",
     )
+    ap.add_argument(
+        "--link-role",
+        choices=("auto", "any", "central", "peripheral"),
+        default=None,
+        help="which side of BLE links this board takes (default: detect from the "
+        "controller; 'peripheral' on the stand screens keeps traffic on the relays)",
+    )
     args = ap.parse_args()
 
     if os.geteuid() != 0:
         print("meshd needs root for L2CAP and MGMT", file=sys.stderr)
         return 1
+    if args.link_role:
+        os.environ["BUBBLE_BLUE_LINK_ROLE"] = args.link_role
 
     daemon = MeshDaemon(args.interface, args.socket)
 
@@ -303,7 +524,24 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, _bye)
     signal.signal(signal.SIGTERM, _bye)
-    return daemon.run(args.group, accept_all=not args.no_accept_all)
+    rc = daemon.run(args.group, accept_all=not args.no_accept_all)
+    if daemon.restart_requested:
+        reexec(restart_bluez=True)
+    return rc
+
+
+def reexec(restart_bluez: bool) -> None:
+    """Replace this process with a fresh daemon, same command line."""
+    if restart_bluez:
+        # BlueZ too: restarting it is what clears a wedged controller and its
+        # half-open LE connections, which a new daemon would otherwise inherit.
+        subprocess.run(["pkill", "-x", "btmgmt"], check=False)
+        subprocess.run(["systemctl", "restart", "bluetooth"], check=False, timeout=30)
+        time.sleep(3.0)
+    print("meshd restarting", flush=True)
+    # orig_argv keeps argv[0] as typed, so the process still matches
+    # `pgrep -f '^python3.14 apps/meshd'` afterwards.
+    os.execv(sys.executable, sys.orig_argv)
 
 
 if __name__ == "__main__":

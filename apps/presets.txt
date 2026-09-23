@@ -1,0 +1,8 @@
+# One button per line on the screen app, in order. {name} is this board's
+# display name (apps/node_names.txt). Six fit the 1024x600 panel.
+Olá NetMob!
+Hello from {name}!
+This message hops through Bluetooth relays
+No Wi-Fi, no 4G, no Internet
+Can you read me?
+Received, thanks!

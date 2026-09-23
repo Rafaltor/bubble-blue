@@ -21,6 +21,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from apps.mesh_control import decode_control, encode_control  # noqa: E402
 from apps.meshd import MeshDaemon  # noqa: E402
 from apps.protocol import encode  # noqa: E402
 
@@ -268,6 +269,123 @@ def test_unknown_command_is_rejected():
         ack = conn.next_frame("ack")
         assert ack["ok"] is False
         conn.close()
+
+
+_REMOTE = "AA:BB:CC:DD:EE:09"
+_RELAY = "AA:BB:CC:DD:EE:02"
+
+
+def test_routed_message_says_how_it_travelled():
+    node = _FakeNode()
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        node.on_message_route(_REMOTE, "salut", _RELAY, 2)
+        msg = conn.next_frame("message")
+        assert msg["text"] == "salut"
+        assert msg["via"] == _RELAY and msg["hops"] == 2
+        conn.close()
+
+
+def test_topology_reports_build_the_map_and_stay_out_of_the_chat():
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        conn.next_frame("topology")
+        report = encode_control("topo", peers=[_RELAY], relay=False, name="Rubik B", kind="screen")
+        node.on_message_route(_REMOTE, report, _RELAY, 2)
+
+        topo = conn.next_frame("topology")
+        remote = next(n for n in topo["nodes"] if n["bd"] == _REMOTE)
+        assert remote["name"] == "Rubik B" and remote["peers"] == [_RELAY]
+        # Named by the report from now on, including in the chat.
+        node.on_message_route(_REMOTE, "coucou", _RELAY, 2)
+        msg = conn.next_frame("message")
+        assert msg["text"] == "coucou" and msg["name"] == "Rubik B"
+
+        second = h.connect()
+        assert second.next_frame("hello")["history"] == [msg]
+        conn.close()
+        second.close()
+
+
+def test_links_are_announced_to_the_mesh():
+    node = _FakeNode(peers=[_RELAY], relay=True)
+    with _Harness(node) as h:
+        threading.Thread(target=h.daemon._poll_loop, daemon=True).start()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not node.sent:
+            time.sleep(0.05)
+        body = decode_control(node.sent[0])
+        assert body["t"] == "topo" and body["peers"] == [_RELAY] and body["relay"] is True
+
+
+def test_ui_cannot_forge_a_control_message():
+    node = _FakeNode()
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        conn.send({"cmd": "send", "text": encode_control("restart", id="x"), "id": 5})
+        conn.next_frame("ack")
+        assert all(decode_control(t) is None for t in node.sent)
+        conn.close()
+
+
+def test_restart_floods_an_order_then_stops_the_daemon(monkeypatch):
+    monkeypatch.setattr("apps.meshd._RESTART_GRACE_S", 0.1)
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        conn.send({"cmd": "restart_mesh", "id": 9})
+        assert conn.next_frame("ack")["ok"] is True
+        assert conn.next_frame("restarting")
+        assert h.daemon._stopped.wait(5.0)
+        assert h.daemon.restart_requested is True
+        orders = [decode_control(t) for t in node.sent]
+        assert [o["t"] for o in orders] == ["restart", "restart"]
+        assert orders[0]["id"] == orders[1]["id"]
+        conn.close()
+
+
+def test_restart_order_from_the_mesh(monkeypatch):
+    monkeypatch.setattr("apps.meshd._RESTART_GRACE_S", 0.1)
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        h.daemon._started_at -= 3600
+        node.on_message_route(_REMOTE, encode_control("restart", id="abcd"), _RELAY, 2)
+        assert h.daemon._stopped.wait(5.0)
+        assert h.daemon.restart_requested is True
+        # Already relayed by the forwarder: re-sending it would only add load.
+        assert node.sent == []
+
+
+def test_fresh_daemon_ignores_a_late_restart_order(monkeypatch):
+    # The order is still flooding when the first boards come back up.
+    monkeypatch.setattr("apps.meshd._RESTART_GRACE_S", 0.1)
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        node.on_message_route(_REMOTE, encode_control("restart", id="abcd"), _RELAY, 2)
+        assert not h.daemon._stopped.wait(0.5)
+        assert h.daemon.restart_requested is False
+
+
+def test_forwarder_counts_hops_from_the_ttl():
+    from types import SimpleNamespace
+
+    from src.forwarding.forwarder import PacketForwarder
+
+    got = []
+    fwd = object.__new__(PacketForwarder)
+    fwd._cfg = SimpleNamespace(ttl_max=7)
+    fwd._on_routed_message = lambda *a: got.append(a)
+    fwd._on_deliver("aa:bb:cc:dd:ee:02", b"hi", {"src": "aa:bb:cc:dd:ee:09", "ttl": 7})
+    fwd._on_deliver("aa:bb:cc:dd:ee:02", b"hi", {"src": "aa:bb:cc:dd:ee:09", "ttl": 5})
+    assert got == [
+        ("AA:BB:CC:DD:EE:09", "hi", "AA:BB:CC:DD:EE:02", 1),
+        ("AA:BB:CC:DD:EE:09", "hi", "AA:BB:CC:DD:EE:02", 3),
+    ]
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ checks across several boards at once:
 
     python3 scripts/meshd_client.py                          # interactive
     python3 scripts/meshd_client.py --send "hello" --duration 60
+    python3 scripts/meshd_client.py --restart   # restart the whole mesh
 
 Runs on the distribution Python: it only speaks to the socket, never to the
 adapter, so it needs no root and no 3.14.
@@ -40,6 +41,11 @@ def main() -> int:
     ap.add_argument("--send-every", type=float, default=0.0, help="repeat period (s)")
     ap.add_argument("--duration", type=float, default=0.0, help="exit after N seconds")
     ap.add_argument("--json-out", default="", help="write a summary here on exit")
+    ap.add_argument(
+        "--restart",
+        action="store_true",
+        help="restart BlueZ and meshd on every board reachable through the mesh",
+    )
     args = ap.parse_args()
 
     started = time.monotonic()
@@ -48,6 +54,17 @@ def main() -> int:
         sock.connect(args.socket)
     except OSError as e:
         print(f"cannot reach meshd on {args.socket}: {e}", file=sys.stderr)
+        return 1
+
+    if args.restart:
+        sock.sendall(encode({"cmd": "restart_mesh", "id": 1}))
+        sock.settimeout(5.0)
+        for frame in read_frames(sock):
+            if frame.get("ev") == "ack":
+                ok = frame.get("ok")
+                print("redémarrage du mesh lancé" if ok else f"refusé: {frame.get('error')}")
+                return 0 if ok else 1
+        print("pas de réponse du démon", file=sys.stderr)
         return 1
 
     received: list[dict] = []

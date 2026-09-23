@@ -16,11 +16,25 @@ Events flow daemon -> UI, commands flow UI -> daemon:
 was true at connect time: the socket is bound before the node has finished
 starting, so an early "hello" legitimately carries an empty address.
 
-    {"ev": "message", "from": str, "text": str, "ts": float, "mine": bool}
+    {"ev": "message", "from": str, "name": str, "text": str, "ts": float,
+                      "mine": bool, "via": str, "via_name": str, "hops": int}
+
+``via`` is the neighbour the message came in from and ``hops`` how many links
+it crossed (1 = direct neighbour); they are empty/0 when unknown or ``mine``.
+
     {"ev": "peers",   "peers": [str], "relay": bool, "local": str, "epoch": int}
+    {"ev": "topology", "local": str,
+                       "nodes": [{"bd": str, "name": str, "kind": str,
+                                  "relay": bool, "peers": [str]}, ...]}
+
+The whole mesh as last reported by each board (sent after "hello", then on
+every change). A link is drawn when either end reports it.
+
+    {"ev": "restarting", "grace_s": float}
     {"ev": "log",     "text": str, "error": bool}
 
     {"cmd": "send", "text": str, "id": int}
+    {"cmd": "restart_mesh", "id": int}   restarts every daemon of the mesh
     {"ev": "ack",   "id": int, "ok": bool, "error": str}
 """
 

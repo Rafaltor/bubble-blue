@@ -52,6 +52,8 @@ if TYPE_CHECKING:
     from src.transport.l2cap import L2CAPTransport
 
 OnMessageCallback = Callable[[str, str], None]
+# (src, text, ingress L2CAP peer, hops travelled — 1 for a direct neighbour)
+OnRoutedMessageCallback = Callable[[str, str, str, int], None]
 LogCallback = Callable[[str], None]
 OnDecryptFailCallback = Callable[[str], None]
 
@@ -128,11 +130,13 @@ class PacketForwarder:
         on_message: OnMessageCallback,
         on_log: LogCallback | None = None,
         on_decrypt_fail: OnDecryptFailCallback | None = None,
+        on_routed_message: OnRoutedMessageCallback | None = None,
     ) -> None:
         self._cfg = cfg
         self._transport = transport
         self._hello_mgr = hello_mgr
         self._on_message = on_message
+        self._on_routed_message = on_routed_message
         self._on_log = on_log
         self._on_decrypt_fail = on_decrypt_fail
         self._fwd_cache = _ForwardCache()
@@ -979,8 +983,11 @@ class PacketForwarder:
         self._on_message(src, text)
 
     def _on_deliver(self, ingress_peer: str, plaintext: bytes, hdr: dict[str, Any]) -> None:
-        _ = ingress_peer
         text = plaintext.decode("utf-8", errors="replace")
+        if self._on_routed_message is not None:
+            hops = max(1, int(self._cfg.ttl_max) - int(hdr["ttl"]) + 1)
+            self._on_routed_message(hdr["src"].upper(), text, ingress_peer.upper(), hops)
+            return
         self._on_message(hdr["src"].upper(), text)
 
     @staticmethod

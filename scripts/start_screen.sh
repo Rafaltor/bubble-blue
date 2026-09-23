@@ -5,6 +5,7 @@
 #   ./scripts/start_screen.sh --kiosk      # force cage (dedicated panel, no desktop)
 #   ./scripts/start_screen.sh --windowed   # force a plain window (inside a desktop)
 #   ./scripts/start_screen.sh --fake       # simulated mesh, no adapter, no root
+#   ./scripts/start_screen.sh --admin      # add the "Restart mesh" button (stand board only)
 #
 # The daemon keeps running when the UI exits: links take ~40 s to converge and
 # should survive restarting the interface.
@@ -15,6 +16,7 @@ cd "$(dirname "$0")/.."
 SOCKET="${BUBBLE_BLUE_SOCKET:-/run/bubble-blue/meshd.sock}"
 MODE=auto
 FAKE=0
+UI_ARGS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -22,6 +24,7 @@ while [ $# -gt 0 ]; do
     --windowed) MODE=windowed ;;
     --fake)     FAKE=1; SOCKET=/tmp/bubble-blue-fake.sock ;;
     --socket)   shift; SOCKET="$1" ;;
+    --admin)    UI_ARGS+=(--admin) ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -97,7 +100,7 @@ if [ "$MODE" = kiosk ]; then
     echo "cage absent — sudo apt-get install -y cage" >&2
     exit 1
   fi
-  exec cage -- python3 apps/screen_ui.py --socket "$SOCKET" --kiosk
+  exec cage -- python3 apps/screen_ui.py --socket "$SOCKET" --kiosk "${UI_ARGS[@]}"
 else
-  exec python3 apps/screen_ui.py --socket "$SOCKET"
+  exec python3 apps/screen_ui.py --socket "$SOCKET" "${UI_ARGS[@]}"
 fi
