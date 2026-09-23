@@ -48,6 +48,7 @@ MGMT_OP_STOP_DISCOVERY = 0x0024
 MGMT_EV_CMD_COMPLETE = 0x0001
 MGMT_EV_CMD_STATUS = 0x0002
 MGMT_EV_DEVICE_FOUND = 0x0012
+MGMT_DEV_FOUND_NOT_CONNECTABLE = 0x04
 MGMT_EV_DISCOVERING = 0x0013
 
 # Address-type bitmask for START/STOP_DISCOVERY: LE Public (bit1) + LE Random (bit2).
@@ -91,6 +92,11 @@ class DeviceFound:
     addr_type: int
     rssi: int
     eir: bytes
+    flags: int = 0
+
+    @property
+    def connectable(self) -> bool:
+        return not self.flags & MGMT_DEV_FOUND_NOT_CONNECTABLE
 
 
 def parse_mgmt_event(pkt: bytes) -> MgmtEvent | None:
@@ -114,10 +120,11 @@ def parse_device_found(params: bytes) -> DeviceFound | None:
     addr = params[0:6]
     addr_type = params[6]
     (rssi,) = struct.unpack_from("b", params, 7)
+    (flags,) = struct.unpack_from("<I", params, 8)
     (eir_len,) = struct.unpack_from("<H", params, 12)
     eir = params[14 : 14 + eir_len]
     bd_addr = ":".join(f"{b:02X}" for b in reversed(addr))
-    return DeviceFound(bd_addr=bd_addr, addr_type=addr_type, rssi=rssi, eir=eir)
+    return DeviceFound(bd_addr=bd_addr, addr_type=addr_type, rssi=rssi, eir=eir, flags=flags)
 
 
 def parse_eir_manufacturer(eir: bytes) -> dict[int, bytes]:
@@ -163,9 +170,11 @@ def merge_device_found(records: dict[str, ScanDeviceRecord], params: bytes) -> b
             bd_addr=df.bd_addr,
             manufacturer_data=mfg,
             addr_type=_addr_type_label(df.addr_type),
+            connectable=df.connectable,
         )
     else:
         existing.manufacturer_data.update(mfg)
+        existing.connectable = df.connectable
         if not existing.addr_type:
             existing.addr_type = _addr_type_label(df.addr_type)
     return True

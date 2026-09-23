@@ -42,7 +42,14 @@ if not hasattr(socket, "BDADDR_LE_PUBLIC"):
         "(Python 3.14+ build with LE L2CAP support)"
     )
 
-from config import MTU_BLE, PSM_BLE, l2cap_ident_budget, load_config  # noqa: E402
+from config import (  # noqa: E402
+    LINK_ROLE_CENTRAL,
+    MTU_BLE,
+    PSM_BLE,
+    l2cap_ident_budget,
+    link_role,
+    load_config,
+)
 from src.transport.advertising import LEAdvertiser  # noqa: E402
 from src.transport.le_scan import hci_index_from_interface, mgmt_disconnect  # noqa: E402
 from src.transport.ble_coc import (  # noqa: E402
@@ -176,7 +183,12 @@ class BLEL2CAPTransport:
         self._server_sock: socket.socket | None = None
         self._server_thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
-        self._advertiser = LEAdvertiser(interface=interface, quiet=quiet)
+        self._link_role = link_role(interface)
+        self._advertiser = LEAdvertiser(
+            interface=interface,
+            quiet=quiet,
+            connectable=self._link_role != LINK_ROLE_CENTRAL,
+        )
         self._hci_index = hci_index_from_interface(interface)
         self._ident_budget = l2cap_ident_budget()
 
@@ -239,6 +251,7 @@ class BLEL2CAPTransport:
             f"mtu={self.mtu} bdaddr_type={self._bdaddr_type}",
             quiet=self._quiet,
         )
+        _tlog_always(self._node, f"BLE link role: {self._link_role}")
         if self._ident_budget:
             _tlog_always(
                 self._node,

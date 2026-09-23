@@ -14,7 +14,11 @@ from config import (
     PKT_REKEY,
     PKT_REKEY_FLOOD,
     PKT_SUBGROUP,
+    LINK_ROLE_ANY,
+    LINK_ROLE_CENTRAL,
+    LINK_ROLE_PERIPHERAL,
     BubbleBlueConfig,
+    link_role,
     load_config,
 )
 from src.control.hello_manager import HelloManager
@@ -77,6 +81,9 @@ class BBNode:
     """
 
     on_message: OnMessageCallback | None = None
+    # Optional: when set, broadcast chat is delivered here instead of
+    # ``on_message``, with the L2CAP link it came in on and the hops it took.
+    on_message_route: Callable[[str, str, str, int], None] | None = None
     on_log: LogFn | None = None
     on_peer_connected: Callable[[str], None] | None = None
     on_peer_disconnected: Callable[[str], None] | None = None
@@ -116,6 +123,9 @@ class BBNode:
         self._presence_thread: threading.Thread | None = None
         # anon_id (hex) -> (bd_addr, addr_type) learned from heard presence Hellos.
         self._presence_addr: dict[str, tuple[str, str]] = {}
+        # anon_id (hex) -> whether its advert is connectable; unknown = assume so.
+        self._presence_connectable: dict[str, bool] = {}
+        self._link_role = LINK_ROLE_ANY
         self._discovered_candidates: dict[str, str] = {}
         self._peer_addr_types: dict[str, str] = {}
         self._peer_admission_deadline: dict[str, float] = {}
@@ -141,6 +151,7 @@ class BBNode:
                 interface=self._interface,
                 remote_bd_addr=self._remote_bd_addr,
             )
+            self._link_role = link_role(self._interface)
             allowlist = self._restrictive_allowlist()
             if allowlist is not None:
                 allowed_peers = allowlist
@@ -202,6 +213,7 @@ class BBNode:
                 on_decrypt_fail=(
                     self._dispatch_decrypt_fail if self.on_decrypt_fail else None
                 ),
+                on_routed_message=self.on_message_route,
             )
             hello.set_rekey_catchup(fwd.send_rekey_catchup)
             holder["hello"] = hello
@@ -309,6 +321,7 @@ class BBNode:
             thread.join(timeout=3.0)
             self._presence_thread = None
         self._presence_addr.clear()
+        self._presence_connectable.clear()
 
     def _push_presence_advert(self, hello: HelloManager) -> None:
         """Refresh the transport's legacy advertisement with our compact Hello."""
@@ -356,10 +369,13 @@ class BBNode:
             # payload, not the packet's source address: a non-connectable
             # presence beacon rotates its source (RPA), which is not dialable.
             reachable = parsed.get("bd_addr")
+            aid = parsed["anon_id"].hex()
             if reachable:
-                self._presence_addr[parsed["anon_id"].hex()] = (reachable.upper(), "public")
+                self._presence_addr[aid] = (reachable.upper(), "public")
             else:
-                self._presence_addr[parsed["anon_id"].hex()] = (bd.upper(), rec.addr_type or "")
+                self._presence_addr[aid] = (bd.upper(), rec.addr_type or "")
+            if rec.connectable is not None:
+                self._presence_connectable[aid] = rec.connectable
 
     def _presence_scanner_idle(self) -> bool:
         """True when every non-quarantined discovered candidate is an admitted active peer."""
@@ -582,11 +598,17 @@ class BBNode:
             mesh lets every node link whatever it can actually reach and relays the
             rest. Unreachable edges self-suppress via connect backoff (ETIMEDOUT),
             so they stop crowding the one-dial-per-pass budget after a couple tries.
+        The link role (``config.link_role``) overrides the plan: a ``peripheral``
+        node dials nobody, a ``central`` one dials everyone it can reach — nobody
+        can dial it, so an edge it does not open never exists. Either way, a
+        peer advertising non-connectable is never dialled.
         Returns ``None`` when not in connectionless mode.
         """
         hello = self._hello_mgr
         if hello is None or not hello.is_connectionless:
             return None
+        if self._link_role == LINK_ROLE_PERIPHERAL:
+            return set()
         plan = hello.connectionless_link_plan()
         sym: set[bytes] = plan["sym"]
         local_aid = hello.anon_id
@@ -598,12 +620,16 @@ class BBNode:
 
         with self._lock:
             aid_to_bd = {
-                bytes.fromhex(h): bd for h, (bd, _at) in self._presence_addr.items()
+                bytes.fromhex(h): bd
+                for h, (bd, _at) in self._presence_addr.items()
+                if self._presence_connectable.get(h, True)
             }
 
         def _to_bd(aids: set[bytes]) -> set[str]:
             return {aid_to_bd[a] for a in aids if a in aid_to_bd}
 
+        if self._link_role == LINK_ROLE_CENTRAL:
+            return _to_bd((set(aid_to_bd) | heard) - {local_aid})
         if sym and plan["am_relay"]:
             return _to_bd({a for a in relays if _i(a) > _i(local_aid)})
         if sym and relays:

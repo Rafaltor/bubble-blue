@@ -62,6 +62,8 @@ class ScanDeviceRecord:
     manufacturer_data: dict[int, bytes] = field(default_factory=dict)
     last_seen_ms: int = 0
     addr_type: str | None = None
+    # From the advert type when the scanner knows it; None = unknown.
+    connectable: bool | None = None
 
 
 @dataclass

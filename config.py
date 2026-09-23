@@ -208,6 +208,45 @@ def l2cap_ident_budget(release: str | None = None) -> int:
     return min(_env_int("BUBBLE_BLUE_L2CAP_IDENT_BUDGET", default, minimum=0), 240)
 
 
+# Which side of its BLE links a node may take.
+#   central     dials, is never dialled: advertises non-connectable
+#   peripheral  is dialled, never dials
+#   any         both
+LINK_ROLE_ANY = "any"
+LINK_ROLE_CENTRAL = "central"
+LINK_ROLE_PERIPHERAL = "peripheral"
+_LINK_ROLES = (LINK_ROLE_ANY, LINK_ROLE_CENTRAL, LINK_ROLE_PERIPHERAL)
+
+# hci_qca registers these without QCA_CAP_VALID_LE_STATES, so the kernel sets
+# HCI_QUIRK_BROKEN_LE_STATES and check_pending_le_conn() never starts an LE
+# connection while the adapter is peripheral on any link — the dial just times
+# out, with no Create Connection ever reaching the controller. A node that
+# accepted one link could then never redial the others (the UNO Q's WCN3988),
+# so these boards must never be dialled at all.
+_CENTRAL_ONLY_COMPATIBLES = frozenset({
+    "qcom,qca6390-bt",
+    "qcom,wcn3950-bt",
+    "qcom,wcn3988-bt",
+    "qcom,wcn3990-bt",
+    "qcom,wcn3998-bt",
+})
+
+
+def link_role(interface: str = "hci0", *, sysfs: str = "/sys/class/bluetooth") -> str:
+    """``BUBBLE_BLUE_LINK_ROLE`` if set, else what the controller can sustain."""
+    raw = os.environ.get("BUBBLE_BLUE_LINK_ROLE", "").strip().lower()
+    if raw in _LINK_ROLES:
+        return raw
+    if raw and raw != "auto":
+        print(f"[BB] WARNING: BUBBLE_BLUE_LINK_ROLE={raw!r} unknown, detecting", flush=True)
+    try:
+        with open(os.path.join(sysfs, interface, "device", "of_node", "compatible"), "rb") as fh:
+            compatible = set(fh.read().decode("ascii", "replace").split("\0"))
+    except OSError:
+        return LINK_ROLE_ANY
+    return LINK_ROLE_CENTRAL if compatible & _CENTRAL_ONLY_COMPATIBLES else LINK_ROLE_ANY
+
+
 def _load_transport_kind() -> str:
     raw = os.environ.get("BUBBLE_BLUE_TRANSPORT", "bt_classic").strip().lower()
     if raw in _VALID_TRANSPORT_KINDS:

@@ -328,8 +328,10 @@ class LEAdvertiser:
         quiet: bool = False,
         log: Callable[[str], None] | None = None,
         btmgmt_runner: Callable[[int, str], subprocess.CompletedProcess[str]] | None = None,
+        connectable: bool = True,
     ) -> None:
         self._hci_index = _hci_index(interface)
+        self._connectable = bool(connectable)
         self._instance_id = int(instance_id)
         self._watchdog_interval_s = max(1.0, float(watchdog_interval_s))
         self._quiet = quiet
@@ -425,7 +427,7 @@ class LEAdvertiser:
     def _add_instance(self) -> bool:
         result = self._run(
             self._hci_index,
-            f"add-adv -c -d {self.ad_hex()} {self._instance_id}",
+            f"add-adv {'-c ' if self._connectable else ''}-d {self.ad_hex()} {self._instance_id}",
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
