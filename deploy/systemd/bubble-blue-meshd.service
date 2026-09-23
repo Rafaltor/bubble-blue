@@ -1,0 +1,23 @@
+[Unit]
+Description=BUBBLE-BLUE mesh daemon
+Documentation=file://@REPO@/README.md
+# Wants, not Requires: a mesh restart runs `systemctl restart bluetooth` from
+# inside meshd, which must not take the daemon down with it.
+Wants=bluetooth.service
+After=bluetooth.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+EnvironmentFile=-/etc/bubble-blue.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/sh -c 'for _ in $(seq 1 30); do [ -e /sys/class/bluetooth/$${BUBBLE_BLUE_INTERFACE:-hci0} ] && exit 0; sleep 1; done; echo "no Bluetooth adapter" >&2; exit 1'
+ExecStart=/usr/bin/env python3.14 apps/meshd.py --socket /run/bubble-blue/meshd.sock $BB_MESHD_ARGS
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+SyslogIdentifier=bubble-blue-meshd
+
+[Install]
+WantedBy=multi-user.target

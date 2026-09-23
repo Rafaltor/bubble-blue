@@ -1,0 +1,21 @@
+[Unit]
+Description=BUBBLE-BLUE stand screen (cage kiosk)
+Documentation=file://@REPO@/README.md
+Wants=bubble-blue-meshd.service
+After=bubble-blue-meshd.service systemd-user-sessions.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+EnvironmentFile=-/etc/bubble-blue.env
+Environment=XDG_RUNTIME_DIR=/run/bubble-blue-cage WLR_NO_HARDWARE_CURSORS=1 PYTHONUNBUFFERED=1
+RuntimeDirectory=bubble-blue-cage
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/cage -- /usr/bin/python3 apps/screen_ui.py --socket /run/bubble-blue/meshd.sock --kiosk $BB_UI_ARGS
+Restart=always
+RestartSec=3
+SyslogIdentifier=bubble-blue-screen
+
+[Install]
+WantedBy=multi-user.target
