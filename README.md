@@ -666,7 +666,7 @@ Le mode dépend de ce que la board a déjà :
 
 | Board | Ce qui se passe à l’écran | Mode |
 |-------|---------------------------|------|
-| `rubik-q` | GNOME est installé → **écran de connexion GDM** | ouvrir un terminal, `windowed` |
+| `rubik-q` | GNOME est installé → **écran de connexion GDM** (masqué par l'autostart) | ouvrir un terminal, `windowed` |
 | `rubik-inria`, `rubik3` | headless, rien ne tient le DRM | `kiosk` via `cage` |
 
 Le démon **reste en vie quand l’interface se ferme** : les liens mettent ~40 s à
@@ -690,6 +690,37 @@ Sans écran physique, le client terminal suffit à valider une board :
 python3 scripts/meshd_client.py                                  # interactif
 python3 scripts/meshd_client.py --send "test" --duration 60      # scripté
 ```
+
+### Démarrage automatique au boot (stand)
+
+Sur le stand, chaque carte doit rejoindre le mesh seule après une coupure de
+courant. Une commande par carte installe les prérequis manquants (dépendances
+python3.14, cage, GTK 4), écrit `/etc/bubble-blue.env` et active les services
+systemd :
+
+```bash
+sudo ./scripts/install_autostart.sh relay                  # arduinoq, arduino2, arduino3
+sudo ./scripts/install_autostart.sh screen --admin         # rubik-q (bouton « Restart mesh »)
+sudo ./scripts/install_autostart.sh screen --pixman        # rubik-inria (pas de GL)
+sudo ./scripts/install_autostart.sh uninstall              # retour au lancement manuel
+```
+
+| Service | Cartes | Rôle |
+|---------|--------|------|
+| `bubble-blue-meshd` | toutes | démon mesh, relancé s’il meurt ; écrans en rôle `peripheral` |
+| `bubble-blue-screen` | écrans | kiosque `cage` sur la dalle |
+
+- Sur une carte écran, le gestionnaire de connexion (GDM) est **masqué** :
+  sinon il prend la dalle au boot avant `cage`. Retour au bureau :
+  `sudo systemctl unmask gdm`.
+- Après un boot, le mesh complet se reforme en 2 à 3 minutes. Le bouton
+  « Restart mesh » fonctionne à l’identique sous systemd.
+- Logs : `journalctl -u bubble-blue-meshd -f` (plus de `/tmp/bb-meshd.log`).
+- Mettre à jour une carte : `git pull` puis
+  `sudo systemctl restart bubble-blue-meshd`.
+- `btmgmt` ne se termine jamais quand son entrée standard est `/dev/null`
+  (c'est le cas sous systemd) : le code lui passe un pipe vide. Garder ce
+  détail en tête pour tout nouvel appel à `btmgmt` ou `bluetoothctl`.
 
 ### Pile graphique (Rubik Pi 3)
 
