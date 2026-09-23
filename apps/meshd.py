@@ -45,6 +45,7 @@ from apps.protocol import (  # noqa: E402
     socket_path,
 )
 from src.api.bb_api import BBNode  # noqa: E402
+from src.transport.le_scan import hci_index_from_interface  # noqa: E402
 
 # Peers and relay status have no callback of their own, so poll them and emit
 # an event only when the picture actually changes.
@@ -526,18 +527,55 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _bye)
     rc = daemon.run(args.group, accept_all=not args.no_accept_all)
     if daemon.restart_requested:
-        reexec(restart_bluez=True)
+        reexec(restart_bluez=True, interface=args.interface)
     return rc
 
 
-def reexec(restart_bluez: bool) -> None:
+def _adapter_powered(index: int) -> bool:
+    try:
+        out = subprocess.run(
+            ["btmgmt", "--index", str(index), "info"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+    except subprocess.TimeoutExpired:
+        return False
+    return any("current settings:" in ln and "powered" in ln for ln in out.splitlines())
+
+
+def _rebind_controller(interface: str) -> None:
+    """Re-probe the adapter's driver, which reloads the controller firmware."""
+    device = os.path.realpath(f"/sys/class/bluetooth/{interface}/device")
+    driver = os.path.realpath(os.path.join(device, "driver"))
+    name = os.path.basename(device)
+    print(f"meshd: {interface} did not come back, rebinding {name} to {driver}", flush=True)
+    for action in ("unbind", "bind"):
+        try:
+            with open(os.path.join(driver, action), "w") as fh:
+                fh.write(name)
+        except OSError as e:
+            print(f"meshd: {action} {name}: {e}", flush=True)
+        time.sleep(2.0)
+
+
+def reexec(restart_bluez: bool, interface: str = "hci0") -> None:
     """Replace this process with a fresh daemon, same command line."""
     if restart_bluez:
-        # BlueZ too: restarting it is what clears a wedged controller and its
-        # half-open LE connections, which a new daemon would otherwise inherit.
+        # BlueZ too: restarting it is what clears half-open LE connections,
+        # which a new daemon would otherwise inherit.
         subprocess.run(["pkill", "-x", "btmgmt"], check=False)
         subprocess.run(["systemctl", "restart", "bluetooth"], check=False, timeout=30)
-        time.sleep(3.0)
+        index = hci_index_from_interface(interface)
+        # The UNO Q's controller can wedge for good (firmware reads time out,
+        # the index vanishes from MGMT); only reloading its firmware helps.
+        for attempt in range(2):
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline and not _adapter_powered(index):
+                time.sleep(1.0)
+            if _adapter_powered(index) or attempt:
+                break
+            _rebind_controller(interface)
+            subprocess.run(["systemctl", "restart", "bluetooth"], check=False, timeout=30)
+        time.sleep(2.0)
     print("meshd restarting", flush=True)
     # orig_argv keeps argv[0] as typed, so the process still matches
     # `pgrep -f '^python3.14 apps/meshd'` afterwards.
