@@ -477,6 +477,24 @@ socket se crée bien, sinon c’est l’interpréteur qui est en cause (§1) :
 python3.14 -c "import socket; socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)"
 ```
 
+#### Le mesh se défait au bout de 10–20 minutes (UNO Q)
+
+Deux causes noyau, toutes deux contournées dans le code :
+
+| | |
+|--|--|
+| **Symptôme 1** | `dmesg` : `Unable to allocate ident: -28`, puis plus rien ne passe sur les liens de l’UNO Q. |
+| **Cause** | Noyau 7.0 de l’UNO Q : chaque *LE Flow Control Credit* consomme un identifiant L2CAP jamais rendu (corrigé en amont par `6e1930ece855`). Un crédit par paquet reçu : les 254 identifiants d’un lien s’épuisent en ~15 min. |
+| **Contournement** | Le lien est **recyclé** avant épuisement (200 crédits, `BUBBLE_BLUE_L2CAP_IDENT_BUDGET`, `0` = désactivé) : fermeture + déconnexion MGMT, puis nouvelle connexion avec un pool neuf. |
+| **Symptôme 2** | Après un recyclage, un UNO Q ne se reconnecte plus : `connect … timed out after 8s` sans aucun *LE Extended Create Connection* dans `btmon`. |
+| **Cause** | Le pilote `hci_qca` déclare le WCN3988 sans `QCA_CAP_VALID_LE_STATES` : le noyau refuse d’initier une connexion tant que l’adaptateur est *peripheral* sur un lien. |
+| **Contournement** | Rôle de lien : l’UNO Q est **`central`** (détecté automatiquement) — il annonce en non-connectable et ouvre lui-même tous ses liens. |
+
+`meshd --link-role peripheral` sur les écrans du stand : ils acceptent sans
+jamais composer, donc tout le trafic passe par les relais (sinon, posées sur la
+même table, les deux Rubik se lient directement). Sur le stand, chaque UNO Q
+est ainsi relié aux deux écrans : trois chemins indépendants.
+
 ---
 
 ### 5. Pas d’appairage Bluetooth requis (sécurité applicative)
@@ -700,10 +718,35 @@ sudo usermod -aG input "$USER"      # relogin nécessaire
 
 ### Interface
 
-Dimensionnée pour la dalle 1024×600. Elle embarque **son propre clavier
-AZERTY** : les dalles sont tactiles uniquement et une session kiosque n’a pas de
-shell d’où lancer un clavier système. Le clavier reste replié tant que la zone
-de saisie n’a pas été touchée, pour laisser la hauteur à la conversation.
+Dimensionnée pour la dalle 1024×600 et pour un stand de démo :
+
+- **à gauche**, le chat et **six messages préenregistrés** à toucher
+  ([`apps/presets.txt`](apps/presets.txt), une ligne par bouton, `{name}` = nom
+  de la board). Pas de clavier : les visiteurs n’ont rien à taper. Une pause de
+  1,5 s entre deux envois empêche une foule de transformer les boutons en charge ;
+- **à droite**, la **carte du mesh en direct** : chaque board et chaque lien,
+  et chaque message dessiné saut par saut à travers les relais, sa bulle
+  n’apparaissant qu’à l’arrivée. Le dernier saut est celui par lequel le
+  message est réellement entré ; chaque bulle dit combien de sauts il a faits.
+  Les noms viennent de [`apps/node_names.txt`](apps/node_names.txt).
+
+Chaque démon diffuse ses propres liens au reste du mesh (à chaque changement,
+plus un battement lent de 60 s), dans le plan chiffré du groupe — c’est ce qui
+permet à chaque écran de dessiner le graphe entier.
+
+**Redémarrer tout le mesh depuis une board** — bouton *Restart mesh* (lancer
+l’UI avec `--admin`, à réserver à l’écran du stand, deux appuis pour
+confirmer), ou en SSH :
+
+```bash
+python3 scripts/meshd_client.py --restart
+```
+
+Chaque démon redémarre BlueZ puis se ré-exécute ; un contrôleur qui ne revient
+pas voit son firmware rechargé (rebind du pilote). Un démon ignore les ordres
+reçus pendant sa première minute, pour qu’une copie en retard ne relance pas la
+boucle. Il faut que les boards soient joignables **par le mesh** — pas besoin de
+réseau IP entre elles.
 
 > **Piège de test.** Pour capturer l’UI sous `Xvfb`, forcer `GSK_RENDERER=cairo`
 > (sinon GTK4 rend via le pilote Adreno, hors du framebuffer capturable) et
@@ -714,7 +757,7 @@ de saisie n’a pas été touchée, pour laisser la hauteur à la conversation.
 
 | Vérification | Résultat |
 |--------------|----------|
-| Contrat démon↔UI (`tests/test_meshd_protocol.py`) | 8 cas, sans adaptateur |
+| Contrat démon↔UI (`tests/test_meshd_protocol.py`) | 16 cas, sans adaptateur |
 | Chat réel à travers le démon (arduinoq ↔ rubik-inria) | **14 envoyés / 14 reçus**, 0 refus |
 | UI GTK4 sur Rubik Pi 3, 1024×600 | rendu conforme sur le matériel cible |
 | Tenue de l’UI (démon simulé) | 4 h continues, aucune erreur |
