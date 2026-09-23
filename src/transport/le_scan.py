@@ -41,6 +41,7 @@ HCI_DEV_NONE = 0xFFFF
 HCI_CHANNEL_CONTROL = 3
 
 # --- MGMT opcodes / event codes (subset we need) ----------------------------
+MGMT_OP_DISCONNECT = 0x0014
 MGMT_OP_START_DISCOVERY = 0x0023
 MGMT_OP_STOP_DISCOVERY = 0x0024
 
@@ -193,6 +194,68 @@ def _open_mgmt_socket() -> socket.socket:
 
 def _send_cmd(sock: socket.socket, opcode: int, index: int, params: bytes) -> None:
     sock.send(_MGMT_HEADER.pack(opcode, index, len(params)) + params)
+
+
+def disconnect_params(bd_addr: str, addr_type: int) -> bytes:
+    """``mgmt_addr_info`` for Disconnect: address little-endian, then its LE type."""
+    addr = bytes(int(b, 16) for b in reversed(bd_addr.split(":")))
+    return addr + bytes([addr_type])
+
+
+def mgmt_disconnect(
+    index: int,
+    bd_addr: str,
+    addr_type: int = _ADDR_TYPE_LE_PUBLIC,
+    *,
+    timeout_s: float = 3.0,
+    sock: socket.socket | None = None,
+) -> int | None:
+    """
+    Tear down the ACL to ``bd_addr`` and wait until it is gone.
+
+    Closing the last L2CAP channel only drops the ACL after a disconnect timeout,
+    and not at all while bluetoothd holds an ATT reference — a peer redialing in
+    that window reuses the old ACL and its exhausted ident pool. The command
+    completes on the HCI Disconnection Complete, so returning means the next dial
+    gets a fresh ACL. Returns the MGMT status, or ``None`` if nothing answered.
+    """
+    params = disconnect_params(bd_addr, addr_type)
+    own_sock = sock is None
+    try:
+        s = _open_mgmt_socket() if own_sock else sock
+    except OSError:
+        return None
+    try:
+        try:
+            _send_cmd(s, MGMT_OP_DISCONNECT, index, params)
+        except OSError:
+            return None
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                ready, _, _ = select.select([s], [], [], remaining)
+                if not ready:
+                    break
+                pkt = s.recv(4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                break
+            ev = parse_mgmt_event(pkt)
+            if ev is None or ev.index != index or len(ev.params) < 3:
+                continue
+            if ev.code not in (MGMT_EV_CMD_COMPLETE, MGMT_EV_CMD_STATUS):
+                continue
+            opcode, status = struct.unpack_from("<HB", ev.params, 0)
+            if opcode == MGMT_OP_DISCONNECT and ev.params[3:10] in (b"", params):
+                return status
+        return None
+    finally:
+        if own_sock:
+            try:
+                s.close()
+            except OSError:
+                pass
 
 
 def mgmt_scan_records(

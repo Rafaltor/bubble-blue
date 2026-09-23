@@ -42,8 +42,9 @@ if not hasattr(socket, "BDADDR_LE_PUBLIC"):
         "(Python 3.14+ build with LE L2CAP support)"
     )
 
-from config import MTU_BLE, PSM_BLE, load_config  # noqa: E402
+from config import MTU_BLE, PSM_BLE, l2cap_ident_budget, load_config  # noqa: E402
 from src.transport.advertising import LEAdvertiser  # noqa: E402
+from src.transport.le_scan import hci_index_from_interface, mgmt_disconnect  # noqa: E402
 from src.transport.ble_coc import (  # noqa: E402
     LE_ADDR_TYPE,
     le_addr_types_to_try,
@@ -62,6 +63,15 @@ from src.transport.fragmentation import (  # noqa: E402
 # unreachable/non-connectable peer fails fast instead of stalling the one-dial-
 # per-pass connect loop (a reachable peer connects well under a second).
 _DIAL_TIMEOUT_S = 8.0
+
+# The kernel returns one credit per received PDU, and an SDU spans
+# ceil((len + 2) / MPS) PDUs. MPS is not readable from userspace; this lower
+# bound can only over-count, which recycles a link early rather than too late.
+_MPS_ESTIMATE = 230
+
+
+def _credits_for_sdu(length: int) -> int:
+    return max(1, -(-(length + 2) // _MPS_ESTIMATE))
 
 
 def _ts() -> str:
@@ -114,6 +124,7 @@ class PeerConn:
     bd_addr: str
     sock: socket.socket
     thread: threading.Thread
+    addr_type: int = LE_ADDR_TYPE
 
 
 class BLEL2CAPTransport:
@@ -166,6 +177,8 @@ class BLEL2CAPTransport:
         self._server_thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
         self._advertiser = LEAdvertiser(interface=interface, quiet=quiet)
+        self._hci_index = hci_index_from_interface(interface)
+        self._ident_budget = l2cap_ident_budget()
 
     def update_presence(self, value: bytes) -> None:
         """
@@ -226,6 +239,12 @@ class BLEL2CAPTransport:
             f"mtu={self.mtu} bdaddr_type={self._bdaddr_type}",
             quiet=self._quiet,
         )
+        if self._ident_budget:
+            _tlog_always(
+                self._node,
+                f"BLE L2CAP link recycling every {self._ident_budget} rx credits "
+                "(kernel L2CAP ident leak)",
+            )
         if self._allowed_peers is not None:
             peers = ", ".join(sorted(self._allowed_peers))
             _tlog_always(
@@ -303,9 +322,16 @@ class BLEL2CAPTransport:
             if existing and existing.sock.fileno() != -1:
                 return
 
+        # A type learnt from the peer's own advertisement is authoritative. Falling
+        # back to the other one after a timeout only opens a connection attempt to
+        # an address nobody owns, which holds a controller slot until it expires.
+        try_types = le_addr_types_to_try(addr_type)
+        if addr_type is not None:
+            try_types = try_types[:1]
         last_err: OSError | None = None
         sock: socket.socket | None = None
-        for try_type in le_addr_types_to_try(addr_type):
+        used_type = try_types[0]
+        for try_type in try_types:
             try:
                 sock = open_outbound(
                     bd_addr,
@@ -313,6 +339,7 @@ class BLEL2CAPTransport:
                     addr_type=try_type,
                     timeout=_DIAL_TIMEOUT_S,
                 )
+                used_type = try_type
                 break
             except OSError as e:
                 last_err = e
@@ -339,7 +366,9 @@ class BLEL2CAPTransport:
                 name=f"bb-ble-l2cap-rx-{bd_addr}",
                 daemon=True,
             )
-            self._conns[bd_addr] = PeerConn(bd_addr=bd_addr, sock=sock, thread=t)
+            self._conns[bd_addr] = PeerConn(
+                bd_addr=bd_addr, sock=sock, thread=t, addr_type=used_type
+            )
             t.start()
             is_new = True
 
@@ -414,6 +443,9 @@ class BLEL2CAPTransport:
                 break
 
             peer_bd_addr = str(client_info[0]).upper() if client_info else "UNKNOWN"
+            peer_addr_type = (
+                int(client_info[3]) if client_info and len(client_info) > 3 else LE_ADDR_TYPE
+            )
 
             if not self._peer_allowed(peer_bd_addr):
                 _tlog_always(
@@ -450,7 +482,7 @@ class BLEL2CAPTransport:
                     daemon=True,
                 )
                 self._conns[peer_bd_addr] = PeerConn(
-                    bd_addr=peer_bd_addr, sock=client_sock, thread=t
+                    bd_addr=peer_bd_addr, sock=client_sock, thread=t, addr_type=peer_addr_type
                 )
                 t.start()
 
@@ -484,6 +516,7 @@ class BLEL2CAPTransport:
             _tlog_always(self._node, f"on_receive error src={peer_bd_addr}: {e}")
 
     def _recv_loop(self, peer_bd_addr: str, sock: socket.socket) -> None:
+        credits = 0
         try:
             while not self._stop_evt.is_set():
                 try:
@@ -507,6 +540,14 @@ class BLEL2CAPTransport:
                     quiet=self._quiet,
                 )
                 self._deliver_rx(peer_bd_addr, data)
+                if self._ident_budget:
+                    credits += _credits_for_sdu(len(data))
+                    if credits >= self._ident_budget:
+                        _tlog_always(
+                            self._node,
+                            f"BLE L2CAP recycle peer={peer_bd_addr} after {credits} rx credits",
+                        )
+                        break
         except OSError as e:
             with self._lock:
                 cur = self._conns.get(peer_bd_addr)
@@ -520,6 +561,15 @@ class BLEL2CAPTransport:
                 sock.close()
             except OSError:
                 pass
+            with self._lock:
+                cur = self._conns.get(peer_bd_addr)
+                was_current = cur is not None and cur.sock is sock
+            # The ident budget is per ACL, and a socket closed for any reason can
+            # leave its ACL behind for the next channel to inherit, pool half spent.
+            # Only drop it while this socket still owns the link: a duplicate accept
+            # rides the same ACL as the live channel.
+            if self._ident_budget and was_current and not self._stop_evt.is_set():
+                mgmt_disconnect(self._hci_index, peer_bd_addr, cur.addr_type)
             removed = False
             with self._lock:
                 cur = self._conns.get(peer_bd_addr)

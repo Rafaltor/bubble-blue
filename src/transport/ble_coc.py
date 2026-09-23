@@ -168,10 +168,20 @@ def open_outbound(
     addr_type: int = LE_ADDR_TYPE,
     timeout: float = 30.0,
 ) -> socket.socket:
-    """Connected CoC socket (``coc_client`` / outbound dial)."""
+    """Connected CoC socket (``coc_client`` / outbound dial).
+
+    A failed dial closes its socket at once: left to the garbage collector (the
+    raised exception keeps it alive), the kernel keeps the LE connection attempt
+    pending, and a few of those fill the controller's connection slots — every
+    later dial then fails with "Connection Limit Exceeded".
+    """
     sock = new_socket()
-    bind_outbound(sock, addr_type=addr_type)
-    connect_coc(sock, bd_addr, psm=psm, addr_type=addr_type, timeout=timeout)
+    try:
+        bind_outbound(sock, addr_type=addr_type)
+        connect_coc(sock, bd_addr, psm=psm, addr_type=addr_type, timeout=timeout)
+    except BaseException:
+        sock.close()
+        raise
     return sock
 
 

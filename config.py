@@ -42,6 +42,15 @@ MTU_BLE = 512
 DEFAULT_HELLO_INTERVAL_S = 5
 DEFAULT_HELLO_MISSES = 3
 
+# Kernels carrying 6c3ea155e5ee ("L2CAP: Fix not tracking outstanding TX ident")
+# but not its fix 6e1930ece855 never release the ident of an LE Flow Control
+# Credit, which is sent for every received PDU. After 254 of them on one ACL the
+# channel stalls ("Unable to allocate ident: -28"). The only userspace cure is to
+# drop the ACL before that, so links are recycled after this many credits.
+# Observed on the UNO Q (7.0.0); the Rubik (6.8) is unaffected.
+L2CAP_IDENT_LEAK_SINCE = (6, 12)
+DEFAULT_L2CAP_IDENT_BUDGET = 200
+
 # Security
 AES_KEY_SIZE = 32      # bytes
 AES_NONCE_SIZE = 12    # bytes  
@@ -178,6 +187,25 @@ def _env_int(name: str, default: int, *, minimum: int) -> int:
         print(f"[BB] WARNING: {name}={value} is below {minimum}, using {minimum}", flush=True)
         return minimum
     return value
+
+
+def _kernel_version(release: str) -> tuple[int, int]:
+    m = re.match(r"(\d+)\.(\d+)", release)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def l2cap_ident_budget(release: str | None = None) -> int:
+    """Credits a BLE link may receive before it is recycled; 0 disables recycling.
+
+    ``BUBBLE_BLUE_L2CAP_IDENT_BUDGET`` overrides the kernel-version guess — set it
+    to 0 once a board runs a kernel with 6e1930ece855, whose version alone cannot
+    tell (the fix is being backported to stable series).
+    """
+    if release is None:
+        release = os.uname().release
+    affected = _kernel_version(release) >= L2CAP_IDENT_LEAK_SINCE
+    default = DEFAULT_L2CAP_IDENT_BUDGET if affected else 0
+    return min(_env_int("BUBBLE_BLUE_L2CAP_IDENT_BUDGET", default, minimum=0), 240)
 
 
 def _load_transport_kind() -> str:
