@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from collections import deque
 from queue import Empty, Full, Queue
 
@@ -67,6 +68,15 @@ _RESTART_GUARD_S = 60.0
 # Long enough for the order to be relayed before this board drops its links.
 _RESTART_GRACE_S = 3.0
 
+# The UNO Q's controller dies after minutes to hours: its UART stops receiving,
+# every HCI command times out, and the kernel's own recovery never brings it
+# back — only reloading the driver does. A restart order cannot reach a board
+# whose radio is dead, so each board has to notice by itself.
+_HEALTH_INTERVAL_S = 10.0
+_HEALTH_FAILURES = 3
+_TX_TIMEOUTS = 3
+_TX_TIMEOUT_WINDOW_S = 60.0
+
 
 class _Client:
     """One connected UI. Writes go through a queue so a stalled UI cannot block
@@ -103,12 +113,60 @@ class _Client:
         self.sock.close()
 
 
+class ControllerHealth:
+    """Is the local controller still answering? Checked from MGMT and the kernel log."""
+
+    def __init__(self, interface: str) -> None:
+        self._interface = interface
+        self._index = hci_index_from_interface(interface)
+        self._timeouts: deque = deque()
+        self._kmsg: int | None = None
+        try:
+            self._kmsg = os.open("/dev/kmsg", os.O_RDONLY | os.O_NONBLOCK)
+            os.lseek(self._kmsg, 0, os.SEEK_END)
+        except OSError:
+            self._kmsg = None
+
+    def _drain_kmsg(self, now: float) -> None:
+        if self._kmsg is None:
+            return
+        while True:
+            try:
+                record = os.read(self._kmsg, 8192)
+            except BlockingIOError:
+                break
+            except BrokenPipeError:
+                continue  # ring buffer overwrote unread records
+            except OSError:
+                break
+            if is_tx_timeout(record.decode("utf-8", "replace"), self._interface):
+                self._timeouts.append(now)
+        while self._timeouts and now - self._timeouts[0] > _TX_TIMEOUT_WINDOW_S:
+            self._timeouts.popleft()
+
+    def problem(self) -> str | None:
+        """None while healthy, else why not."""
+        self._drain_kmsg(time.monotonic())
+        if len(self._timeouts) >= _TX_TIMEOUTS:
+            return f"{len(self._timeouts)} HCI command timeouts in {_TX_TIMEOUT_WINDOW_S:.0f} s"
+        if not _adapter_powered(self._index):
+            return f"{self._interface} missing or not powered"
+        return None
+
+
+def is_tx_timeout(kmsg_line: str, interface: str) -> bool:
+    """``Bluetooth: hci0: command 0x2039 tx timeout`` from /dev/kmsg."""
+    return f"{interface}: command 0x" in kmsg_line and "tx timeout" in kmsg_line
+
+
 class MeshDaemon:
-    def __init__(self, interface: str, path: str, node=None) -> None:
+    def __init__(self, interface: str, path: str, node=None, health=None) -> None:
         self.path = path
         # ``node`` is injected by the tests so the protocol can be exercised
         # without an adapter; production always builds a real BBNode.
         self.node = node if node is not None else BBNode(interface=interface, quiet=True)
+        # Same for ``health``: without it (tests), no controller watchdog runs.
+        self._health = health if health is not None or node is not None else ControllerHealth(interface)
         self.node.on_message = self._on_message
         self.node.on_message_route = self._on_message_route
         self.node.on_peer_connected = lambda bd: self._on_log(f"peer up {bd}", False)
@@ -138,6 +196,9 @@ class MeshDaemon:
         # Read by main() once run() returns: the process is replaced rather
         # than restarted in place, so nothing from the old mesh state survives.
         self.restart_requested = False
+        # The controller looks cached-powered to MGMT for minutes after it
+        # dies, so a watchdog restart reloads the driver unconditionally.
+        self.rebind_requested = False
 
     # ---- BBNode callbacks (runtime threads) ----------------------------
 
@@ -311,6 +372,25 @@ class MeshDaemon:
         self.restart_requested = True
         self.shutdown()
 
+    def _health_loop(self) -> None:
+        failures = 0
+        while not self._stopping.wait(_HEALTH_INTERVAL_S):
+            try:
+                reason = self._health.problem()
+            except Exception as exc:  # noqa: BLE001
+                reason = f"health check error: {exc}"
+            if reason is None:
+                failures = 0
+                continue
+            failures += 1
+            self._on_log(f"controller check failed ({failures}/{_HEALTH_FAILURES}): {reason}", True)
+            if failures >= _HEALTH_FAILURES:
+                self._on_log("controller unresponsive: reloading its driver", True)
+                self.rebind_requested = True
+                # Local only: the rest of the mesh is fine.
+                self._start_restart(None)
+                return
+
     # ---- fan-out --------------------------------------------------------
 
     def _broadcast(self, frame: dict) -> None:
@@ -443,6 +523,8 @@ class MeshDaemon:
         self._srv = self._bind(group)
         self.node.start(l2cap_accept_all=accept_all)
         threading.Thread(target=self._poll_loop, daemon=True).start()
+        if self._health is not None:
+            threading.Thread(target=self._health_loop, daemon=True).start()
 
         print(f"meshd local={self.node.local_bd_addr} socket={self.path}", flush=True)
 
@@ -517,6 +599,7 @@ def main() -> int:
         return 1
     if args.link_role:
         os.environ["BUBBLE_BLUE_LINK_ROLE"] = args.link_role
+    _remember_controller(args.interface)
 
     daemon = MeshDaemon(args.interface, args.socket)
 
@@ -525,9 +608,17 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, _bye)
     signal.signal(signal.SIGTERM, _bye)
-    rc = daemon.run(args.group, accept_all=not args.no_accept_all)
+    try:
+        rc = daemon.run(args.group, accept_all=not args.no_accept_all)
+    except Exception:  # noqa: BLE001
+        # Typically "add-adv failed": a dead controller that MGMT still lists.
+        # Exit afterwards and let systemd space out the retries.
+        traceback.print_exc()
+        print("meshd: startup failed, reloading the controller", flush=True)
+        recover_controller(args.interface)
+        return 1
     if daemon.restart_requested:
-        reexec(restart_bluez=True, interface=args.interface)
+        reexec(restart_bluez=True, interface=args.interface, rebind=daemon.rebind_requested)
     return rc
 
 
@@ -542,12 +633,29 @@ def _adapter_powered(index: int) -> bool:
     return any("current settings:" in ln and "powered" in ln for ln in out.splitlines())
 
 
-def _rebind_controller(interface: str) -> None:
-    """Re-probe the adapter's driver, which reloads the controller firmware."""
+_CONTROLLER_ENV = "BB_CONTROLLER_SYSFS"
+
+
+def _remember_controller(interface: str) -> None:
+    """Record which driver owns the adapter while it still exists in sysfs.
+
+    Kept in the environment, which survives the re-exec, because an unbound
+    controller no longer shows up under /sys/class/bluetooth at all.
+    """
     device = os.path.realpath(f"/sys/class/bluetooth/{interface}/device")
     driver = os.path.realpath(os.path.join(device, "driver"))
-    name = os.path.basename(device)
-    print(f"meshd: {interface} did not come back, rebinding {name} to {driver}", flush=True)
+    if os.path.isdir(driver):
+        os.environ[_CONTROLLER_ENV] = f"{driver}:{os.path.basename(device)}"
+
+
+def _rebind_controller(interface: str) -> None:
+    """Re-probe the adapter's driver, which reloads the controller firmware."""
+    _remember_controller(interface)
+    driver, _, name = os.environ.get(_CONTROLLER_ENV, "").rpartition(":")
+    if not driver or not os.path.isdir(driver):
+        print(f"meshd: no driver known for {interface}, cannot rebind", flush=True)
+        return
+    print(f"meshd: rebinding {name} to {driver}", flush=True)
     for action in ("unbind", "bind"):
         try:
             with open(os.path.join(driver, action), "w") as fh:
@@ -557,12 +665,21 @@ def _rebind_controller(interface: str) -> None:
         time.sleep(2.0)
 
 
-def reexec(restart_bluez: bool, interface: str = "hci0") -> None:
+def recover_controller(interface: str) -> None:
+    """Reload a dead controller's driver and bring BlueZ back up on it."""
+    subprocess.run(["pkill", "-x", "btmgmt"], check=False)
+    _rebind_controller(interface)
+    subprocess.run(["systemctl", "restart", "bluetooth"], check=False, timeout=30)
+
+
+def reexec(restart_bluez: bool, interface: str = "hci0", rebind: bool = False) -> None:
     """Replace this process with a fresh daemon, same command line."""
     if restart_bluez:
         # BlueZ too: restarting it is what clears half-open LE connections,
         # which a new daemon would otherwise inherit.
         subprocess.run(["pkill", "-x", "btmgmt"], check=False)
+        if rebind:
+            _rebind_controller(interface)
         subprocess.run(["systemctl", "restart", "bluetooth"], check=False, timeout=30)
         index = hci_index_from_interface(interface)
         # The UNO Q's controller can wedge for good (firmware reads time out,

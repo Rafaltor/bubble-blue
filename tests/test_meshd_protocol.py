@@ -371,6 +371,46 @@ def test_fresh_daemon_ignores_a_late_restart_order(monkeypatch):
         assert h.daemon.restart_requested is False
 
 
+class _FakeHealth:
+    def __init__(self, *answers):
+        self._answers = list(answers)
+
+    def problem(self):
+        return self._answers.pop(0) if len(self._answers) > 1 else self._answers[0]
+
+
+def test_dead_controller_restarts_this_board_only(monkeypatch):
+    monkeypatch.setattr("apps.meshd._HEALTH_INTERVAL_S", 0.01)
+    monkeypatch.setattr("apps.meshd._RESTART_GRACE_S", 0.1)
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        h.daemon._health = _FakeHealth("hci0 missing or not powered")
+        threading.Thread(target=h.daemon._health_loop, daemon=True).start()
+        assert h.daemon._stopped.wait(5.0)
+        assert h.daemon.restart_requested is True
+        assert h.daemon.rebind_requested is True
+        # The rest of the mesh is healthy: no restart order goes out.
+        assert node.sent == []
+
+
+def test_a_single_failed_check_is_not_a_dead_controller(monkeypatch):
+    monkeypatch.setattr("apps.meshd._HEALTH_INTERVAL_S", 0.01)
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        h.daemon._health = _FakeHealth("hci0 missing or not powered", None, None, "x", None)
+        threading.Thread(target=h.daemon._health_loop, daemon=True).start()
+        assert not h.daemon._stopped.wait(0.5)
+        assert h.daemon.rebind_requested is False
+
+
+def test_kernel_tx_timeouts_are_recognised():
+    from apps.meshd import is_tx_timeout
+
+    assert is_tx_timeout("3,4406,67615698,-;Bluetooth: hci0: command 0x2039 tx timeout\n", "hci0")
+    assert not is_tx_timeout("3,4406,67615698,-;Bluetooth: hci1: command 0x2039 tx timeout\n", "hci0")
+    assert not is_tx_timeout("3,4407,67615699,-;Bluetooth: hci0: Opcode 0x2039 failed: -110\n", "hci0")
+
+
 def test_forwarder_counts_hops_from_the_ttl():
     from types import SimpleNamespace
 
