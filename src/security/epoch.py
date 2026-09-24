@@ -108,6 +108,17 @@ class EpochStore:
             self._save()
             return new_epoch, new_key, frozenset(self._revoked)
 
+    def reset_to_bootstrap(self) -> None:
+        """Drop every revocation and return to the shared epoch-0 key.
+
+        Explicit demo reset only. ``adopt_rekey`` never moves backwards.
+        """
+        with self._lock:
+            self._epoch = 0
+            self._group_key = bytes(self._bootstrap_group_key)
+            self._revoked.clear()
+            self._save()
+
     def _load(self) -> None:
         if not self._path.exists():
             return

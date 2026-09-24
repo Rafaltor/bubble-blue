@@ -193,6 +193,11 @@ class MeshDaemon:
         self._restart_lock = threading.Lock()
         self._restarting = False
         self._restart_orders: set[str] = set()
+        # bd -> epoch that member is still on (they never adopted the rekey).
+        self._revoked: dict[str, int] = {}
+        self._revoke_ids: set[str] = set()
+        self._reset_ids: set[str] = set()
+        self._excluded = False
         # Read by main() once run() returns: the process is replaced rather
         # than restarted in place, so nothing from the old mesh state survives.
         self.restart_requested = False
@@ -270,6 +275,10 @@ class MeshDaemon:
             self._publish_topology()
         elif kind == "restart":
             self._on_restart_order(src, str(body.get("id", "")))
+        elif kind == "revoke":
+            self._on_revoke_order(str(body.get("id", "")), str(body.get("bd", "")))
+        elif kind == "reset":
+            self._on_reset_order(str(body.get("id", "")))
 
     def _topology_nodes(self) -> list[dict]:
         now = time.monotonic()
@@ -372,6 +381,98 @@ class MeshDaemon:
         self.restart_requested = True
         self.shutdown()
 
+    def request_revoke(self, bd_addr: str) -> None:
+        """Exclude one member from the group. The coordinator rotates the key."""
+        target = bd_addr.strip().upper()
+        local = str(self.node.local_bd_addr or "").upper()
+        if not target or target == local:
+            raise RuntimeError("choose another board")
+        if target in self._revoked:
+            raise RuntimeError(f"{self._name_of(target)} is already revoked")
+        order = os.urandom(4).hex()
+        self._revoke_ids.add(order)
+        epoch = int(self.node.current_epoch())
+        self._mark_revoked(target, epoch)
+        # On the current key, so the target still hears it, then the coordinator
+        # rotates. A non-coordinator only asks; the coordinator rotates on receipt.
+        notice = encode_control("revoke", id=order, bd=target)
+        try:
+            self.node.send_private_at_epoch(notice, target, epoch)
+        except Exception as exc:  # noqa: BLE001
+            self._on_log(f"revoke notice to {target}: {exc}", True)
+        try:
+            self.node.send(notice)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"revoke not sent: {exc}") from exc
+        if self.node.is_coordinator():
+            self.node.revoke_member(target)
+
+    def _on_revoke_order(self, order: str, bd_addr: str) -> None:
+        target = bd_addr.strip().upper()
+        if not order or not target:
+            return
+        with self._restart_lock:
+            if order in self._revoke_ids:
+                return
+            self._revoke_ids.add(order)
+        self._mark_revoked(target, int(self.node.current_epoch()))
+        if self.node.is_coordinator():
+            self.node.revoke_member(target)
+
+    def _mark_revoked(self, target: str, epoch: int) -> None:
+        self._revoked[target] = epoch
+        local = str(self.node.local_bd_addr or "").upper()
+        if target == local:
+            self._excluded = True
+        self._broadcast({
+            "ev": "revoked",
+            "bd": target,
+            "name": self._name_of(target),
+            "self": target == local,
+        })
+
+    def request_demo_reset(self) -> None:
+        """Everyone, including revoked members, back on the shared epoch-0 key."""
+        order = os.urandom(4).hex()
+        with self._restart_lock:
+            self._reset_ids.add(order)
+        self._perform_reset(order, tell_mesh=True)
+
+    def _on_reset_order(self, order: str) -> None:
+        if not order:
+            return
+        with self._restart_lock:
+            if order in self._reset_ids:
+                return
+            self._reset_ids.add(order)
+        self._perform_reset(order, tell_mesh=False)
+
+    def _perform_reset(self, order: str, *, tell_mesh: bool) -> None:
+        notice = encode_control("reset", id=order)
+        # Revoked members cannot read the group anymore. Reach them on the
+        # pairwise key of the epoch they are still on, before we wipe it.
+        for bd, epoch in list(self._revoked.items()):
+            if bd == str(self.node.local_bd_addr or "").upper():
+                continue
+            try:
+                self.node.send_private_at_epoch(notice, bd, epoch)
+            except Exception as exc:  # noqa: BLE001
+                self._on_log(f"reset to {bd}: {exc}", True)
+        if tell_mesh:
+            try:
+                self.node.send(notice)
+            except Exception as exc:  # noqa: BLE001
+                self._on_log(f"reset broadcast: {exc}", True)
+        try:
+            self.node.reset_group()
+        except Exception as exc:  # noqa: BLE001
+            self._on_log(f"reset group: {exc}", True)
+        self._revoked.clear()
+        self._excluded = False
+        with self._history_lock:
+            self._history.clear()
+        self._broadcast({"ev": "demo_reset", "epoch": int(self.node.current_epoch())})
+
     def _health_loop(self) -> None:
         failures = 0
         while not self._stopping.wait(_HEALTH_INTERVAL_S):
@@ -449,6 +550,8 @@ class MeshDaemon:
             "epoch": epoch,
             "peers": peers,
             "history": history,
+            "revoked": sorted(self._revoked),
+            "excluded": self._excluded,
         }
 
     def _serve_client(self, client: _Client) -> None:
@@ -489,6 +592,18 @@ class MeshDaemon:
             client.send({"ev": "ack", "id": req_id, "ok": True, "error": ""})
             self._on_log("mesh restart requested from the UI", False)
             self.request_mesh_restart()
+        elif cmd == "revoke":
+            client.send({"ev": "ack", "id": req_id, "ok": True, "error": ""})
+            try:
+                self.request_revoke(str(frame.get("bd", "")))
+            except Exception as e:  # noqa: BLE001
+                self._broadcast({"ev": "ack", "id": req_id, "ok": False, "error": str(e)})
+        elif cmd == "reset_demo":
+            client.send({"ev": "ack", "id": req_id, "ok": True, "error": ""})
+            try:
+                self.request_demo_reset()
+            except Exception as e:  # noqa: BLE001
+                self._broadcast({"ev": "ack", "id": req_id, "ok": False, "error": str(e)})
         else:
             client.send({"ev": "ack", "id": req_id, "ok": False, "error": "unknown command"})
 

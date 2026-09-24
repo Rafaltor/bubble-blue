@@ -31,7 +31,7 @@ _LOCAL = "AA:BB:CC:DD:EE:01"
 class _FakeNode:
     """Stands in for BBNode: same surface, no radio."""
 
-    def __init__(self, peers=(), relay=False, send_error=None):
+    def __init__(self, peers=(), relay=False, send_error=None, coordinator=False):
         self.local_bd_addr = _LOCAL
         self.on_message = None
         self.on_log = None
@@ -40,7 +40,12 @@ class _FakeNode:
         self._peers = list(peers)
         self._relay = relay
         self._send_error = send_error
+        self._coordinator = coordinator
+        self._epoch = 3
         self.sent = []
+        self.private = []
+        self.revoked = []
+        self.resets = 0
         self.started = False
 
     def start(self, l2cap_accept_all=True):
@@ -61,7 +66,21 @@ class _FakeNode:
         return self._relay
 
     def current_epoch(self):
-        return 3
+        return self._epoch
+
+    def is_coordinator(self):
+        return self._coordinator
+
+    def revoke_member(self, bd_addr):
+        self.revoked.append(bd_addr)
+        self._epoch += 1
+
+    def reset_group(self):
+        self.resets += 1
+        self._epoch = 0
+
+    def send_private_at_epoch(self, text, dst, epoch):
+        self.private.append((dst, epoch, text))
 
 
 class _Harness:
@@ -409,6 +428,75 @@ def test_kernel_tx_timeouts_are_recognised():
     assert is_tx_timeout("3,4406,67615698,-;Bluetooth: hci0: command 0x2039 tx timeout\n", "hci0")
     assert not is_tx_timeout("3,4406,67615698,-;Bluetooth: hci1: command 0x2039 tx timeout\n", "hci0")
     assert not is_tx_timeout("3,4407,67615699,-;Bluetooth: hci0: Opcode 0x2039 failed: -110\n", "hci0")
+
+
+def test_revoke_asks_the_coordinator_to_rotate_the_key():
+    from apps.mesh_control import decode_control
+
+    node = _FakeNode(peers=[_RELAY], coordinator=True)
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        conn.send({"cmd": "revoke", "bd": _RELAY, "id": 3})
+        assert conn.next_frame("ack")["ok"] is True
+        assert conn.next_frame("revoked")["bd"] == _RELAY
+        assert node.revoked == [_RELAY]
+        assert node._epoch == 4
+        kinds = [decode_control(t)["t"] for t in node.sent]
+        assert kinds == ["revoke"]
+        assert node.private[0][0] == _RELAY
+        conn.close()
+
+
+def test_revoke_received_rotates_only_on_the_coordinator():
+    follower = _FakeNode(peers=[_RELAY], coordinator=False)
+    with _Harness(follower) as h:
+        h.daemon._on_control(_REMOTE, {"t": "revoke", "id": "abcd", "bd": _RELAY})
+        assert follower.revoked == []
+        assert _RELAY in h.daemon._revoked
+
+    leader = _FakeNode(peers=[_RELAY], coordinator=True)
+    with _Harness(leader) as h:
+        h.daemon._on_control(_REMOTE, {"t": "revoke", "id": "abcd", "bd": _RELAY})
+        assert leader.revoked == [_RELAY]
+
+
+def test_reset_reaches_a_revoked_member_then_wipes_the_group():
+    from apps.mesh_control import decode_control
+
+    node = _FakeNode(peers=[_RELAY], coordinator=True)
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        h.daemon._revoked[_RELAY] = 2
+        conn.send({"cmd": "reset_demo", "id": 4})
+        assert conn.next_frame("ack")["ok"] is True
+        reset = conn.next_frame("demo_reset")
+        assert reset["epoch"] == 0
+        assert node.resets == 1
+        assert h.daemon._revoked == {}
+        assert node.private[0][0] == _RELAY and node.private[0][1] == 2
+        assert decode_control(node.sent[-1])["t"] == "reset"
+        conn.close()
+
+
+def test_epoch_reset_returns_to_the_bootstrap_key():
+    import tempfile
+
+    from src.security.epoch import EpochStore
+
+    bootstrap = b"\x11" * 32
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "epoch.bin")
+        store = EpochStore(bootstrap, persist_path=path, local_bd_addr="AA:BB:CC:DD:EE:01")
+        store.prepare_revocation(b"\xaa" * 32)
+        store.reset_to_bootstrap()
+        assert store.current_epoch() == 0
+        assert store.current_group_key() == bootstrap
+        assert store.revoked_pubkeys() == frozenset()
+        again = EpochStore(bootstrap, persist_path=path, local_bd_addr="AA:BB:CC:DD:EE:01")
+        assert again.current_epoch() == 0
+        assert again.revoked_pubkeys() == frozenset()
 
 
 def test_forwarder_counts_hops_from_the_ttl():

@@ -82,6 +82,8 @@ window { background: #0b121b; }
     background: #2a3441; color: #c9d4e0; border: none;
 }
 .restart.confirm { background: #b3261e; color: #ffffff; }
+.revoke { background: #6b2a1a; color: #ffb4a2; }
+.reset { background: #1d3a2a; color: #9be7b8; }
 
 .chatcol { background: #0f1822; border-right: 1px solid #1d2a38; }
 .chat { padding: 10px 12px; }
@@ -223,7 +225,13 @@ class TopologyView(Gtk.Widget):
         self._rings: list[tuple[str, float, str]] = []
         self._arrivals: list[tuple[float, object]] = []
         self._banner = ""
+        self._revoked: set[str] = set()
+        self._selected = ""
+        self._on_select = None
         self._last_draw = 0.0
+        click = Gtk.GestureClick.new()
+        click.connect("pressed", self._on_pressed)
+        self.add_controller(click)
         self.add_tick_callback(self._tick)
 
     # ---- state ----------------------------------------------------------
@@ -256,6 +264,27 @@ class TopologyView(Gtk.Widget):
             if bd not in self._target:
                 del self._pos[bd]
         self.queue_draw()
+
+    def set_revoked(self, bds) -> None:
+        self._revoked = {str(bd).upper() for bd in bds}
+        self.queue_draw()
+
+    def set_selected(self, bd: str) -> None:
+        self._selected = str(bd).upper()
+        self.queue_draw()
+
+    def _on_pressed(self, _gesture, _n, x, y) -> None:
+        w, h = float(self.get_width()), float(self.get_height())
+        best, best_d = "", 46.0
+        for bd in self._nodes:
+            if bd == self._local or bd in self._revoked:
+                continue
+            px, py = self._xy(bd, w, h)
+            d = math.hypot(px - x, py - y)
+            if d < best_d:
+                best, best_d = bd, d
+        if best and self._on_select:
+            self._on_select(best)
 
     def set_banner(self, text: str) -> None:
         self._banner = text
@@ -457,6 +486,11 @@ class TopologyView(Gtk.Widget):
         for bd, node in self._nodes.items():
             x, y = self._xy(bd, w, h)
             local = bd == self._local
+            revoked = bd in self._revoked
+            if bd == self._selected:
+                self._ring(snapshot, x, y, 40.0, 3.0, _rgba("#ffd166"))
+            if revoked:
+                self._ring(snapshot, x, y, 36.0, 3.0, _rgba("#ff5a5a"))
             if local:
                 halo = 0.5 + 0.5 * math.sin(now * 2.0)
                 self._ring(snapshot, x, y, 44.0 + 4.0 * halo, 2.0, _rgba("#4aa3ff", 0.25 + 0.3 * halo))
@@ -472,13 +506,16 @@ class TopologyView(Gtk.Widget):
             label_y = y + 32
             self._text(snapshot, node["name"], "Sans Bold 12", _rgba("#e6edf5"), x, label_y,
                        center=True)
-            if local:
+            if revoked:
+                role = "revoked"
+            elif local:
                 role = "this screen"
             elif node["kind"] == "screen":
                 role = "screen"
             else:
                 role = "relay" if node["relay"] else "standby"
-            self._text(snapshot, role, "Sans 10", _rgba("#7d8da0"), x, label_y + 18, center=True)
+            self._text(snapshot, role, "Sans 10",
+                       _rgba("#ff8a8a" if revoked else "#7d8da0"), x, label_y + 18, center=True)
 
         n, links = len(self._nodes), len(self._edges)
         self._text(snapshot, f"{n} device{'s' if n != 1 else ''} · {links} link{'s' if links != 1 else ''}",
@@ -504,6 +541,11 @@ class ChatWindow(Gtk.ApplicationWindow):
         self._connected = False
         self._cooling = False
         self._restart_armed = 0
+        self._revoke_armed = 0
+        self._reset_armed = 0
+        self._selected = ""
+        self._revoked: set[str] = set()
+        self._excluded = False
         self._restarting_until = 0.0
         self._awaiting_reconnect = False
         self._preset_templates = presets
@@ -526,6 +568,8 @@ class ChatWindow(Gtk.ApplicationWindow):
         body.append(left)
 
         self._topology = TopologyView()
+        if admin:
+            self._topology._on_select = self._on_node_selected
         body.append(self._topology)
 
         self.client = MeshClient(sock_path, self._on_event, self._on_state)
@@ -567,6 +611,19 @@ class ChatWindow(Gtk.ApplicationWindow):
         bar.append(self._link_badge)
 
         if admin:
+            self._revoke_btn = Gtk.Button(label="Revoke")
+            self._revoke_btn.add_css_class("restart")
+            self._revoke_btn.add_css_class("revoke")
+            self._revoke_btn.set_sensitive(False)
+            self._revoke_btn.connect("clicked", self._on_revoke_clicked)
+            bar.append(self._revoke_btn)
+
+            self._reset_btn = Gtk.Button(label="Reset demo")
+            self._reset_btn.add_css_class("restart")
+            self._reset_btn.add_css_class("reset")
+            self._reset_btn.connect("clicked", self._on_reset_clicked)
+            bar.append(self._reset_btn)
+
             self._restart_btn = Gtk.Button(label="Restart mesh")
             self._restart_btn.add_css_class("restart")
             self._restart_btn.connect("clicked", self._on_restart_clicked)
@@ -605,7 +662,7 @@ class ChatWindow(Gtk.ApplicationWindow):
     def _refresh_presets(self) -> None:
         for btn, template in zip(self._preset_buttons, self._preset_templates):
             btn.get_child().set_label(self._fill(template))
-            btn.set_sensitive(self._connected and not self._cooling)
+            btn.set_sensitive(self._connected and not self._cooling and not self._excluded)
 
     def _fill(self, template: str) -> str:
         return template.replace("{name}", self._name or "this screen")
@@ -648,6 +705,84 @@ class ChatWindow(Gtk.ApplicationWindow):
         self._restart_armed = 0
         self._restart_btn.set_label("Restart mesh")
         self._restart_btn.remove_css_class("confirm")
+
+    def _on_node_selected(self, bd: str) -> None:
+        self._selected = bd
+        self._topology.set_selected(bd)
+        self._revoke_armed = 0
+        name = self._topology.name_of(bd)
+        self._revoke_btn.set_label(f"Revoke {name}")
+        self._revoke_btn.set_sensitive(True)
+        self._revoke_btn.remove_css_class("confirm")
+
+    def _on_revoke_clicked(self, _btn) -> None:
+        if not self._selected:
+            return
+        if not self._revoke_armed:
+            self._revoke_armed = GLib.timeout_add(
+                int(RESTART_CONFIRM_S * 1000), self._on_revoke_timeout)
+            self._revoke_btn.set_label("Tap again to revoke")
+            self._revoke_btn.add_css_class("confirm")
+            return
+        GLib.source_remove(self._revoke_armed)
+        self._revoke_armed = 0
+        target = self._selected
+        self._revoke_btn.remove_css_class("confirm")
+        if not self.client.command("revoke", bd=target):
+            self._add_system("revoke not sent — mesh daemon unreachable")
+            self._on_node_selected(target)
+
+    def _on_revoke_timeout(self) -> bool:
+        self._revoke_armed = 0
+        if self._selected:
+            self._on_node_selected(self._selected)
+        else:
+            self._revoke_btn.set_label("Revoke")
+            self._revoke_btn.remove_css_class("confirm")
+        return False
+
+    def _on_reset_clicked(self, _btn) -> None:
+        if not self._reset_armed:
+            self._reset_armed = GLib.timeout_add(
+                int(RESTART_CONFIRM_S * 1000), self._on_reset_timeout)
+            self._reset_btn.set_label("Tap again to reset")
+            self._reset_btn.add_css_class("confirm")
+            return
+        GLib.source_remove(self._reset_armed)
+        self._reset_armed = 0
+        self._reset_btn.set_label("Reset demo")
+        self._reset_btn.remove_css_class("confirm")
+        if not self.client.command("reset_demo"):
+            self._add_system("reset not sent — mesh daemon unreachable")
+
+    def _on_reset_timeout(self) -> bool:
+        self._reset_armed = 0
+        self._reset_btn.set_label("Reset demo")
+        self._reset_btn.remove_css_class("confirm")
+        return False
+
+    def _clear_chat(self) -> None:
+        child = self._messages.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._messages.remove(child)
+            child = nxt
+
+    def _apply_revoked(self, bds, excluded: bool) -> None:
+        self._revoked = {str(bd).upper() for bd in bds}
+        self._excluded = excluded
+        self._topology.set_revoked(self._revoked)
+        if self._selected in self._revoked:
+            self._selected = ""
+            self._topology.set_selected("")
+            if hasattr(self, "_revoke_btn"):
+                self._revoke_btn.set_label("Revoke")
+                self._revoke_btn.set_sensitive(False)
+        self._refresh_presets()
+        if excluded:
+            self._topology.set_banner("Excluded from the group")
+        elif not self._restarting_until:
+            self._topology.set_banner("")
 
     # ---- chat -----------------------------------------------------------
 
@@ -737,6 +872,8 @@ class ChatWindow(Gtk.ApplicationWindow):
                 self._seen_history = True
                 for msg in frame.get("history", []):
                     self._add_message(msg)
+            if hasattr(self, "_revoke_btn"):
+                self._apply_revoked(frame.get("revoked", []), bool(frame.get("excluded")))
         elif ev == "topology":
             local = str(frame.get("local", ""))
             self._set_identity(local)
@@ -764,6 +901,18 @@ class ChatWindow(Gtk.ApplicationWindow):
             # starting yields a hello with none.
             self._set_identity(frame.get("local", ""))
             self._update_peers(frame.get("peers", []), frame.get("relay", False))
+        elif ev == "revoked":
+            self._revoked.add(str(frame.get("bd", "")).upper())
+            self._apply_revoked(self._revoked, self._excluded or bool(frame.get("self")))
+            if frame.get("self"):
+                self._add_system("this screen is excluded — it can no longer read the group")
+            else:
+                self._add_system(f"{frame.get('name', 'a board')} revoked")
+        elif ev == "demo_reset":
+            self._clear_chat()
+            self._seen_history = True
+            self._apply_revoked([], False)
+            self._add_system("demo reset — everyone is back in the group")
         elif ev == "restarting":
             self._restarting_until = time.monotonic() + 120.0
             self._awaiting_reconnect = True

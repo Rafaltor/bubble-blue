@@ -424,6 +424,17 @@ class BBNode:
         """
         self._require_forwarder().revoke_member(bd_addr)
 
+    def reset_group(self) -> None:
+        """Back to the shared epoch-0 key, with nobody revoked."""
+        if self._hello_mgr is None:
+            return
+        self._hello_mgr.epoch_store.reset_to_bootstrap()
+        self._hello_mgr.key_store.clear_pair_key_cache()
+
+    def send_private_at_epoch(self, text: str, dst_bd_addr: str, epoch: int) -> None:
+        """Pairwise flood encrypted at ``epoch`` (the receiver's epoch)."""
+        self._require_forwarder().send_private_flood(text, dst_bd_addr, epoch)
+
     def current_epoch(self) -> int:
         if self._hello_mgr is None:
             return 0

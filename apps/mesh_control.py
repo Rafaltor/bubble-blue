@@ -10,6 +10,8 @@ on-screen button or keyboard can produce keeps them out of the chat:
              (Hellos only ever reach direct neighbours)
     restart  every daemon restarts BlueZ and itself — the demo stand's
              "turn it off and on again", reachable from a single board
+    revoke   exclude one member; the coordinator then rotates the group key
+    reset    back to the shared epoch-0 key, including members already excluded
 """
 
 from __future__ import annotations

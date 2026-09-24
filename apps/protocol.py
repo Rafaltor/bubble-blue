@@ -35,6 +35,13 @@ every change). A link is drawn when either end reports it.
 
     {"cmd": "send", "text": str, "id": int}
     {"cmd": "restart_mesh", "id": int}   restarts every daemon of the mesh
+    {"cmd": "revoke", "bd": str, "id": int}       exclude one member (coordinator rotates the key)
+    {"cmd": "reset_demo", "id": int}              everyone back on the epoch-0 key, chat cleared
+
+    {"ev": "revoked", "bd": str, "name": str, "self": bool}
+    {"ev": "demo_reset", "epoch": int}
+
+``hello`` also carries ``revoked`` (BD addresses) and ``excluded`` (this board).
     {"ev": "ack",   "id": int, "ok": bool, "error": str}
 """
 

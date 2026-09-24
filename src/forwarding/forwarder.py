@@ -185,6 +185,7 @@ class PacketForwarder:
         dst_bd_addr: str,
         *,
         private: bool = False,
+        pair_epoch: int | None = None,
     ) -> bytes:
         """
         Build a PKT_DATA wire packet using per-packet key derivation.
@@ -200,7 +201,8 @@ class PacketForwarder:
         src = self._cfg.local_bd_addr.upper()
 
         if private:
-            base_key = self._pair_key(dst, wire_epoch=self._current_epoch())
+            epoch = self._current_epoch() if pair_epoch is None else int(pair_epoch)
+            base_key = self._pair_key(dst, wire_epoch=epoch)
             if base_key is None:
                 raise RuntimeError(f"No pairwise key for {dst}, Hello not yet received")
         else:
@@ -555,6 +557,22 @@ class PacketForwarder:
 
     def send_broadcast(self, text: str | bytes) -> None:
         self.send_data(text, BROADCAST_BD_ADDR, private=False)
+
+    def send_private_flood(self, text: str | bytes, dst_bd_addr: str, epoch: int) -> None:
+        """Flood a pairwise message encrypted at ``epoch``.
+
+        A revoked member never adopted the new group key, so this is how a
+        demo reset still reaches them: ``epoch`` is the one they are still on.
+        Relays forward on ``dst``; only that board can decrypt.
+        """
+        packet = self.build_data_packet(
+            text, dst_bd_addr, private=True, pair_epoch=int(epoch)
+        )
+        peers = self._other_peers(exclude=None)
+        if not peers:
+            raise RuntimeError("no L2CAP peers connected")
+        for peer in peers:
+            self._transport.send(peer, packet)
 
     def send_subgroup(self, text: str | bytes, recipients: list[str]) -> None:
         """Flood PKT_SUBGROUP to all L2CAP peers (subset multicast)."""
