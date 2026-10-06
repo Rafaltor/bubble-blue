@@ -1,36 +1,27 @@
 # BUBBLE-BLUE
 
-Implémentation du protocole mesh multi-hop **BUBBLE-BLUE** (arXiv:2509.00967) pour :
+Implémentation du protocole mesh multi-hop Bluetooth BUBBLE-BLUE ([arXiv:2509.00967](https://arxiv.org/abs/2509.00967)).
 
-- **Rubik Pi 3** — Ubuntu Linux, Bluetooth 5.0
-- **Arduino UNO Q** — Debian Linux, Bluetooth 5.1
+Les nœuds tournent sur Rubik Pi 3 (Ubuntu, Bluetooth 5.0) et Arduino UNO Q (Debian, Bluetooth 5.1). Le transport est un canal BLE L2CAP orienté connexion. La pile fait la découverte (Hello), la diffusion d'état (CDS), le relais multi-sauts et le chiffrement AES.
 
-Dépôts :
+Les cartes suivent ce dépôt : commit, push, puis `git pull` sur chaque board. Le miroir INRIA est `git@gitlab.inria.fr:bb/bb_v1.git`.
 
-| Remote | URL | Usage |
-|--------|-----|-------|
-| `origin` | `https://github.com/Rafaltor/bubble-blue.git` | **Déploiement boards** (`git pull`) |
-| `gitlab` | `git@gitlab.inria.fr:bb/bb_v1.git` | Miroir INRIA |
+## Lancer un nœud
 
-Les boards suivent `origin`. Pour déployer : commit + push sur GitHub, puis
-`git pull` sur chaque board — ne pas copier de fichiers à la main (`scp`),
-sous peine de laisser des arbres de travail divergents.
+Le setup complet est dans la section Board Setup. Une fois la board prête :
 
-### À quoi sert chaque document
+```bash
+sudo python3.14 bb_node.py --chat
+```
 
-Ce n’est **pas** l’article. Le README est le manuel de la *codebase* : installer
-une board, lancer le mesh, lire un log, retrouver un script. Nadjib et Wilfred
-n’ont pas besoin de le lire pour l’article ; toi et quiconque flashe une carte,
-si.
+## Documents
 
-| Fichier | Lecteur | Rôle |
-|---------|---------|------|
-| [`README.md`](README.md) | Toi, une board, un nouveau sur le dépôt | Setup, commandes, pièges Bluetooth, ce qui marche aujourd’hui |
-| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Toi, en labo | `.env`, mesh ouvert vs allow-list, timers |
-| [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) | Nadjib + toi, avant les dalles | Plan d’expériences figé (métrique + critère de passage) |
-| [`docs/paper/bb-implementation-draft.md`](docs/paper/bb-implementation-draft.md) | Nadjib, Philippe, (Wilfred en ack) | **L’article** — version technique longue |
-| [`docs/bb-stack-actuel.html`](docs/bb-stack-actuel.html), [`docs/bb-cds-pipeline.html`](docs/bb-cds-pipeline.html) | Présentation orale | Slides à jour |
-| [`docs/archive/`](docs/archive/) | Personne en réunion | Anciens decks, **ne pas présenter** |
+| Fichier | Rôle |
+| --- | --- |
+| `README.md` | Installation des boards, lancement, pièges Bluetooth |
+| `docs/CONFIGURATION.md` | `.env`, mesh ouvert ou liste d'adresses, timers |
+| `docs/EXPERIMENTS.md` | Plan d'expériences |
+| `docs/paper/bb-implementation-draft.md` | Version technique longue |
 
 ---
 
