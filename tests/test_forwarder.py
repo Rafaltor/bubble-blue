@@ -184,10 +184,22 @@ def test_private_message_unknown_peer() -> None:
         assert "No pairwise key" in str(e)
 
 
+def test_private_flood_falls_back_without_pairwise_key() -> None:
+    cfg = _cfg()
+    transport = _FakeTransport(["AA:BB:CC:DD:EE:02"])
+    hello = _FakeHelloMgr(relay=False, group_key=cfg.group_key)
+    hello.key_store.get_pair_key = lambda _bd, epoch=0: None  # type: ignore[method-assign, assignment]
+    fwd = PacketForwarder(cfg, transport, hello, on_message=lambda _s, _t: None)  # type: ignore[arg-type]
+    fwd.send_private_flood("secret", "AA:BB:CC:DD:EE:09", 0)
+    assert transport.sent
+    assert transport.sent[0][0] == "AA:BB:CC:DD:EE:02"
+
+
 if __name__ == "__main__":
     test_relay_decrypts_after_ttl_change()
     test_leaf_delivers_broadcast()
     test_dedup_same_packet_twice()
     test_own_broadcast_flooded_back_is_dropped()
     test_private_message_unknown_peer()
+    test_private_flood_falls_back_without_pairwise_key()
     print("✅ forwarder tests passed")

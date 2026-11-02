@@ -379,8 +379,13 @@ class MgmtLEScanner:
         self._records: dict[str, tuple[ScanDeviceRecord, float]] = {}
         self._lock = threading.Lock()
         self._sock: socket.socket | None = None
+        self._sock_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        # Cleared while a dial is in flight. The QCA firmware rejects LE
+        # connect with "Command not allowed when scan/LE connect".
+        self._hold = threading.Event()
+        self._hold.set()
         self._discovering = False
         self._started = False
 
@@ -422,8 +427,18 @@ class MgmtLEScanner:
                 bd: rec for bd, (rec, ts) in self._records.items() if now - ts <= self._ttl
             }
 
+    def pause(self) -> None:
+        """Stop LE discovery so a dial is not refused by the controller."""
+        self._hold.clear()
+        self._send(MGMT_OP_STOP_DISCOVERY)
+
+    def resume(self) -> None:
+        self._hold.set()
+
     def _send(self, opcode: int) -> None:
-        if self._sock is not None:
+        with self._sock_lock:
+            if self._sock is None:
+                return
             try:
                 _send_cmd(self._sock, opcode, self._index, bytes([LE_DISCOVERY_ADDR_MASK]))
             except OSError as exc:
@@ -437,6 +452,11 @@ class MgmtLEScanner:
             return
         try:
             while not self._stop.is_set():
+                if not self._hold.is_set():
+                    self._send(MGMT_OP_STOP_DISCOVERY)
+                    if self._stop.wait(0.2):
+                        break
+                    continue
                 self._run_window()
                 if self._gap_s > 0.0 and self._stop.wait(self._gap_s):
                     break
@@ -456,11 +476,16 @@ class MgmtLEScanner:
         after a stale session), it re-issues Stop+Start once so a node never ends
         up silently dark.
         """
+        if not self._hold.is_set():
+            self._send(MGMT_OP_STOP_DISCOVERY)
+            return
         self._discovering = False
         self._send(MGMT_OP_START_DISCOVERY)
         deadline = time.monotonic() + self._window_s
         reheal_done = False
         while not self._stop.is_set():
+            if not self._hold.is_set():
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

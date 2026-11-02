@@ -6,5 +6,5 @@
 9C:B8:B4:9F:2D:75    screen  Rubik INRIA
 40:D9:5A:89:B6:2B    screen  Rubik 3
 14:B5:CD:E2:12:4F    relay   UNO Q 1
-14:B5:CD:E8:75:33    relay   UNO Q 2
+14:B5:CD:E8:75:33    screen  UNO Q 2
 14:B5:CD:EA:AB:B3    relay   UNO Q 3

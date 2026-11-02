@@ -1,0 +1,290 @@
+% NetMob 2026 stand poster. A0 portrait (841 x 1189 mm).
+% Compiler: pdfLaTeX, run twice (the drawing is anchored to the page).
+\documentclass{article}
+\usepackage[paperwidth=841mm,paperheight=1189mm,margin=0mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{tgheros}
+\renewcommand{\familydefault}{\sfdefault}
+\newcommand{\display}{\fontfamily{qag}\selectfont}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc}
+\pagestyle{empty}
+\hyphenpenalty=10000
+\exhyphenpenalty=10000
+
+\definecolor{navy}{HTML}{0E1B33}
+\definecolor{ink}{HTML}{1B2436}
+\definecolor{cream}{HTML}{F5F1E8}
+\definecolor{bubble}{HTML}{36C5D8}
+\definecolor{coral}{HTML}{FF5A3C}
+\definecolor{relay}{HTML}{2E9E6A}
+\definecolor{oldkey}{HTML}{3B7BE8}
+\definecolor{newkey}{HTML}{F5A524}
+\definecolor{muted}{HTML}{6B7280}
+\definecolor{chip}{HTML}{ECE8DF}
+
+\newcommand{\bodyfont}{\fontsize{32}{42}\selectfont}
+\newcommand{\smallfont}{\fontsize{26}{34}\selectfont}
+\newcommand{\headfont}{\display\bfseries\fontsize{58}{64}\selectfont}
+
+\tikzset{
+  pics/lock/.style={code={
+    \draw[#1, line width=1.3mm] (-2.2,1.5) -- (-2.2,3.4) arc(180:0:2.2) -- (2.2,1.5);
+    \fill[#1, rounded corners=0.6mm] (-3.6,-3.2) rectangle (3.6,1.8);
+  }},
+  pics/envelope/.style={code={
+    \filldraw[fill=white, draw=ink, line width=0.9mm, rounded corners=1mm] (-14,-9) rectangle (14,9);
+    \draw[ink, line width=0.9mm, line join=round] (-14,9) -- (0,-1.5) -- (14,9);
+    \pic at (0,-4.2) {lock=coral};
+  }},
+  pics/screen/.style={code={
+    \fill[ink, rounded corners=3mm] (-46,-29) rectangle (46,29);
+    \fill[white] (-41,-24) rectangle (41,24);
+    \fill[ink] (-7,-29) rectangle (7,-37);
+    \fill[ink, rounded corners=1.2mm] (-22,-40) rectangle (22,-35);
+    \fill[bubble!25, rounded corners=3mm] (-30,-9) rectangle (30,11);
+    \node[font=\display\bfseries\fontsize{34}{34}\selectfont, text=ink] at (0,1) {#1};
+  }},
+  pics/board/.style={code={
+    \fill[relay, rounded corners=3mm] (-42,-24) rectangle (42,24);
+    \foreach \i in {-35,-28,...,35} {
+      \fill[white, opacity=0.75] ({\i-1.6},18.5) rectangle ({\i+1.6},21.5);
+      \fill[white, opacity=0.75] ({\i-1.6},-21.5) rectangle ({\i+1.6},-18.5);
+    }
+    \fill[ink, rounded corners=1.2mm] (-13,-10) rectangle (13,10);
+    \fill[white, opacity=0.25] (-9,-6) rectangle (9,6);
+  }},
+  dot/.style={circle, minimum size=12mm, inner sep=0pt, draw=white, line width=0.8mm},
+  edge/.style={draw=ink!25, line width=1mm},
+  chip/.style={fill=chip, rounded corners=2.5mm, inner xsep=4mm, inner ysep=2.8mm,
+               font=\fontsize{29}{34}\selectfont, text=ink, anchor=west},
+}
+
+\newcommand{\panel}[4]{\fill[white, rounded corners=9mm] (#1,#2) rectangle (#3,#4);}
+\newcommand{\heading}[4]{%
+  \node[circle, fill=coral, text=white, minimum size=23mm, inner sep=0pt,
+        font=\display\bfseries\fontsize{48}{48}\selectfont] at (#1,#2) {#3};
+  \node[anchor=west, font=\headfont, text=ink] at ({#1+17},#2) {#4};}
+
+\begin{document}
+\begin{tikzpicture}[remember picture, overlay, x=1mm, y=1mm,
+                    shift={(current page.south west)}]
+
+% ---------------------------------------------------------------- background
+\fill[cream] (0,0) rectangle (841,1189);
+
+% ---------------------------------------------------------------- hero
+\fill[navy] (0,966) rectangle (841,1189);
+\begin{scope}
+\clip (0,966) rectangle (841,1189);
+\foreach \x/\y/\r/\o in {40/1170/26/0.10, 470/985/34/0.08, 520/1175/14/0.14, 815/985/40/0.10, 330/1180/10/0.18}
+  \fill[bubble, opacity=\o] (\x,\y) circle (\r);
+\end{scope}
+
+\node[anchor=west, text=white, font=\display\bfseries\fontsize{160}{160}\selectfont]
+  at (46,1128) {BUBBLE-BLUE};
+\node[anchor=north west, text=bubble, text width=500mm, align=left,
+      font=\display\bfseries\fontsize{52}{60}\selectfont]
+  at (50,1084) {A private conversation, carried by strangers.};
+\node[anchor=north west, text=white, opacity=0.85, text width=490mm, align=left, font=\bodyfont]
+  at (50,1030) {A Bluetooth mesh that any board can relay, and a group that only its members can read.};
+\node[anchor=west, text=white, opacity=0.7, font=\smallfont]
+  at (50,984) {Paul-Maxence Baraton \textbar{} Nadjib Achir \textbar{} Philippe Jacquet \enspace INRIA
+  \qquad Wilfred Doré \enspace Qualcomm};
+
+% hero drawing: a bubble of members inside a mesh of strangers
+\begin{scope}[yshift=14mm]
+\fill[bubble, opacity=0.22] (655,1090) ellipse (82 and 62);
+\draw[bubble, line width=1.2mm, dash pattern=on 5mm off 3mm] (655,1090) ellipse (82 and 62);
+\coordinate (m1) at (608,1103); \coordinate (m2) at (660,1132);
+\coordinate (m3) at (705,1086); \coordinate (m4) at (646,1052);
+\coordinate (s1) at (772,1142); \coordinate (s2) at (790,1040);
+\coordinate (s3) at (728,985);  \coordinate (s4) at (585,978);
+\foreach \a/\b in {m1/m2,m2/m3,m3/m4,m4/m1,m1/m3,m3/s1,m3/s2,m4/s3,m4/s4,s2/s3,s1/s2}
+  \draw[white, opacity=0.45, line width=1.1mm] (\a) -- (\b);
+\foreach \n in {m1,m2,m3,m4}
+  \node[dot, fill=bubble, minimum size=15mm] at (\n) {};
+\foreach \n in {s1,s2,s3,s4}
+  \node[dot, fill=white!55!navy, minimum size=13mm] at (\n) {};
+\node[text=bubble, font=\display\bfseries\fontsize{30}{30}\selectfont, anchor=south]
+  at (618,1158) {your group};
+\node[text=white, opacity=0.75, font=\smallfont, anchor=west]
+  at (604,962) {strangers who relay};
+\end{scope}
+
+% ---------------------------------------------------------------- intro strip
+\node[text=coral, font=\display\bfseries\fontsize{40}{48}\selectfont, align=center]
+  at (420.5,950) {The demo shows messages appearing on screens. Here is what happens in between.};
+
+% ---------------------------------------------------------------- panel 1
+\panel{30}{710}{811}{934}
+\heading{64}{902}{1}{The relay carries a letter it cannot open}
+\node[anchor=north west, text width=735mm, align=left, font=\bodyfont, text=ink]
+  at (47,879) {Between two screens, a message can pass through boards that are not in your group.
+  They forward it anyway, still sealed. Nobody had to pair anything.};
+
+\pic[scale=0.8] at (145,806) {screen={Hi Bob!}};
+\pic[scale=0.8] at (696,806) {screen={Hi Bob!}};
+\pic[scale=0.8] at (420,806) {board};
+\draw[-{Latex[length=8mm,width=8mm]}, bubble, line width=2mm] (188,806) -- (380,806);
+\draw[-{Latex[length=8mm,width=8mm]}, bubble, line width=2mm] (460,806) -- (653,806);
+\pic[scale=1.25] at (284,826) {envelope};
+\pic[scale=1.25] at (556,826) {envelope};
+
+\node[font=\bodyfont\bfseries, text=ink] at (145,762) {Alice · member};
+\node[font=\bodyfont\bfseries, text=ink] at (696,762) {Bob · member};
+\node[font=\bodyfont\bfseries, text=relay] at (420,774) {Arduino UNO Q · not a member};
+
+\node[fill=relay!13, rounded corners=4mm, text width=330mm, align=center, inner sep=4mm,
+      font=\bodyfont, text=ink] at (245,731)
+  {\textbf{The relay reads:} who sent it, where it goes, hops left};
+\node[fill=coral!13, rounded corners=4mm, text width=330mm, align=center, inner sep=4mm,
+      font=\bodyfont, text=ink] at (596,731)
+  {\textbf{The relay cannot read:} the words};
+
+\begin{scope}[yshift=108mm]
+% ---------------------------------------------------------------- panel 2
+\panel{30}{330}{413}{590}
+\heading{64}{558}{2}{What a spy's radio catches}
+
+\node[anchor=west, font=\bodyfont\bfseries, text=coral] at (47,522) {A stranger listening nearby};
+\node[chip] (a1) at (47,494) {from: Alice};
+\node[chip, right=2.5mm] (a2) at (a1.east) {to: everyone};
+\node[chip, right=2.5mm] at (a2.east) {hops left: 9};
+\node[anchor=west, fill=coral!13, rounded corners=3mm, text width=336mm, inner sep=4mm,
+      font=\ttfamily\fontsize{33}{38}\selectfont, text=coral!70!black] at (47,463)
+  {e4 7a 91 0c 5b ff 2d 83 c7};
+
+\node[anchor=west, font=\bodyfont\bfseries, text=relay] at (47,425) {A member of the group};
+\node[chip] (b1) at (47,397) {from: Alice};
+\node[chip, right=2.5mm] (b2) at (b1.east) {to: everyone};
+\node[chip, right=2.5mm] at (b2.east) {hops left: 9};
+\node[anchor=west, fill=relay!13, rounded corners=3mm, text width=336mm, inner sep=4mm,
+      font=\bodyfont\bfseries, text=ink] at (47,366)
+  {Meet at the Qualcomm booth, 3 pm};
+
+\node[anchor=west, font=\smallfont, text=muted] at (47,344)
+  {Anyone can see that boards talk. Only members read what they say.};
+
+% ---------------------------------------------------------------- panel 3
+\panel{428}{330}{811}{590}
+\heading{462}{558}{3}{Removing a member}
+\node[anchor=north west, text width=350mm, align=left, font=\bodyfont, text=ink]
+  at (445,535) {Like changing the locks: everyone gets a new key, except the one who has to go.};
+
+\newcommand{\scene}[2]{%
+  \begin{scope}[shift={(#1,450)}]
+    \coordinate (p1) at (-36,18); \coordinate (p2) at (0,30); \coordinate (p3) at (36,18);
+    \coordinate (p4) at (-36,-14); \coordinate (p5) at (0,-24); \coordinate (p6) at (36,-14);
+    \foreach \a/\b in {p1/p2,p2/p3,p3/p6,p6/p5,p5/p4,p4/p1,p2/p5,p1/p5,p3/p5}
+      \draw[edge] (\a) -- (\b);
+    #2
+  \end{scope}}
+
+\scene{505}{%
+  \foreach \n in {p1,p2,p3,p4,p5,p6} \node[dot, fill=oldkey] at (\n) {};}
+\scene{627}{%
+  \foreach \n in {p1,p3,p4,p5} \node[dot, fill=oldkey] at (\n) {};
+  \foreach \n in {p1,p3,p4,p5}
+    \draw[-{Latex[length=4mm,width=4mm]}, newkey, line width=1.2mm, shorten >=7mm, shorten <=8mm] (p2) -- (\n);
+  \node[dot, fill=newkey, minimum size=16mm] at (p2) {};
+  \node[font=\display\bfseries\fontsize{24}{24}\selectfont, text=white] at (p2) {C};
+  \node[dot, fill=muted!45] at (p6) {};
+  \draw[coral, line width=1.3mm] ($(p6)+(-4,-4)$) -- ($(p6)+(4,4)$) ($(p6)+(-4,4)$) -- ($(p6)+(4,-4)$);}
+\scene{749}{%
+  \foreach \n in {p1,p2,p3,p4,p5} \node[dot, fill=newkey] at (\n) {};
+  \node[dot, fill=muted!45] at (p6) {};
+  \draw[coral, line width=1.4mm] (p6) circle (9.5);}
+
+\foreach \x in {566,688}
+  \draw[-{Latex[length=5mm,width=6mm]}, muted, line width=1.4mm] (\x-6,450) -- (\x+6,450);
+
+\foreach \x/\t in {505/{Everyone shares one key.},
+                   627/{The coordinator hands out a new key, skipping one board.},
+                   749/{The excluded board still relays. It can no longer read.}}
+  \node[anchor=north, text width=112mm, align=center, font=\smallfont, text=ink] at (\x,414) {\t};
+
+\foreach \x/\c/\t in {448/oldkey/old key, 540/newkey/new key, 634/muted!45/excluded}{
+  \node[dot, fill=\c, minimum size=8mm] at (\x,346) {};
+  \node[anchor=west, font=\smallfont, text=muted] at (\x+6,346) {\t};}
+\end{scope}
+
+% ---------------------------------------------------------------- panel 4 (field line)
+\panel{30}{309}{811}{426}
+\heading{64}{395}{4}{Across the building, on battery}
+\node[anchor=east, font=\smallfont, text=muted] at (795,395) {measured on the boards themselves};
+
+\foreach \i/\x/\c/\n in {0/80/bubble/Rubik Q, 1/200/relay/UNO Q, 2/320/bubble/Rubik 3,
+                          3/440/relay/UNO Q, 4/560/bubble/Rubik Inria}{
+  \coordinate (l\i) at (\x,346);
+  \node[anchor=north, font=\smallfont\bfseries, text=ink] at (\x,332) {\n};}
+\foreach \a/\b in {l0/l1,l1/l2,l2/l3,l3/l4}{
+  \draw[ink!25, line width=1.4mm] (\a) -- (\b);
+  \node[font=\smallfont, text=muted, fill=white, inner sep=1.5mm] at ($(\a)!0.5!(\b)$) {15 m};}
+\foreach \i/\c in {0/bubble,1/relay,2/bubble,3/relay,4/bubble}
+  \node[dot, fill=\c, minimum size=16mm] at (l\i) {};
+\node[anchor=south, font=\smallfont, text=muted] at (80,357) {sends};
+\foreach \i/\d in {1/85, 2/101, 3/143, 4/162}
+  \node[anchor=south, font=\display\bfseries\fontsize{30}{30}\selectfont, text=coral]
+    at ($(l\i)+(0,11)$) {\d\,ms};
+
+\node[anchor=north west, text width=205mm, align=left, font=\smallfont, text=ink] at (598,374)
+  {\textbf{76/79} delivered four hops away.\\
+   Last link walked away: held to \textbf{30 m}.\\
+   One relay unplugged: \textbf{95 s} dark.\\
+   A line has no detour.};
+
+% ---------------------------------------------------------------- panel 4
+\begin{scope}[yshift=-18mm]
+\panel{30}{118}{480}{315}
+\heading{64}{284}{5}{Who relays? The mesh decides}
+\node[anchor=north west, text width=222mm, align=left, font=\bodyfont, text=ink]
+  at (47,262) {Each board looks at its neighbours. If they can already reach each other, it stays quiet.
+  The boards that remain form a backbone: fewer transmissions, the same reach.};
+
+\begin{scope}[shift={(372,190)}]
+  \coordinate (g1) at (-80,40); \coordinate (g2) at (-45,52); \coordinate (g3) at (-10,35);
+  \coordinate (g4) at (30,50);  \coordinate (g5) at (70,38);  \coordinate (g6) at (-72,0);
+  \coordinate (g7) at (-35,10); \coordinate (g8) at (5,-5);   \coordinate (g9) at (45,8);
+  \coordinate (g10) at (82,-8); \coordinate (g11) at (-50,-38); \coordinate (g12) at (-10,-45);
+  \coordinate (g13) at (35,-38); \coordinate (g14) at (75,-45);
+  \foreach \a/\b in {g1/g2,g2/g3,g3/g4,g4/g5,g1/g6,g6/g7,g2/g7,g7/g3,g3/g8,g8/g9,g4/g9,g9/g5,
+                     g9/g10,g5/g10,g6/g11,g7/g11,g11/g12,g8/g12,g12/g13,g8/g13,g13/g14,g10/g14,g9/g13}
+    \draw[edge] (\a) -- (\b);
+  \foreach \a/\b in {g7/g3,g3/g8,g8/g9,g8/g12}
+    \draw[coral, line width=2.4mm] (\a) -- (\b);
+  \foreach \n in {g1,g2,g4,g5,g6,g10,g11,g13,g14}
+    \node[dot, fill=ink!30] at (\n) {};
+  \foreach \n in {g3,g7,g8,g9,g12}
+    \node[dot, fill=coral, minimum size=15mm] at (\n) {};
+\end{scope}
+\node[anchor=west, font=\smallfont, text=coral] at (300,132) {backbone, elected locally};
+
+% ---------------------------------------------------------------- numbers
+\fill[navy, rounded corners=9mm] (495,118) rectangle (811,315);
+\node[anchor=west, text=bubble, font=\display\bfseries\fontsize{38}{38}\selectfont]
+  at (518,290) {Measured on our stand};
+\foreach \x/\y/\n/\t in {
+    518/250/{75/75}/{messages reached every other board},
+    668/250/4.4 s/{from mesh start-up to reading the group},
+    518/174/130 s/{a relay whose radio was cut reads again, no reboot},
+    668/174/0/{Bluetooth pairings needed}}{
+  \node[anchor=west, text=coral, font=\display\bfseries\fontsize{84}{84}\selectfont] at (\x,\y) {\n};
+  \node[anchor=north west, text width=132mm, align=left, text=white, opacity=0.9,
+        font=\fontsize{25}{32}\selectfont] at (\x+1,\y-17) {\t};}
+\end{scope}
+
+% ---------------------------------------------------------------- footer
+\node[anchor=west, font=\bodyfont\bfseries, text=ink] at (40,80) {Not claimed yet};
+\node[anchor=north west, text width=470mm, align=left, font=\smallfont, text=muted] at (40,66)
+  {A full day of operation, and how far every hop reaches before it breaks:
+  only the last hop was pushed until it dropped.};
+\node[anchor=east, font=\bodyfont\bfseries, text=ink] at (805,80) {Hardware};
+\node[anchor=north east, align=right, font=\smallfont, text=muted] at (805,66)
+  {Qualcomm RUBIK Pi 3 screens · Arduino UNO Q relays\\BLE L2CAP · AES-256-GCM · no pairing};
+\node[anchor=east, font=\display\bfseries\fontsize{34}{34}\selectfont, text=coral] at (805,22) {NetMob 2026};
+
+\end{tikzpicture}
+\end{document}

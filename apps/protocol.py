@@ -34,6 +34,7 @@ every change). A link is drawn when either end reports it.
     {"ev": "log",     "text": str, "error": bool}
 
     {"cmd": "send", "text": str, "id": int}
+    {"cmd": "send", "text": str, "to": str, "id": int}   pairwise 1-to-1 (only ``to`` decrypts)
     {"cmd": "restart_mesh", "id": int}   restarts every daemon of the mesh
     {"cmd": "revoke", "bd": str, "id": int}       exclude one member (coordinator rotates the key)
     {"cmd": "reset_demo", "id": int}              everyone back on the epoch-0 key, chat cleared

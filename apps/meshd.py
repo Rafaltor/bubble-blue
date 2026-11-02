@@ -186,6 +186,9 @@ class MeshDaemon:
         self._started_at = time.monotonic()
         # remote BD -> its last topology report, stamped with time.monotonic()
         self._topo: dict[str, dict] = {}
+        # Last L2CAP neighbour set. A board that leaves it is off the map now,
+        # not when its last report expires.
+        self._linked: set[str] | None = None
         self._topo_lock = threading.Lock()
         self._topo_due = True
         self._topo_sent_at = float("-inf")
@@ -221,8 +224,16 @@ class MeshDaemon:
         self._broadcast({"ev": "log", "text": str(text), "error": bool(is_err)})
 
     def _record_and_broadcast(
-        self, sender: str, text: str, mine: bool, via: str = "", hops: int = 0
+        self,
+        sender: str,
+        text: str,
+        mine: bool,
+        via: str = "",
+        hops: int = 0,
+        to: str = "",
+        private: bool = False,
     ) -> None:
+        dest = str(to or "").upper()
         frame = {
             "ev": "message",
             "from": sender,
@@ -233,6 +244,9 @@ class MeshDaemon:
             "via": via,
             "via_name": self._name_of(via) if via else "",
             "hops": hops,
+            "to": dest,
+            "to_name": self._name_of(dest) if dest else "",
+            "private": bool(private or dest),
         }
         with self._history_lock:
             self._history.append(frame)
@@ -272,6 +286,11 @@ class MeshDaemon:
             }
             with self._topo_lock:
                 self._topo[src] = report
+            pub = body.get("pub")
+            if isinstance(pub, str) and pub:
+                learn = getattr(self.node, "learn_peer_public_key", None)
+                if callable(learn):
+                    learn(src, pub)
             self._publish_topology()
         elif kind == "restart":
             self._on_restart_order(src, str(body.get("id", "")))
@@ -280,16 +299,41 @@ class MeshDaemon:
         elif kind == "reset":
             self._on_reset_order(str(body.get("id", "")))
 
+    def _forget_unplugged(self, peers: list[str]) -> None:
+        """Drop a neighbour the moment our link to it is gone.
+
+        Its own last report, and every cached peer list that still names it,
+        would otherwise keep it drawn until ``_TOPO_EXPIRY_S``.
+        """
+        current = set(peers)
+        if self._linked is None:
+            self._linked = current
+            return
+        lost = self._linked - current
+        self._linked = current
+        if not lost:
+            return
+        with self._topo_lock:
+            for bd in lost:
+                self._topo.pop(bd, None)
+            for report in self._topo.values():
+                report["peers"] = [p for p in report["peers"] if p not in lost]
+
     def _topology_nodes(self) -> list[dict]:
         now = time.monotonic()
+        local = str(self.node.local_bd_addr or "").upper()
+        peers, relay = ([], False) if self._last_view is None else (
+            [p.upper() for p in self._last_view[0]], self._last_view[1])
+        try:
+            peers = [p.upper() for p in self.node.peers()]
+        except Exception:  # noqa: BLE001 — node still starting
+            pass
+        self._forget_unplugged(peers)
         with self._topo_lock:
             for bd in [bd for bd, r in self._topo.items() if now - r["seen"] > _TOPO_EXPIRY_S]:
                 del self._topo[bd]
             remote = {bd: dict(r) for bd, r in self._topo.items()}
 
-        local = str(self.node.local_bd_addr or "").upper()
-        peers, relay = ([], False) if self._last_view is None else (
-            [p.upper() for p in self._last_view[0]], self._last_view[1])
         nodes = []
         if local:
             kind, name = self._local_identity()
@@ -331,9 +375,13 @@ class MeshDaemon:
         if not peers:
             return
         kind, name = self._local_identity()
+        fields = {"peers": list(peers), "relay": relay, "name": name, "kind": kind}
+        getter = getattr(self.node, "local_public_key_hex", None)
+        pub = getter() if callable(getter) else ""
+        if pub:
+            fields["pub"] = pub
         try:
-            self.node.send(encode_control(
-                "topo", peers=list(peers), relay=relay, name=name, kind=kind))
+            self.node.send(encode_control("topo", **fields))
         except Exception:  # noqa: BLE001 — links dropping as we send
             return
         self._topo_sent_at = now
@@ -577,15 +625,22 @@ class MeshDaemon:
             if not text:
                 client.send({"ev": "ack", "id": req_id, "ok": False, "error": "empty"})
                 return
+            dest = str(frame.get("to") or "").strip().upper()
             try:
-                self.node.send(text)
+                if dest:
+                    epoch = int(self.node.current_epoch())
+                    self.node.send_private_at_epoch(text, dest, epoch)
+                else:
+                    self.node.send(text)
             except Exception as e:  # noqa: BLE001 — no peer yet is the common case
                 client.send({"ev": "ack", "id": req_id, "ok": False, "error": str(e)})
                 return
             client.send({"ev": "ack", "id": req_id, "ok": True, "error": ""})
             # Locally sent messages never come back through on_message, so echo
             # them here — that way every connected UI shows the same thread.
-            self._record_and_broadcast(self.node.local_bd_addr, text, mine=True)
+            self._record_and_broadcast(
+                self.node.local_bd_addr, text, mine=True, to=dest, private=bool(dest)
+            )
         elif cmd == "status":
             client.send(self._hello_frame())
         elif cmd == "restart_mesh":

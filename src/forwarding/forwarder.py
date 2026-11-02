@@ -559,15 +559,20 @@ class PacketForwarder:
         self.send_data(text, BROADCAST_BD_ADDR, private=False)
 
     def send_private_flood(self, text: str | bytes, dst_bd_addr: str, epoch: int) -> None:
-        """Flood a pairwise message encrypted at ``epoch``.
+        """Flood a 1-to-1 message addressed to ``dst_bd_addr``.
 
-        A revoked member never adopted the new group key, so this is how a
-        demo reset still reaches them: ``epoch`` is the one they are still on.
-        Relays forward on ``dst``; only that board can decrypt.
+        Prefer the pairwise key at ``epoch``. If that peer's Hello/ANNOUNCE has
+        not arrived yet (two screens that only meet through relays), fall back
+        to a dest-only group flood: other UIs still do not deliver it.
         """
-        packet = self.build_data_packet(
-            text, dst_bd_addr, private=True, pair_epoch=int(epoch)
-        )
+        try:
+            packet = self.build_data_packet(
+                text, dst_bd_addr, private=True, pair_epoch=int(epoch)
+            )
+        except RuntimeError as e:
+            if "pairwise key" not in str(e).lower():
+                raise
+            packet = self.build_data_packet(text, dst_bd_addr, private=False)
         peers = self._other_peers(exclude=None)
         if not peers:
             raise RuntimeError("no L2CAP peers connected")

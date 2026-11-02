@@ -502,6 +502,26 @@ class BBNode:
             return False
         return self._hello_mgr.key_store.get_pair_key(bd_addr.upper()) is not None
 
+    def local_public_key_hex(self) -> str:
+        if self._hello_mgr is None:
+            return ""
+        return self._hello_mgr.key_store.local_public_key.hex()
+
+    def learn_peer_public_key(self, bd_addr: str, pub_hex: str) -> None:
+        """Register a peer X25519 key learned out of band (topology gossip)."""
+        if self._hello_mgr is None or not pub_hex:
+            return
+        try:
+            pub = bytes.fromhex(pub_hex)
+        except ValueError:
+            return
+        if len(pub) != 32:
+            return
+        addr = bd_addr.strip().upper()
+        if addr == self.local_bd_addr.upper():
+            return
+        self._hello_mgr.key_store.register_peer(addr, pub)
+
     def route_l2cap_peer(self, dst_bd_addr: str) -> str:
         """Pick an L2CAP link to reach ``dst_bd_addr`` (direct neighbor or multihop relay)."""
         dst = dst_bd_addr.upper()
@@ -757,6 +777,9 @@ class BBNode:
             if not connectionless and local >= bd:
                 continue
             addr_type = self._peer_addr_types.get(bd)
+            scanner = self._le_scanner
+            if scanner is not None:
+                scanner.pause()
             try:
                 if self._cfg and self._cfg.transport_kind == "ble_l2cap":
                     # Connectionless mode already fixed the dial direction in the
@@ -770,6 +793,9 @@ class BBNode:
             except OSError as e:
                 self._backoff_after_connect_fail(bd, e)
                 self._log_connect_failure(bd, e)
+            finally:
+                if scanner is not None:
+                    scanner.resume()
             return
 
     def _backoff_after_connect_fail(self, bd: str, e: OSError) -> None:
@@ -845,6 +871,8 @@ class BBNode:
         scanner = self._presence_scanner
         if scanner is not None:
             scanner.defer_next_pass()
+        if self._hello_mgr is not None:
+            self._hello_mgr.emit_announce()
         if self.on_peer_connected:
             self.on_peer_connected(bd)
 

@@ -14,8 +14,12 @@
 \usepackage{array}
 \usepackage{url}
 \usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
 
-\hyphenation{Blue-tooth BUBBLE-BLUE L2CAP}
+\hyphenation{Blue-tooth BUBBLE-BLUE}
 
 \begin{document}
 
@@ -26,6 +30,10 @@ An Open Mesh with Private Groups}
 \IEEEauthorblockN{Paul-Maxence Baraton, Nadjib Achir, Philippe Jacquet}
 \IEEEauthorblockA{INRIA, France\\
 \{paul-maxence.baraton, nadjib.achir, philippe.jacquet\}@inria.fr}
+\and
+\IEEEauthorblockN{Wilfred Doré}
+\IEEEauthorblockA{Qualcomm, France\\
+wdore@qti.qualcomm.com}
 }
 
 \maketitle
@@ -38,14 +46,20 @@ Dominating Set (CDS) election in simulation. This paper reports the first
 implementation, on BLE L2CAP Connection-Oriented Channels, without
 Bluetooth pairing. We describe the on-wire format, the split between a
 topological plane and an application plane, and a repeatable evaluation on
-Qualcomm Linux boards (RUBIK Pi~3 and Arduino UNO~Q). A three-node mesh
+two Linux single-board computers built on Qualcomm SoCs: the Thundercomm
+RUBIK Pi~3 (QCS6490) and the Arduino UNO~Q (QRB2210). A three-node mesh
 completes in 7--14\,s, remains complete for 97--98\% of a steady run, and
-delivers 100\% of chat. Driving the shipped forwarder in simulation, the
-smallest TTL that reaches every node equals the source's hop eccentricity:
-the CDS adds no path stretch. The practical limit is therefore a hop budget
-(default TTL~10 spans about twenty nodes at mean degree 4--5). AES-256-GCM
-runs at $30\text{k}$--$173\text{k}$ packets/s, far above the BLE link; the
-Arduino host stack saturates near 10 messages/s. Revocation excludes the
+delivers every chat message in automated runs; a six-node manual soak
+delivered 427 of 429, losing only the first and the last. Spread through a building on battery, six boards
+formed a four-hop line of about 60\,m on their own; the far end received
+76 of 79 messages at a median delay of 162\,ms. Driving the shipped
+forwarder in simulation, the smallest TTL that reaches every node equals
+the source's hop eccentricity: the CDS adds no path stretch. The practical
+limit is therefore a hop budget: in simulation (unit-disk radio, nominal
+degree~6), the default TTL~10 spans about twenty nodes; this figure is
+not a hardware measurement. AES-256-GCM runs at
+$30\text{k}$--$173\text{k}$ packets/s, far above the BLE link; the BlueZ
+stack of the UNO~Q saturates near 10 messages/s. Revocation excludes the
 victim in every trial and strands legitimate members only inside the join
 window, before public keys have flooded.
 \end{abstract}
@@ -56,13 +70,16 @@ group communication.
 \end{IEEEkeywords}
 
 \section{Introduction}
+\label{sec:intro}
 
 Infrastructure-less local communication still collapses, in practice, onto
 a Wi-Fi access point or a smartphone OS that will not host a third-party
 mesh. Bluetooth is ubiquitous and needs no operator. The SIG Mesh
 profile~\cite{mesh-profile}, however, is a different stack, designed for
 managed flooding (lighting, sensors), not for a private group that forms
-between people who share a key and nothing else.
+between people who share a key and nothing else. The settings we have in
+mind are those where infrastructure is absent, saturated or distrusted: a
+crowd at an event, a site without coverage, an emergency response.
 
 BUBBLE-BLUE~\cite{achir2025bb} proposed the opposite split: an
 \emph{open topological mesh} that any BB node may join and relay, and
@@ -72,8 +89,10 @@ simulations. It does not give a BLE transport, a frame layout, a
 revocation protocol that reaches two-hop members, or measurements on
 hardware.
 
-This paper fills that gap. The implementation runs on two Qualcomm Linux
-boards over BLE L2CAP CoC~\cite{btcore}. Connections use
+This paper fills that gap. The implementation runs over BLE L2CAP
+CoC~\cite{btcore} on two single-board computers: the Thundercomm RUBIK
+Pi~3, built on the Qualcomm QCS6490, and the Arduino UNO~Q, which pairs a
+Qualcomm Dragonwing QRB2210 with an STM32U585 microcontroller. Connections use
 \texttt{BT\_SECURITY\_LOW}: there is no SMP pairing, no bond, and no
 address allow-list. Membership is the group key. A node that has never met
 another can still talk to it. A passive sniffer in range can read routing
@@ -88,14 +107,18 @@ Our contributions are:
   produces on two platforms (Section~\ref{sec:eval}).
 \item Characterised operating limits: hop-TTL, join-window revocation,
   and per-platform saturation---including two implementation defects the
-  limit studies exposed and that are now fixed
+  limit studies exposed (a shared anti-replay window and a split-brain
+  coordinator election) and that are now fixed
   (Section~\ref{sec:defects}).
 \end{enumerate}
 
 The rest of this paper is organised as follows.
 Section~\ref{sec:related} positions BB against CDS literature and existing
-BLE messengers. Section~\ref{sec:design} presents the design.
-Section~\ref{sec:eval} evaluates the implementation.
+BLE messengers. Section~\ref{sec:design} presents the design, its threat
+model, and the link discipline the platforms impose.
+Section~\ref{sec:stand} describes the six-board demonstration stand.
+Section~\ref{sec:eval} evaluates the implementation, in simulation, on
+the bench and on the stand.
 Section~\ref{sec:concl} concludes.
 
 \section{Related work}
@@ -128,10 +151,38 @@ scale; it floods over GATT and elects no backbone. Briar~\cite{briar} is
 delay-tolerant sync between \emph{pre-paired} contacts over Classic
 RFCOMM, Wi-Fi and Tor---a different problem. Reticulum~\cite{reticulum} is
 the closest Linux BLE stack; it is identity-routed, not CDS-routed.
-Bridgefy and BLEMeshChat likewise flood or store-and-forward without a
-CDS. None of these is a BB node. Netcore Causeway~\cite{causeway} shares
-high-level aims with different technology; we do not treat it as a
-baseline.
+Bridgefy~\cite{bridgefy,albrecht2021} and
+BLEMeshChat~\cite{blemeshchat} likewise flood or store-and-forward without
+a CDS; the analysis of Bridgefy in~\cite{albrecht2021} is also a reminder
+of what a BLE mesh used in a crowd must withstand. None of these is a BB
+node.
+
+\begin{table}[t]
+\centering
+\caption{What BB is not. ``Open relay'' means a node may forward a frame
+it cannot decrypt.}
+\label{tab:not}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+System & Data plane & Backbone & Open relay \\
+\midrule
+SIG Mesh~\cite{mesh-profile} & managed flood & provisioned & no \\
+BitChat~\cite{bitchat} & GATT & none & n/a \\
+Briar~\cite{briar} & RFCOMM, Wi-Fi, Tor & contacts & no \\
+Reticulum~\cite{reticulum} & multi-transport & identity & no \\
+BUBBLE-BLUE & LE CoC & dynamic CDS & yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:not} summarises the distinction. SIG Mesh is a product profile with its own provisioning.
+BitChat shows that a phone can chat over BLE alone, by flooding GATT
+writes. Briar synchronises mailboxes between people who have already
+paired. Reticulum routes to cryptographic identities across whatever
+link is up. BB is the remaining cell: a CDS elected on an open BLE mesh,
+with confidentiality only inside a group that shares a key. A node can
+sit in the CDS and relay for a bubble it does not belong to. None of the
+other four rows does that.
 
 \section{Design}
 \label{sec:design}
@@ -160,8 +211,12 @@ forwarding of group data by nodes that may not belong to the bubble.
 \subsection{Presence and sparse links}
 
 A node advertises a compact presence record in a connectable legacy
-advertisement (manufacturer data, magic \texttt{BB}): anonymous
-identifier, CDS flag, and the BD\_ADDR at which it accepts CoC. Scanners
+advertisement (manufacturer-specific data under company identifier
+\texttt{0xFFFF}, followed by the magic \texttt{BB}). \texttt{0xFFFF} is
+the value the Bluetooth SIG reserves for internal and interoperability
+testing; its use here marks the prototype as experimental, and a
+deployed product would need an assigned identifier. The record carries an
+anonymous identifier, CDS flag, and the BD\_ADDR at which it accepts CoC. Scanners
 accumulate a \emph{presence catalog} indexed by anon\_id. The catalog
 survives a dropped socket and is how a neighbour is redialled without
 pairing.
@@ -173,10 +228,96 @@ whenever legacy advertisements cannot carry neighbour lists under a
 $\sim$27-byte budget---a node dials from the catalog rather than waiting
 for an air-only election that cannot see two-hop topology.
 
-The implementation runs on RUBIK Pi~3 (Ubuntu, Bluetooth~5.0) and Arduino
-UNO~Q (Debian plus an STM32, Bluetooth~5.1). CPython~3.14 is required for
-LE 4-tuple sockets. A privileged daemon owns the adapter; the UI is an
-unprivileged client, so restarting a display does not drop links.
+Table~\ref{tab:platforms} lists the two software stacks under test. Every
+platform limit reported below is a property of that stack (kernel,
+driver, BlueZ release, OS image) as we ran it, not of the silicon alone.
+The daemon requires CPython~3.14 (3.12 and 3.13 ship on the images):
+3.14 is the first release whose \texttt{socket} module exposes the LE
+address types (\texttt{BDADDR\_LE\_PUBLIC}, \texttt{BDADDR\_LE\_RANDOM})
+and accepts the four-field L2CAP address
+$(\mathit{bdaddr},\mathit{psm},\mathit{cid},\mathit{bdaddr\_type})$.
+Earlier releases can only bind or connect BR/EDR L2CAP, so an LE CoC
+cannot be opened from the standard library.
+
+\begin{table}[t]
+\centering
+\caption{Platforms and software stacks under test.}
+\label{tab:platforms}
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & RUBIK Pi~3 (Thundercomm) & Arduino UNO~Q \\
+\midrule
+SoC & Qualcomm QCS6490 & Qualcomm QRB2210 \\
+ & & + STM32U585 MCU \\
+BT controller & Broadcom BCM4345C5 & Qualcomm WCN399x \\
+HCI version$^{*}$ & 9 (Core 5.0) & 10 (Core 5.1) \\
+HCI driver & \texttt{hci\_uart\_bcm} & \texttt{hci\_uart\_qca} \\
+OS image & Ubuntu 24.04.3 & Debian 13 \\
+Kernel & 6.8.0-1055-qcom & 7.0.0 (vendor) \\
+BlueZ & 5.72 & 5.82 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^{*}$As reported by the controller (\texttt{btmgmt info}) on
+the boards used for every run in this paper.\par}
+\end{table} A privileged daemon owns the adapter; the UI is an
+unprivileged client on an \texttt{AF\_UNIX} socket, so restarting a
+display does not drop links. The same split is what lets a panel be a
+spectator: it draws peers, hops and revocation state, and it never holds
+a CoC. Figure~\ref{fig:arch} shows the layers of one node.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\footnotesize,
+  lay/.style={draw, rounded corners=2pt, minimum width=7.4cm, minimum height=0.62cm,
+              align=center, inner sep=2pt},
+  sub/.style={draw, rounded corners=2pt, text width=2.15cm, minimum height=0.62cm,
+              align=center, inner sep=2pt, fill=blue!8, font=\scriptsize},
+  node distance=0.18cm
+]
+  \node[lay, fill=gray!10] (ui) {Touch UI / CLI client (unprivileged)};
+  \node[lay, below=of ui, draw=none, minimum height=0.35cm] (sock)
+    {\texttt{AF\_UNIX} socket: send, peers, topology, events};
+  \node[sub, below=0.18cm of sock.south west, anchor=north west] (ctl)
+    {Control\\HELLO, CDS election};
+  \node[sub, right=0.25cm of ctl] (fwd) {Forwarding\\TTL, dedup, relay};
+  \node[sub, right=0.25cm of fwd] (sec) {Security\\AES-GCM, epochs};
+  \node[draw, dashed, rounded corners=3pt, fit=(ctl)(fwd)(sec), inner sep=3pt,
+        label={[anchor=north east, font=\scriptsize, inner sep=1pt]south east:\texttt{meshd} (root)}] (daemon) {};
+  \node[lay, below=0.5cm of daemon, fill=green!10] (bz)
+    {BlueZ: LE CoC (PSM \texttt{0x0081}), MGMT scan and adverts};
+  \node[lay, below=of bz, fill=orange!12] (hci) {Kernel HCI driver and controller};
+  \draw[<->] (ui) -- (sock);
+  \draw[<->] (sock.south) -- (daemon.north);
+  \draw[<->] (daemon) -- (bz);
+  \draw[<->] (bz) -- (hci);
+\end{tikzpicture}
+\caption{One BB node. The daemon owns the adapter; displays are clients
+and never hold a link.}
+\label{fig:arch}
+\end{figure}
+
+The compact advertisement is 23 bytes of manufacturer value before any
+neighbour list: magic and version (4), anonymous identifier (8),
+sequence (4), flags (1), reachable BD\_ADDR (6). Legacy advertising
+accepts about 27 bytes of manufacturer data in total, so the neighbour
+and MPR lists that the original note puts on the air do not fit. They
+are carried later, in HELLO, once a CoC exists. A scanner that sees only
+the advertisement can already dial: the BD\_ADDR in the value is the
+address that accepts PSM \texttt{0x0081}. It cannot be taken from the
+advertising address itself, because a non-connectable advert may rotate
+that address.
+
+Joining is then four steps, and they are not the same timeout. Presence
+is one advertising interval. The CoC dial is one L2CAP handshake. HELLO
+fills the neighbour table and starts the miss timer. ANNOUNCE, on a
+30\,s period, is the step that delivers public keys beyond one hop and
+thereby closes the revocation window of Section~\ref{sec:security}. A
+spectator who taps ``send'' during the first of these steps is early;
+the mesh is up, the bubble is not yet able to exclude anyone safely.
+The panels therefore show link state separately from group epoch.
 
 \subsection{Routing header and packet types}
 
@@ -186,12 +327,24 @@ Every frame begins with a 26-byte cleartext header:
 \end{center}
 Relays decrement TTL on the wire, so TTL is \emph{not} in the AES-GCM
 additional authenticated data; the rest of the header is. A relay without
-the group key can still forward, and cannot forge an AAD-covered field.
+the group key can still forward, and cannot forge an AAD-covered field; it
+can rewrite TTL (Section~\ref{sec:threat}).
 Broadcast destination is \texttt{FF:FF:FF:FF:FF:FF}.
 
 The ciphertext is AES-256-GCM~\cite{nist-gcm,rijndael} with a 16-byte
-tag. There is no nonce on the wire: the per-packet key is derived from
-the group or pairwise secret, source, sequence and timestamp. Overhead is
+tag. There is no nonce on the wire. Each packet is sealed under its own
+key,
+\[
+k_{\mathrm{pkt}} = \mathrm{HKDF}_{\mathrm{SHA256}}\bigl(K;\;
+\mathit{src}\,\|\,\mathit{seq}\,\|\,\mathit{ts\_ms}\bigr),
+\]
+32 bytes, with $K$ as input key material, the three fields as
+\emph{info}, and no salt. Here $K$ is the group key (or a pairwise key) and the three
+fields are the header's 6-byte source, 4-byte sequence and 8-byte
+timestamp. The GCM nonce is then fixed at zero; uniqueness rests on the
+key, which changes whenever $(\mathit{src},\mathit{seq},\mathit{ts\_ms})$
+does. Pairwise keys are HKDF-SHA256 over an X25519 shared secret, with the
+epoch in \emph{info}. Overhead is
 42 bytes. Against a conservative 512-byte MTU that leaves 470 bytes of
 plaintext. Both boards negotiate L2CAP MTU 672, so a maximum-size
 message is still one frame; 512 is policy. A 471-byte payload is refused,
@@ -242,6 +395,21 @@ pairwise keys are X25519~\cite{rfc7748} after ANNOUNCE; rekeys are
 attested with Ed25519~\cite{rfc8032}. The routing header is visible to a
 sniffer; payloads are not.
 
+A passive sniffer in range therefore learns who transmitted, toward
+which broadcast or unicast address, and how far the frame may still
+travel. It does not learn the text, the group key, or the pairwise
+secrets. Every header field except TTL is covered by the additional
+authenticated data, so changing source, destination, sequence or
+timestamp makes the tag fail at a member. An active attacker who injects
+a new frame has to produce a valid tag under a key they do not hold. TTL
+is excluded on purpose, so that relays can decrement it, and an attacker
+\emph{can} therefore rewrite it; that limit is part of the threat model
+below. What this does
+\emph{not} give is anonymity of the radio address: BD\_ADDR is in the
+header and on the advertisement, on purpose, because that is how a
+neighbour is dialled without a bond. Anonymous identifiers hide the
+group membership of a presence record; they do not hide the controller.
+
 The coordinator is the member with the smallest anon\_id among
 \emph{all known members} (Hello-resolved \emph{and} ANNOUNCE-learned).
 Election and validation of a rekey must use that same set
@@ -253,11 +421,181 @@ pairwise keys, excluding the victim. Late members catch up on the next
 stale Hello. The coordinator cannot wrap a key it does not hold: Hello
 supplies direct neighbours only; everyone else arrives in ANNOUNCE
 (30\,s). Revoking inside that \emph{join window} is refused or strands
-legitimate members---an operating limit, not a demonstration surprise.
+legitimate members. This is an operating limit of the protocol.
 
-Both SoCs use ARMv8 Cryptography Extensions (\texttt{gcm-aes-ce} via
-OpenSSL). Qualcomm QCE is present but does not register GCM; it is not on
-the path.
+On both boards AES-GCM runs on the ARMv8 Cryptography Extensions
+(\texttt{gcm-aes-ce} via OpenSSL). On the two kernels of
+Table~\ref{tab:platforms}, the Qualcomm crypto engine driver (QCE) does
+not register a GCM implementation, so it is not on the path.
+
+\subsection{Threat model and accepted limits}
+\label{sec:threat}
+
+The adversary is any radio in range, member or not. Confidentiality and
+integrity of payloads against non-members are the goals above.
+Availability and fairness among members are not guaranteed, and the
+current implementation accepts the following.
+
+\paragraph{Flooding by a non-member.} The topological plane is open by
+design: a relay forwards frames it cannot authenticate. A non-member can
+therefore inject well-formed frames with invalid tags and have the CDS
+carry them. Because TTL is outside the AAD, it can also reset TTL on a
+frame in transit and extend its reach to the configured maximum.
+Duplicate suppression bounds each $(\mathit{src},\mathit{seq})$ to one
+forward per relay, so neither attack loops, but both cost airtime. Relays
+do not rate-limit by source today.
+
+\paragraph{Poisoning the duplicate cache.} $(\mathit{src},\mathit{seq})$
+is in clear and relays cannot check the tag. An attacker who emits a
+forged frame carrying a member's $(\mathit{src},\mathit{seq})$ before the
+genuine one reaches a relay makes that relay drop the genuine frame. The
+effect is selective loss, not disclosure; members still reject the forged
+copy. Keying relay suppression on a tag prefix, or letting members that
+hold the key re-forward on a miss, are the obvious counter-measures.
+
+\paragraph{Choosing the coordinator.} A member's anon\_id is
+$\mathrm{HMAC\text{-}SHA256}(K_{\mathrm{boot}},\mathit{BD\_ADDR})$
+truncated to 64 bits. A non-member cannot compute it. A member that
+controls its own BD\_ADDR (a random static address) can, however, try
+addresses until its anon\_id is the smallest and so become coordinator,
+the only node allowed to revoke. BB trusts members not to do this; a
+verifiable election is future work.
+
+\paragraph{Traceability.} As stated above, BD\_ADDR is stable and in
+clear. A passive observer can follow a board and learn who transmits
+toward whom. Payload privacy does not imply location privacy.
+
+\subsection{One group message, hop by hop}
+\label{sec:walk}
+
+Consider a chat line sent by screen $A$ toward screen $B$, with a UNO~Q
+relay $R$ between them and no direct $A$--$B$ link. $A$ builds a
+\texttt{DATA} frame: broadcast destination, TTL set to the configured
+maximum, sequence taken from the data counter, timestamp in milliseconds.
+The payload is the UTF-8 text. The per-packet key is derived from the
+current group key, $A$'s address, the sequence and the timestamp; AES-GCM
+seals it. The 26-byte header stays clear.
+
+$A$ writes that frame on every CoC it holds. $R$ accepts it, checks the
+relay anti-replay window for $(A,\mathit{seq})$ in the data counter's
+space, decrements TTL, and writes the same ciphertext to its other peers.
+$R$ does not need the group key to do this. It then tries local delivery:
+GCM fails if $R$ is not a member, and the frame is still forwarded.
+$B$ decrypts, checks its own delivery window, and hands the text to the
+local UI. A copy that returns to $A$ is dropped because the source is
+local. A second copy that arrives at $B$ through another relay hits the
+same $(\mathit{src},\mathit{seq})$ window and is dropped.
+
+Two consequences follow. First, adding a relay does not require that
+relay to hold the group key: the open mesh and the private bubble are
+separated on the wire, not only in the specification. Second, the UI can
+show the ingress neighbour and a hop count ($\mathit{ttl}_{\max} -
+\mathit{ttl} + 1$) without reading any node beyond its own daemon. That
+is what a spectator sees move on the screen.
+
+\subsection{Platform-specific link discipline}
+\label{sec:controller}
+
+The two software stacks of Table~\ref{tab:platforms} do not present the
+same HCI behaviour, and the mesh only stays up if the implementation
+respects both. The three behaviours below were observed with those exact
+images---on the UNO~Q, Debian~13, kernel 7.0.0-g122c2c22d838, BlueZ~5.82;
+on the RUBIK Pi~3, Ubuntu 24.04.3, kernel 6.8.0-1055-qcom,
+BlueZ~5.72---and newer kernels or firmware may remove them.
+
+\paragraph{Central-only links.}
+On the UNO~Q image, the WCN399x controller is driven by
+\texttt{hci\_uart\_qca}. That driver does not report valid LE states, so
+the kernel sets \texttt{HCI\_QUIRK\_BROKEN\_LE\_STATES}. While the adapter
+is peripheral on any link, \texttt{check\_pending\_le\_conn()} never sends
+an LE Create Connection. A dial then times out with no connection attempt
+on the air. The RUBIK Pi~3 image drives its Broadcom controller through
+\texttt{hci\_uart\_bcm} and does not set this quirk. Each UNO~Q is
+therefore the central of every link it holds: it advertises
+non-connectable and dials, and each RUBIK advertises connectable and
+never dials. Two screens never link to each other, nor do two relays, so
+every path alternates screen and relay. With three screens and three
+relays the steady graph is the complete bipartite graph $K_{3,3}$.
+
+\paragraph{Signalling-identifier leak.}
+Linux kernels that carry commit \texttt{6c3ea155e5ee} (``L2CAP: Fix not
+tracking outstanding TX ident'') but not its follow-up
+\texttt{6e1930ece855} never release the signalling identifier of an LE
+Flow Control Credit, which is sent for every received PDU. The UNO~Q
+kernel (7.0.0) is in that range; the RUBIK kernel (6.8) predates it and
+is unaffected. The pool is 254 identifiers per ACL. Under a quiet chat
+this is invisible; under the topology traffic of a five-node mesh a link
+exhausts the pool in minutes and the kernel logs \texttt{Unable to
+allocate ident}. On affected kernels the daemon recycles a link after 200
+received credits: it drops the CoC and disconnects at the MGMT layer,
+then dials again. Neighbours treat this as an ordinary flap. The
+alternative, restarting BlueZ or the board, is what a day-long
+demonstration cannot afford.
+
+\paragraph{Controller UART stall.}
+On the UNO~Q image, the HCI UART to the WCN399x has stopped answering
+commands, with transmit timeouts and a firmware version read of $-110$.
+We saw it once on an idle bench after about six weeks of uptime, before
+any recovery existed, and a reboot cleared it. Under five-node mesh
+traffic it has recurred after a few hours. We have not established that
+the two occurrences share a cause. Rebinding the HCI UART driver reloads
+the firmware and restores a powered adapter in tens of seconds, without
+rebooting the board. Each daemon watches its own controller and does
+this locally: a restart order flooded on the mesh cannot reach a radio
+that is already dead.
+
+\section{The demonstration stand}
+\label{sec:stand}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\footnotesize,
+  screen/.style={draw, rounded corners=2pt, fill=blue!12, minimum width=1.7cm,
+                 minimum height=0.7cm, align=center},
+  relay/.style={draw, circle, fill=green!14, minimum size=0.85cm, inner sep=0pt},
+  every edge/.style={draw=black!60}
+]
+  \node[screen] (a) {RUBIK $Q$};
+  \node[screen, right=0.45cm of a] (b) {RUBIK $3$};
+  \node[screen, right=0.45cm of b] (c) {RUBIK Inria};
+  \node[relay, below=1.1cm of a] (r1) {$R_1$};
+  \node[relay, below=1.1cm of b] (r2) {$R_2$};
+  \node[relay, below=1.1cm of c] (r3) {$R_3$};
+  \foreach \s in {a,b,c} \foreach \r in {r1,r2,r3} \draw (\s) -- (\r);
+  \node[font=\scriptsize, left=0.1cm of a] {peripheral};
+  \node[font=\scriptsize, left=0.1cm of r1] {central};
+\end{tikzpicture}
+\caption{Demonstration topology, $K_{3,3}$. Each UNO~Q relay is central
+toward all three screens. A message between two screens crosses one of
+three two-hop paths; the receiving screen draws that path as the text
+arrives.}
+\label{fig:stand}
+\end{figure}
+
+Figure~\ref{fig:stand} is the configuration used for demonstrations.
+Three RUBIK Pi~3 boards carry touch panels; we call them RUBIK~$Q$ (the
+operator screen), RUBIK~3 and RUBIK~Inria. Three Arduino UNO~Q boards,
+$R_1$ to $R_3$, are relays and have no display. The panels show preset
+sentences rather than a keyboard, the live topology beside the
+transcript, and, on RUBIK~$Q$ only, an operator action that revokes a
+chosen member.
+
+Revocation on that stand is the protocol of Section~\ref{sec:security},
+not a second mechanism. The operator names a board; the coordinator
+omits that board from \texttt{REKEY\_FLOOD}; the next preset sentence is
+readable on every remaining member and not on the victim. The victim's
+panel says it has been excluded, which is the point of the demonstration:
+the mesh is still there, the bubble is not. An explicit operator reset
+returns every board, including the victim, to the bootstrap epoch-0 key
+so the same table can be shown again. That reset is a demonstration
+control. It is not part of the group protocol, and a revoked member
+cannot invoke it.
+
+Sections~\ref{sec:conv} to~\ref{sec:defects} report controlled runs on
+two to six boards and in simulation, collected before this arrangement.
+Section~\ref{sec:plan} reports measurements on the stand itself and on
+the same six boards spread through a building.
 
 \section{Evaluation}
 \label{sec:eval}
@@ -273,6 +611,7 @@ on a unit-disk radio and drains floods breadth-first (call-stack,
 depth-first delivery is not a radio).
 
 \subsection{Convergence, stability, and departure}
+\label{sec:conv}
 
 \begin{table}[t]
 \centering
@@ -290,7 +629,8 @@ Manual soak & 6 & $\sim$40\,s & stable after 60\,s & 427/429 \\
 \end{table}
 
 The two losses in 429 were the first message (before convergence) and the
-last (during shutdown). Applications should display mesh state rather
+last (during shutdown); the delivery column of Table~\ref{tab:conv} and
+the abstract refer to these runs. Applications should display mesh state rather
 than assume delivery in the first tens of seconds. Relay role flips in
 the automated runs: 0. Steady-state L2CAP flaps: a few per run, all
 recovered.
@@ -334,18 +674,23 @@ the crypto path is not measured.
 
 \subsection{Topological and revocation limits}
 
-At mean degree $\sim$4--5, the minimum TTL that delivers to every node
-equals the source eccentricity on every draw (chains and random geometric
-graphs):
+Random geometric graphs are drawn in a square whose area gives a
+\emph{nominal} mean degree of~6, ignoring borders; nodes near a border
+have fewer neighbours, so the measured mean degree is lower (3.3--5.2 in
+Table~\ref{tab:ttl}). Draws are kept only if connected. Each draw is
+probed from three sources spread through the node set. On every draw, and
+on chains, the minimum TTL that delivers to every node equals the largest
+hop eccentricity among those sources:
 
 \begin{table}[t]
 \centering
-\caption{Minimum TTL for full delivery equals hop diameter
-  (Wu--Li, shipped forwarder, geometric radio).}
+\caption{Minimum TTL for full delivery equals the worst source's hop
+  eccentricity (Wu--Li, shipped forwarder, geometric radio, nominal
+  degree 6, measured degree shown).}
 \label{tab:ttl}
 \begin{tabular}{@{}rrrrr@{}}
 \toprule
-$n$ & Degree & Diam.\ (hops) & Min TTL & Deliv.\ @ TTL 10 \\
+$n$ & Degree & Ecc.\ (hops) & Min TTL & Deliv.\ @ TTL 10 \\
 \midrule
 10 & 3.9 & 4 & 4 & 100\% \\
 20 & 4.3 & 8 & 8 & 100\% \\
@@ -356,48 +701,163 @@ $n$ & Degree & Diam.\ (hops) & Min TTL & Deliv.\ @ TTL 10 \\
 \end{tabular}
 \end{table}
 
-There is no ``it breaks at $N$ nodes''. Past a 10-hop diameter, default
-TTL~10 no longer spans the network---about twenty nodes at this density.
-At six nodes the default is ample. Below mean degree $\sim$5, no connected
-geometric draw in 100 trials (percolation). Denser graphs elect fewer
-relays (52\%$\to$38\%) and cost more per flood.
+There is no single node count at which the mesh breaks. Once the
+eccentricity exceeds 10 hops, default TTL~10 no longer spans the
+network---about twenty nodes at this density. At six nodes the default is
+ample. Density has its own floor: at $n=50$, no placement out of 100 was
+connected at a nominal degree of 3 or 4, while nominal degree 5 gave
+connected draws with a measured mean degree of 4.6 (percolation). Denser
+graphs elect fewer relays (52\%$\to$38\%) and cost more per flood.
 
 After ANNOUNCE has run, revocation at $n=6$--$30$: 0 stranded members, 0
-leaks to the victim. Cost grows from 12 to 83 emissions per node
-(roughly quadratic). Before ANNOUNCE, revocation is often refused.
-Rule: wait one ANNOUNCE period after a join.
+leaks to the victim. Cost grows from 12 to 83 emissions per node, that is
+roughly linearly in $n$ per node (about $2n$ to $3n$), so the total cost
+of one revocation grows roughly quadratically. Before ANNOUNCE,
+revocation is often refused. Operating rule: wait one ANNOUNCE period
+after a join before revoking.
 
-\subsection{Load and two defects the study caught}
+\subsection{Load, and the two implementation defects}
 \label{sec:defects}
 
-A single sender, 64--470 byte payloads. The RUBIK listener received
+This load study ran on the images of Table~\ref{tab:platforms}. A single
+sender, 64--470 byte payloads. The RUBIK listener received
 100\% through 30\,msg/s. The UNO~Q tracked to 10\,msg/s, lost at 15, then
 delivered 0---including a 1\,msg/s recovery step after 25\,s idle---while
 its links stayed nominally up. The kernel logged
 \texttt{Unable to allocate ident: -28} (\texttt{ENOSPC} on BlueZ L2CAP
 \emph{signalling} identifiers); controller error counters stayed 0.
 Data-plane saturation delays Hellos, neighbours expire, auto-dial
-bursts, the ident pool empties. Restarting the Bluetooth service recovers
-the board. A separate QCA firmware stall after $\sim$6 weeks of uptime
-requires a reboot; it is not this failure.
+bursts, the ident pool empties. This is the kernel leak of
+Section~\ref{sec:controller}; the run predates link recycling. Restarting
+the Bluetooth service recovers the board. The controller UART stall of
+the same section is a different failure: the controller stops answering,
+and a service restart does not help.
 
-Limit studies also found two protocol bugs, both now fixed.
+The limit studies also exposed the two implementation defects announced
+in Section~\ref{sec:intro}. Both are fixed in the code evaluated here, and each fix
+carries a regression test.
 
-\paragraph{Shared anti-replay window.}
+\paragraph{Defect 1: shared anti-replay window.}
 Hello/ANNOUNCE and DATA were numbered from independent counters but
 checked against one window. A DATA frame whose sequence equalled an
 earlier ANNOUNCE from the same node was dropped by every receiver and
 every relay. Reproduction: sequence 4 delivered 5/5, sequence 5 (the
-ANNOUNCE) 0/5, sequence 6 delivered 5/5. Likely cause of the 2/429 soak
-losses. Fix: one window per counter.
+ANNOUNCE) 0/5, sequence 6 delivered 5/5. Fix: each counter has its own
+window; the test checks that an ANNOUNCE no
+longer masks a DATA frame with the same sequence.
 
-\paragraph{Split-brain coordinator.}
+\paragraph{Defect 2: split-brain coordinator.}
 Election used Hello-resolved neighbours only; validation of a rekey also
 counted ANNOUNCE-learned peers. On a stringy 30-node graph (mean
 degree~3.3) four nodes declared themselves coordinator; revocation was
 refused mesh-wide while the initiator's epoch advanced; 28 of 29
-legitimate members stayed on the old key. Fix: one membership view for
-both.
+legitimate members stayed on the old key. Fix: election and validation
+now use one membership view (Hello-resolved and ANNOUNCE-learned
+members, Section~\ref{sec:security}); the test checks that a sparse mesh
+elects exactly one coordinator.
+
+\subsection{What the six-node stand measured}
+\label{sec:plan}
+
+The following runs were collected on the stand of
+Figure~\ref{fig:stand}. Each of the three screens held three links and
+each of the three relays held three: the nine edges of $K_{3,3}$.
+
+Fifteen group messages, sent from one screen a few seconds apart, were
+received by all five other boards: 75 receptions out of 75. Round to
+round, the arrival time on a given board moved by less than a tenth of a
+second. Timed over SSH, that run cannot resolve a one-way delay in
+milliseconds; the four-hop run below, logged on the boards themselves,
+does.
+
+Revocation matches Section~\ref{sec:security} on this hardware. After one
+screen was excluded it did not display the next message; the other four
+boards did. Resetting the demonstration put all five back on the
+bootstrap key, and the next message reached all five. Excluding one
+relay left both screens able to read the message. The excluded relay did
+not.
+
+Adding a node is dominated by the boot, not by the mesh. Rebooting the
+third screen, the first group message it could decrypt arrived 142\,s
+after the reboot command and 4.4\,s after its mesh daemon was running.
+Cutting a UNO~Q controller loose on purpose, that relay received a group
+message again 130\,s later, without a reboot of the board.
+
+\paragraph{A four-hop line.}
+Every board so far sat in one room, so a two-hop path was a choice of
+role, not evidence of range. We then ran the boards on battery, spread
+them through the building with one UNO~Q switched off, and let the mesh
+form on its own. It settled into a single line,
+RUBIK~$Q \to R_3 \to$ RUBIK~$3 \to R_1 \to$ RUBIK~Inria, in which each
+board held links only to its neighbours. Screens and relays alternate
+because two screens never dial each other and two UNO~Qs cannot
+(Section~\ref{sec:controller}). Boards were about 15\,m apart, so the
+line spanned about 60\,m indoors.
+
+Without Wi-Fi at the far positions, each board logged every received
+message and every link change to local storage, and RUBIK~$Q$ sent a
+numbered group message every 5\,s. Board clocks agreed within 50\,ms
+before and after the run and drifted by under 10\,ms, so one-way delay
+is resolved to a few tens of milliseconds (Table~\ref{tab:line}).
+
+\begin{table}[t]
+\centering
+\caption{Four-hop line, 8\,min 45\,s, 79 group messages accepted by the
+sender. Delay is send-to-display, clock-corrected.}
+\label{tab:line}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Board & Hops & Received & Median & 90th pct. \\
+\midrule
+$R_3$ & 1 & --- & 85\,ms & 103\,ms \\
+RUBIK 3 & 2 & 79/79 & 101\,ms & 176\,ms \\
+$R_1$ & 3 & 79/79 & 143\,ms & 213\,ms \\
+RUBIK Inria & 4 & 76/79 & 162\,ms & 242\,ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The three messages RUBIK~Inria missed were the first three, sent while
+the line was still forming. $R_3$'s own log was cut short (below), so its
+row gives delay only; the two boards behind it received every message,
+which bounds its losses at zero for that window. Each hop beyond the
+first adds a few tens of milliseconds (Figure~\ref{fig:hops}).
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.95\columnwidth, height=4.2cm,
+  xlabel={Hops from the sender}, ylabel={Delay (ms)},
+  xmin=0.6, xmax=4.4, ymin=0, ymax=260,
+  xtick={1,2,3,4}, ytick={0,50,100,150,200,250},
+  grid=major, grid style={gray!25},
+  legend pos=south east, legend style={font=\footnotesize, draw=none, fill=white},
+  tick label style={font=\footnotesize}, label style={font=\footnotesize},
+]
+\addplot[thick, mark=*, blue!70!black] coordinates {(1,85) (2,101) (3,143) (4,162)};
+\addlegendentry{median}
+\addplot[thick, dashed, mark=square*, orange!80!black] coordinates {(1,103) (2,176) (3,213) (4,242)};
+\addlegendentry{90th percentile}
+\end{axis}
+\end{tikzpicture}
+\caption{Send-to-display delay against hop count on the four-hop line
+(Table~\ref{tab:line}).}
+\label{fig:hops}
+\end{figure}
+
+Three events happened during the run. A mesh restart ordered from
+RUBIK~$Q$ had four-hop delivery back about 50\,s later. $R_3$, the
+sender's only neighbour, lost power with no shutdown in its journal; the
+whole line was dark for about 95\,s, until it had rebooted and redialled.
+A single relay is a single point of failure, which is why the stand
+normally runs three. Finally, RUBIK~Inria was carried away from $R_1$. Its
+link held to about 30\,m and then dropped. When the board was brought
+back, the link returned within seconds of it coming into range, and
+delivery resumed at four hops.
+
+What remains open is a day of unattended delivery, and the maximum
+spacing of each hop: only the last one was pushed until it broke.
 
 \section{Conclusion}
 \label{sec:concl}
@@ -407,20 +867,35 @@ On the boards we have, the mesh converges in seconds, the CDS does not
 stretch paths, and the default TTL is a hop budget rather than a magic
 node count. Revocation works once keys have been announced and fails in
 a documented window if they have not. Cryptography is not the throughput
-limit; the Arduino host stack is.
+limit; the BlueZ stack of the UNO~Q, on the kernel we tested, is. Keeping
+that stack up for a day further requires the link discipline of
+Section~\ref{sec:controller}: the UNO~Q must be central, its CoCs must be
+recycled before the signalling-identifier pool runs out, and a dead
+controller must be recovered by the board that holds it.
 
-Physical range, indoor multi-hop lines, and walking partition/merge still
-require the pending displays (an operator must read peer count without
-SSH). Those experiments are specified; they are not in this paper.
-Energy of AES-GCM versus the radio, a six-node repeat of
-Section~\ref{sec:eval}, and an Android CoC port are future work.
+Section~\ref{sec:plan} is the first timed pass on the six-board stand of
+Section~\ref{sec:stand}: delivery, revocation, boot-to-group,
+recovery from a dead controller, and a four-hop line of about 60\,m
+through the building at 162\,ms median delay, whose last link held to
+about 30\,m. A full day of delivery, and the breaking distance of every
+hop, remain open. Energy of AES-GCM versus the radio,
+and an Android CoC port, are future work.
+
+The link-change logs every board already keeps form a timestamped
+contact graph. The unit-disk simulations of Section~\ref{sec:eval} could
+be replayed on real mobility traces instead of static placements, which
+would tell how CDS election and revocation behave when people, not
+boards, move.
 
 \section*{Acknowledgment}
 
-The authors thank Wilfred (Qualcomm) for platform guidance and for the
-questions that produced the accelerator and host-stack measurements. The
-protocol note~\cite{achir2025bb} acknowledges Matthieu Finiasz (OLVID)
-and Thomas Jaussouin and Olivier Berni (Lunabee); that debt carries over.
+The RUBIK Pi~3 and Arduino UNO~Q boards were provided through the
+Qualcomm University Platforms program. The protocol
+note~\cite{achir2025bb} acknowledges Matthieu Finiasz (OLVID) and Thomas
+Jaussouin and Olivier Berni (Lunabee); that debt carries over.
+AI-assisted tools were used for software development, data analysis
+and editing of this manuscript; the authors checked all results and are
+responsible for the content.
 
 \bibliographystyle{IEEEtran}
 \bibliography{refs}

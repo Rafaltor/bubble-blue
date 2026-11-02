@@ -32,6 +32,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from apps.mesh_control import decode_control  # noqa: E402
 from apps.protocol import encode, read_frames, socket_path  # noqa: E402
 
 # Where scripts/install_unoq_bridge.sh drops the Router Bridge client. It is not
@@ -137,10 +138,13 @@ class PanelBridge:
                 self.relay = bool(frame.get("relay"))
                 self.epoch = int(frame.get("epoch") or 0)
                 history = frame.get("history") or []
-                if history:
-                    last = history[-1]
+                for last in reversed(history):
+                    text = str(last.get("text", ""))
+                    if decode_control(text) is not None or last.get("private"):
+                        continue
                     self.msg_from = str(last.get("from", ""))
-                    self.msg_text = str(last.get("text", ""))
+                    self.msg_text = text
+                    break
             elif ev == "peers":
                 self.peers = len(frame.get("peers") or [])
                 self.relay = bool(frame.get("relay"))
@@ -154,8 +158,11 @@ class PanelBridge:
                           file=sys.stderr, flush=True)
                 return
             elif ev == "message":
+                text = str(frame.get("text", ""))
+                if decode_control(text) is not None or frame.get("private"):
+                    return
                 self.msg_from = str(frame.get("from", ""))
-                self.msg_text = str(frame.get("text", ""))
+                self.msg_text = text
             else:
                 return
         self._dirty.set()

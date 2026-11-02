@@ -9,6 +9,10 @@ unprivileged user — all Bluetooth work happens in the daemon behind the socket
     cage -- python3 apps/screen_ui.py --kiosk         # fullscreen on the board
     cage -- python3 apps/screen_ui.py --kiosk --admin # + the mesh restart button
 
+The kiosk has a Desktop button (two taps). It stops this service and starts
+GDM, so the board's Ubuntu session is reachable for Wi-Fi and the rest.
+The next boot takes the panel back.
+
 Sized for the 1024x600 capacitive panel and for a demo stand: the chat sits
 next to a live map of the mesh, where every message is drawn hopping from
 board to board before it lands, and sending is a tap on a preset message —
@@ -21,6 +25,7 @@ import argparse
 import math
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -46,12 +51,21 @@ RECONNECT_DELAY_S = 2.0
 # kernel L2CAP ident: a crowd hammering the buttons must not become the load.
 SEND_COOLDOWN_S = 1.5
 RESTART_CONFIRM_S = 4.0
+DESKTOP_CONFIRM_S = 4.0
 # How long one hop takes on the map. Slower than the radio on purpose: the
 # point is that people can follow it.
 HOP_S = 0.6
 
 _PRESETS_FILE = os.path.join(os.path.dirname(__file__), "presets.txt")
 _DEFAULT_PRESETS = ["Hello from {name}!", "Can you read me?", "Received, thanks!"]
+
+# Hard-wired 1-to-1 pair for the stand: only these two boards decrypt the
+# packet. Relays forward it; every other screen stays blank.
+_PRIVATE_PAIR = {
+    "40:D9:5A:8B:69:3F": ("9C:B8:B4:9F:2D:75", "Rubik INRIA"),
+    "9C:B8:B4:9F:2D:75": ("40:D9:5A:8B:69:3F", "Rubik Q"),
+}
+_PRIVATE_TEXT = "Private 1-to-1 from {name}: only we two can read this"
 
 # Sender colours, shared by the chat bubbles and the pulses on the map.
 PALETTE = ["#4aa3ff", "#ff9f43", "#6ee89a", "#ff6b9a", "#c49bff", "#ffd166"]
@@ -82,6 +96,7 @@ window { background: #0b121b; }
     background: #2a3441; color: #c9d4e0; border: none;
 }
 .restart.confirm { background: #b3261e; color: #ffffff; }
+.desktop { background: #1a3348; color: #9fd0ff; }
 .revoke { background: #6b2a1a; color: #ffb4a2; }
 .reset { background: #1d3a2a; color: #9be7b8; }
 
@@ -118,6 +133,10 @@ window { background: #0b121b; }
 }
 .preset:hover { background: #28436a; }
 .preset:disabled { background: #1a2430; color: #5c6b7d; }
+.preset.private { background: #3a2a55; color: #e8d6ff; }
+.preset.private:hover { background: #4a3870; }
+.bubble.private { background: #3a2a55; color: #f3e8ff; border-left: 4px solid #c49bff; }
+.bubble.mine.private { background: #5a3d8a; color: #ffffff; border-left: none; }
 """
 
 
@@ -548,12 +567,15 @@ class ChatWindow(Gtk.ApplicationWindow):
         self._excluded = False
         self._restarting_until = 0.0
         self._awaiting_reconnect = False
+        self._desktop_armed = 0
         self._preset_templates = presets
         self._preset_buttons: list[Gtk.Button] = []
+        self._private_btn: Gtk.Button | None = None
+        self._private_label: Gtk.Label | None = None
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_child(root)
-        root.append(self._build_statusbar(admin))
+        root.append(self._build_statusbar(admin, kiosk))
 
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         body.set_vexpand(True)
@@ -577,7 +599,7 @@ class ChatWindow(Gtk.ApplicationWindow):
 
     # ---- widgets --------------------------------------------------------
 
-    def _build_statusbar(self, admin: bool) -> Gtk.Widget:
+    def _build_statusbar(self, admin: bool, kiosk: bool) -> Gtk.Widget:
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         bar.add_css_class("statusbar")
 
@@ -628,6 +650,13 @@ class ChatWindow(Gtk.ApplicationWindow):
             self._restart_btn.add_css_class("restart")
             self._restart_btn.connect("clicked", self._on_restart_clicked)
             bar.append(self._restart_btn)
+
+        if kiosk:
+            self._desktop_btn = Gtk.Button(label="Desktop")
+            self._desktop_btn.add_css_class("restart")
+            self._desktop_btn.add_css_class("desktop")
+            self._desktop_btn.connect("clicked", self._on_desktop_clicked)
+            bar.append(self._desktop_btn)
         return bar
 
     def _build_chat(self) -> Gtk.Widget:
@@ -657,12 +686,37 @@ class ChatWindow(Gtk.ApplicationWindow):
             btn.connect("clicked", lambda _b, t=template: self._send_preset(t))
             grid.attach(btn, i % 2, i // 2, 1, 1)
             self._preset_buttons.append(btn)
+        rows = (len(self._preset_templates) + 1) // 2
+        self._private_btn = Gtk.Button()
+        self._private_label = Gtk.Label(label="Private 1-to-1")
+        self._private_label.set_wrap(True)
+        self._private_label.set_justify(Gtk.Justification.CENTER)
+        self._private_label.set_max_width_chars(28)
+        self._private_btn.set_child(self._private_label)
+        self._private_btn.add_css_class("preset")
+        self._private_btn.add_css_class("private")
+        self._private_btn.set_sensitive(False)
+        self._private_btn.connect("clicked", lambda _b: self._send_private())
+        grid.attach(self._private_btn, 0, rows, 2, 1)
         return grid
 
+    def _private_peer(self) -> tuple[str, str] | None:
+        return _PRIVATE_PAIR.get(self._local.upper()) if self._local else None
+
     def _refresh_presets(self) -> None:
+        ready = self._connected and not self._cooling and not self._excluded
         for btn, template in zip(self._preset_buttons, self._preset_templates):
             btn.get_child().set_label(self._fill(template))
-            btn.set_sensitive(self._connected and not self._cooling and not self._excluded)
+            btn.set_sensitive(ready)
+        peer = self._private_peer()
+        if self._private_btn is not None and self._private_label is not None:
+            if peer:
+                self._private_label.set_label(f"Private 1-to-1 → {peer[1]}")
+                self._private_btn.set_sensitive(ready)
+                self._private_btn.set_visible(True)
+            else:
+                self._private_btn.set_sensitive(False)
+                self._private_btn.set_visible(False)
 
     def _fill(self, template: str) -> str:
         return template.replace("{name}", self._name or "this screen")
@@ -675,6 +729,22 @@ class ChatWindow(Gtk.ApplicationWindow):
         if not self.client.command("send", text=self._fill(template)):
             self._add_system("not sent — mesh daemon unreachable")
             return
+        self._begin_cooldown()
+
+    def _send_private(self) -> None:
+        if self._cooling:
+            return
+        peer = self._private_peer()
+        if peer is None:
+            return
+        dest, name = peer
+        text = self._fill(_PRIVATE_TEXT)
+        if not self.client.command("send", text=text, to=dest):
+            self._add_system("not sent — mesh daemon unreachable")
+            return
+        self._begin_cooldown()
+
+    def _begin_cooldown(self) -> None:
         self._cooling = True
         self._refresh_presets()
         GLib.timeout_add(int(SEND_COOLDOWN_S * 1000), self._end_cooldown)
@@ -705,6 +775,40 @@ class ChatWindow(Gtk.ApplicationWindow):
         self._restart_armed = 0
         self._restart_btn.set_label("Restart mesh")
         self._restart_btn.remove_css_class("confirm")
+
+    def _on_desktop_clicked(self, _btn) -> None:
+        # Two taps: leaving the kiosk drops the demo until the next boot.
+        if not self._desktop_armed:
+            self._desktop_armed = GLib.timeout_add(
+                int(DESKTOP_CONFIRM_S * 1000), self._on_desktop_timeout)
+            self._desktop_btn.set_label("Tap again to leave")
+            self._desktop_btn.add_css_class("confirm")
+            return
+        GLib.source_remove(self._desktop_armed)
+        self._desktop_armed = 0
+        self._desktop_btn.set_label("Desktop")
+        self._desktop_btn.remove_css_class("confirm")
+        self._leave_to_desktop()
+
+    def _on_desktop_timeout(self) -> bool:
+        self._desktop_armed = 0
+        self._desktop_btn.set_label("Desktop")
+        self._desktop_btn.remove_css_class("confirm")
+        return False
+
+    def _leave_to_desktop(self) -> None:
+        script = os.path.join(_ROOT, "scripts", "leave_kiosk.sh")
+        try:
+            proc = subprocess.run(
+                ["systemd-run", "--collect", script],
+                capture_output=True, text=True, timeout=8,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self._add_system(f"could not open the desktop: {exc}")
+            return
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "systemd-run failed").strip().splitlines()
+            self._add_system("could not open the desktop: " + (detail[-1] if detail else "systemd-run failed"))
 
     def _on_node_selected(self, bd: str) -> None:
         self._selected = bd
@@ -797,7 +901,25 @@ class ChatWindow(Gtk.ApplicationWindow):
         column.set_halign(align)
 
         clock = time.strftime("%H:%M", time.localtime(ts)) if ts else ""
-        head = Gtk.Label(label=f"{'You' if mine else name}  {clock}")
+        sender_u = sender.upper()
+        private = bool(frame.get("private") or frame.get("to"))
+        dest_name = frame.get("to_name") or self._topology.name_of(str(frame.get("to", "")))
+        peer = self._private_peer()
+        if (
+            not private
+            and not mine
+            and peer
+            and sender_u == peer[0]
+            and str(frame.get("text", "")).startswith("Private 1-to-1")
+        ):
+            private = True
+            dest_name = self._name or "You"
+        if private:
+            who = f"You → {dest_name}" if mine else f"{name} → You"
+            head_text = f"Private · {who}  {clock}".rstrip()
+        else:
+            head_text = f"{'You' if mine else name}  {clock}"
+        head = Gtk.Label(label=head_text)
         head.add_css_class("sender")
         head.set_halign(align)
         column.append(head)
@@ -805,6 +927,8 @@ class ChatWindow(Gtk.ApplicationWindow):
         bubble = Gtk.Label(label=str(frame.get("text", "")))
         bubble.add_css_class("bubble")
         bubble.add_css_class("mine" if mine else f"c{_sender_color_index(sender.upper())}")
+        if private:
+            bubble.add_css_class("private")
         bubble.set_wrap(True)
         bubble.set_max_width_chars(34)
         bubble.set_xalign(0.0)
@@ -856,6 +980,7 @@ class ChatWindow(Gtk.ApplicationWindow):
         if local and local != self._local:
             self._local = local
             self._address.set_label(local)
+            self._refresh_presets()
 
     def _set_name(self, name: str) -> None:
         if name and name != self._name:

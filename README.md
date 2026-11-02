@@ -711,8 +711,11 @@ sudo ./scripts/install_autostart.sh uninstall              # retour au lancement
 | `bubble-blue-screen` | écrans | kiosque `cage` sur la dalle |
 
 - Sur une carte écran, le gestionnaire de connexion (GDM) est **masqué** :
-  sinon il prend la dalle au boot avant `cage`. Retour au bureau :
-  `sudo systemctl unmask gdm`.
+  sinon il prend la dalle au boot avant `cage`. Pour retrouver le bureau
+  Ubuntu (Wi-Fi, réglages), toucher **Desktop** deux fois, en haut à droite
+  du kiosque : le kiosque s'arrête et GDM reprend la dalle. Au boot suivant
+  le kiosque revient. À la main : `sudo systemctl stop bubble-blue-screen`
+  puis `sudo systemctl unmask gdm gdm3 && sudo systemctl start gdm3`.
 - Après un boot, le mesh complet se reforme en 2 à 3 minutes. Le bouton
   « Restart mesh » fonctionne à l’identique sous systemd.
 - Logs : `journalctl -u bubble-blue-meshd -f` (plus de `/tmp/bb-meshd.log`).

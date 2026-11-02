@@ -5,6 +5,7 @@
 #   sudo ./scripts/install_autostart.sh screen                    # Rubik with a panel
 #   sudo ./scripts/install_autostart.sh screen --admin            # + "Restart mesh" button
 #   sudo ./scripts/install_autostart.sh screen --pixman           # panel without working GL
+#   sudo ./scripts/install_autostart.sh screen --keep-role        # UI on a UNO Q: keep central, still dial
 #   sudo ./scripts/install_autostart.sh uninstall
 #
 # Screen boards take the peripheral link role so traffic always crosses the
@@ -29,10 +30,12 @@ MODE="${1:-}"
 [ $# -gt 0 ] && shift
 ADMIN=0
 PIXMAN=0
+KEEP_ROLE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --admin)  ADMIN=1 ;;
-    --pixman) PIXMAN=1 ;;
+    --admin)     ADMIN=1 ;;
+    --pixman)    PIXMAN=1 ;;
+    --keep-role) KEEP_ROLE=1 ;;
     *) die "option inconnue: $1" ;;
   esac
   shift
@@ -63,7 +66,7 @@ fi
 
 case "$MODE" in
   relay|screen) ;;
-  *) die "usage: $0 relay | screen [--admin] [--pixman] | uninstall" ;;
+  *) die "usage: $0 relay | screen [--admin] [--pixman] [--keep-role] | uninstall" ;;
 esac
 
 # ---- prerequisites ---------------------------------------------------------
@@ -105,7 +108,10 @@ OWNER_GROUP="$(id -gn "${SUDO_USER:-root}")"
   # The user's group keeps meshd_client.py and a windowed UI usable without sudo.
   echo "BB_MESHD_ARGS=--group $OWNER_GROUP"
   if [ "$MODE" = screen ]; then
-    echo "BUBBLE_BLUE_LINK_ROLE=peripheral"
+    # UNO Q cannot dial while peripheral. A kiosk on a relay keeps auto/central.
+    if [ "$KEEP_ROLE" != 1 ]; then
+      echo "BUBBLE_BLUE_LINK_ROLE=peripheral"
+    fi
     if [ "$ADMIN" = 1 ]; then echo "BB_UI_ARGS=--admin"; else echo "BB_UI_ARGS="; fi
     if [ "$PIXMAN" = 1 ]; then
       echo "WLR_RENDERER=pixman"
@@ -131,7 +137,7 @@ if [ "$MODE" = screen ]; then
   # keeps it off the panel at boot.
   if [ -n "$dm" ] && [ "$dm" != display-manager.service ] && systemctl cat "$dm" >/dev/null 2>&1; then
     systemctl mask --now -q "$dm" 2>/dev/null || true
-    say "   $dm masqué (cage a besoin de l'écran) — retour au bureau : systemctl unmask $dm"
+    say "   $dm masqué (cage a besoin de l'écran) — retour au bureau : bouton Desktop, deux tapes"
   fi
 else
   systemctl disable --now -q bubble-blue-screen.service 2>/dev/null || true

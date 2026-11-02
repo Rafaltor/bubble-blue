@@ -1,0 +1,20 @@
+[Unit]
+Description=BUBBLE-BLUE 16x2 LCD panel
+Wants=bubble-blue-meshd.service arduino-router.service
+After=bubble-blue-meshd.service arduino-router.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=arduino
+Group=arduino
+WorkingDirectory=@REPO@
+Environment=PYTHONUNBUFFERED=1
+Environment=BB_PYLIB=/home/arduino/.local/lib/bubble-blue
+ExecStart=/usr/bin/python3 apps/unoq_panel.py --socket /run/bubble-blue/meshd.sock --preset "OK|Bien recu" --preset "Hi|Hello from UNO Q 2"
+Restart=always
+RestartSec=3
+SyslogIdentifier=bubble-blue-lcd
+
+[Install]
+WantedBy=multi-user.target

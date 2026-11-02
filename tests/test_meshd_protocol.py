@@ -80,7 +80,15 @@ class _FakeNode:
         self._epoch = 0
 
     def send_private_at_epoch(self, text, dst, epoch):
+        if self._send_error:
+            raise RuntimeError(self._send_error)
         self.private.append((dst, epoch, text))
+
+    def local_public_key_hex(self):
+        return ""
+
+    def learn_peer_public_key(self, bd, pub_hex):
+        return None
 
 
 class _Harness:
@@ -196,6 +204,27 @@ def test_sent_message_is_acked_and_echoed_back():
         assert msg["mine"] is True
         assert msg["from"] == _LOCAL
         assert node.sent == ["bonjour"]
+        conn.close()
+
+
+def test_private_send_is_unicast_and_marked():
+    node = _FakeNode()
+    dest = "AA:BB:CC:DD:EE:09"
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        conn.send({"cmd": "send", "text": "secret", "to": dest, "id": 3})
+
+        ack = conn.next_frame("ack")
+        assert ack["id"] == 3 and ack["ok"] is True
+
+        msg = conn.next_frame("message")
+        assert msg["text"] == "secret"
+        assert msg["mine"] is True
+        assert msg["private"] is True
+        assert msg["to"] == dest
+        assert node.private == [(dest, 3, "secret")]
+        assert node.sent == []
         conn.close()
 
 
@@ -327,6 +356,25 @@ def test_topology_reports_build_the_map_and_stay_out_of_the_chat():
         assert second.next_frame("hello")["history"] == [msg]
         conn.close()
         second.close()
+
+
+def test_unplugged_board_leaves_the_map_without_waiting_out_its_report():
+    node = _FakeNode(peers=[_RELAY])
+    with _Harness(node) as h:
+        conn = h.connect()
+        conn.next_frame("hello")
+        conn.next_frame("topology")
+        node.on_message_route(
+            _RELAY, encode_control("topo", peers=[_LOCAL], relay=True, name="UNO Q 1", kind="relay"),
+            _RELAY, 1,
+        )
+        topo = conn.next_frame("topology")
+        assert any(n["bd"] == _RELAY for n in topo["nodes"])
+
+        node._peers = []
+        gone = h.daemon._topology_frame()
+        assert all(n["bd"] != _RELAY for n in gone["nodes"])
+        conn.close()
 
 
 def test_links_are_announced_to_the_mesh():
@@ -520,6 +568,7 @@ if __name__ == "__main__":
     for fn in (
         test_hello_carries_the_current_snapshot,
         test_sent_message_is_acked_and_echoed_back,
+        test_private_send_is_unicast_and_marked,
         test_send_failure_is_reported_not_swallowed,
         test_incoming_message_reaches_every_client,
         test_reconnecting_ui_gets_the_conversation_back,
