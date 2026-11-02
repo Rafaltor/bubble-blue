@@ -21,7 +21,7 @@ sudo python3.14 bb_node.py --chat
 | `README.md` | Installation des boards, lancement, pièges Bluetooth |
 | `docs/CONFIGURATION.md` | `.env`, mesh ouvert ou liste d'adresses, timers |
 | `docs/EXPERIMENTS.md` | Plan d'expériences |
-| `docs/paper/bb-implementation-draft.md` | Version technique longue |
+| `bubble_blue.pdf` | Version longue. Source : `docs/paper/overleaf/main.tex` |
 
 ---
 
